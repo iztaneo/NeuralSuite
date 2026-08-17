@@ -1,5 +1,6 @@
 CXX ?= g++
-CXXFLAGS ?= -O3 -std=c++17 -Wall -fPIC -march=native -ffast-math -Iinclude
+CXXFLAGS ?= -O3 -std=c++17 -Wall -fPIC -march=native -ffast-math -Iinclude -Wl,-rpath,'$$ORIGIN'
+
 
 # Detección de Sistema Operativo
 UNAME_S := $(shell uname -s)
@@ -18,7 +19,8 @@ OBJS = $(SRCS:.cpp=.o)
 LIB_STATIC = libneuralsuite.a
 LIB_SHARED = libneuralsuite$(LIB_EXT)
 
-TARGETS = $(LIB_STATIC) $(LIB_SHARED) test_suite demo_adaline demo_mlp demo_cnn demo_lstm train_llm generate_llm
+TARGETS = $(LIB_STATIC) $(LIB_SHARED) test_suite demo_adaline demo_mlp demo_sequential demo_cnn demo_lstm train_llm generate_llm
+
 
 all: $(TARGETS)
 
@@ -38,6 +40,9 @@ demo_adaline: demo_adaline.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
 demo_mlp: demo_mlp.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
+demo_sequential: demo_sequential.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
 demo_cnn: demo_cnn.cpp $(LIB_STATIC)
