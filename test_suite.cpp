@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -912,7 +913,14 @@ void TestParameterAndModule() {
 void TestSerialization() {
   std::cout << "🧪 [Test 19] Formato de pesos NSF... " << std::flush;
 
-  const std::string path = "/tmp/ns_test_weights.nsf";
+  // La ruta temporal se pide al sistema: /tmp no existe en Windows, y
+  // codificarla hacia que esta prueba fallase alli aunque el formato estuviera
+  // bien.
+  const std::filesystem::path tmp = std::filesystem::temp_directory_path();
+  const std::string path = (tmp / "ns_test_weights.nsf").string();
+  const std::string path_truncated = (tmp / "ns_test_truncated.nsf").string();
+  const std::string path_corrupt = (tmp / "ns_test_corrupt.nsf").string();
+  const std::string path_legacy = (tmp / "ns_test_legacy.bin").string();
 
   GPTConfig cfg;
   cfg.vocab_size = 12; cfg.block_size = 8;
@@ -952,11 +960,11 @@ void TestSerialization() {
   {
     std::ifstream src(path, std::ios::binary);
     std::string bytes((std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
-    std::ofstream dst("/tmp/ns_test_truncated.nsf", std::ios::binary);
+    std::ofstream dst(path_truncated, std::ios::binary);
     dst.write(bytes.data(), static_cast<std::streamsize>(bytes.size() / 2));
   }
   GPTModel truncated_target(cfg);
-  Check(!truncated_target.LoadWeights("/tmp/ns_test_truncated.nsf"),
+  Check(!truncated_target.LoadWeights(path_truncated),
         "se acepto un archivo truncado");
 
   // Un byte cambiado debe hacer fallar la suma de comprobacion.
@@ -964,22 +972,22 @@ void TestSerialization() {
     std::ifstream src(path, std::ios::binary);
     std::string bytes((std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
     if (bytes.size() > 200) bytes[bytes.size() - 40] ^= 0x7F;
-    std::ofstream dst("/tmp/ns_test_corrupt.nsf", std::ios::binary);
+    std::ofstream dst(path_corrupt, std::ios::binary);
     dst.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
   }
   GPTModel corrupt_target(cfg);
-  Check(!corrupt_target.LoadWeights("/tmp/ns_test_corrupt.nsf"),
+  Check(!corrupt_target.LoadWeights(path_corrupt),
         "se acepto un archivo con un byte alterado");
 
   // Un archivo que no es NSF (el volcado crudo de antes) debe rechazarse.
   {
-    std::ofstream raw("/tmp/ns_test_legacy.bin", std::ios::binary);
+    std::ofstream raw(path_legacy, std::ios::binary);
     std::vector<float> junk(1000, 0.5f);
     raw.write(reinterpret_cast<const char*>(junk.data()),
               static_cast<std::streamsize>(junk.size() * sizeof(float)));
   }
   GPTModel legacy_target(cfg);
-  Check(!legacy_target.LoadWeights("/tmp/ns_test_legacy.bin"),
+  Check(!legacy_target.LoadWeights(path_legacy),
         "se acepto un volcado sin cabecera");
 
   std::cout << "PASADO ✅\n" << std::flush;
