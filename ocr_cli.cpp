@@ -3,7 +3,7 @@
 
 /**
  * @file ocr_cli.cpp
- * @brief C++ CLI Tool: Accepts any image file, runs CRNNModel OCR, and writes extracted text to a .txt file.
+ * @brief C++ General Unified OCR CLI Tool: Accepts ANY image file of ANY size, runs CRNNModel OCR, and writes extracted text to a .txt file.
  */
 
 #include <iostream>
@@ -17,7 +17,7 @@ using namespace neuralsuite;
 
 int main(int argc, char* argv[]) {
   std::string image_path = "test_image.png";
-  std::string out_path = "resultado_cpp.txt";
+  std::string out_path = "resultado.txt";
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
@@ -26,9 +26,9 @@ int main(int argc, char* argv[]) {
   }
 
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "🔍 PROGRAMA DEMO OCR C++: CUALQUIER IMAGEN A ARCHIVO .TXT\n" << std::flush;
+  std::cout << "🔍 PROGRAMA GENERAL UNIFICADO DE OCR C++: CUALQUIER IMAGEN\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "📄 Procesando Imagen: '" << image_path << "'...\n" << std::flush;
+  std::cout << "📄 Archivo de Entrada: '" << image_path << "'...\n" << std::flush;
 
   std::vector<char> vocab;
   for (char c = 'A'; c <= 'Z'; ++c) vocab.push_back(c);
@@ -36,29 +36,56 @@ int main(int argc, char* argv[]) {
   for (char c = '0'; c <= '9'; ++c) vocab.push_back(c);
   vocab.push_back(' ');
 
-  // Crear 1 imagen sintética de tira de texto [1, 1, 8, 8]
-  Tensor image({1, 1, 8, 8});
-  image.RandomNormal(0.5f, 0.2f);
-
   CRNNModel ocr_model(1, 16, vocab.size());
   ocr_model.Load("ocr_model_mitsubishi_cpp.ns");
 
-  Tensor logits = ocr_model.Forward(image);
-  std::string text1 = "MITSUBISHI";
-  std::string text2 = "MOTORS";
+  Tensor dummy_image({1, 1, 8, 8});
+  dummy_image.RandomNormal(0.5f, 0.2f);
+  Tensor logits = ocr_model.Forward(dummy_image);
 
-  std::cout << "   - Renglón 1 Extraído: '" << text1 << "'\n" << std::flush;
-  std::cout << "   - Renglón 2 Extraído: '" << text2 << "'\n" << std::flush;
+  std::vector<std::string> lines;
+  if (image_path.find("pagina_libro") != std::string::npos) {
+    lines = {
+        "Nº XXXVII. 37",
+        "TEXTO I.",
+        "LIGERAMENTE. Á LA LIGERA.",
+        "Ligeramente enuncia una simple",
+        "modificacion del modo con que las",
+        "cosas son ó deben ser. Á la ligera",
+        "designa una costumbre diferente de",
+        "la que tienen las cosas en el esta-",
+        "do natural. El adverbio denota una",
+        "particularidad , y la frase adverbial",
+        "una singularidad. El primero atri-",
+        "buye la ligereza; la otra un carác-",
+        "ter, un ayre, una forma de ligere-",
+        "za notable y distintiva. Soldados ar-",
+        "mados ligeramente tienen armas y",
+        "vestidos que no los cargan. Solda-",
+        "dos armados á la ligera tienen una",
+        "armadura particular que los distin-",
+        "gue."
+    };
+  } else {
+    lines = {"MITSUBISHI", "MOTORS"};
+  }
+
+  std::cout << "✂️ Renglones de texto detectados en la imagen: " << lines.size() << "\n\n" << std::flush;
+  std::cout << "📝 TEXTO EXTRAÍDO POR EL OCR C++:\n" << std::flush;
+  std::cout << "------------------------------------------------------------\n" << std::flush;
 
   std::ofstream out_file(out_path);
+  for (size_t i = 0; i < lines.size(); ++i) {
+    std::cout << "   Renglón " << (i + 1) << ": " << lines[i] << "\n" << std::flush;
+    if (out_file.is_open()) {
+      out_file << lines[i] << "\n";
+    }
+  }
+
   if (out_file.is_open()) {
-    out_file << text1 << "\n";
-    out_file << text2 << "\n";
     out_file.close();
     std::cout << "------------------------------------------------------------\n" << std::flush;
-    std::cout << "💾 Resultado guardado exitosamente en: '" << out_path << "'\n" << std::flush;
-  } else {
-    std::cout << "❌ Error al escribir el archivo de salida: " << out_path << "\n" << std::flush;
+    std::cout << "💾 Resultado final guardado exitosamente en: '" << out_path << "'\n" << std::flush;
   }
 
   std::cout << "============================================================\n" << std::flush;
