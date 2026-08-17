@@ -35,9 +35,8 @@
 #include "layers/lstm.h"
 #include "layers/maxpool2d.h"
 #include "layers/residual.h"
-
-
-
+// Reusable Neural Network Models
+#include "models/ocr.h"
 namespace neuralsuite {
 
 /**
