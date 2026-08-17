@@ -1,0 +1,12 @@
+build/
+bin/
+test_suite
+demo_mlp
+demo_cnn
+demo_lstm
+train_llm
+generate_llm
+vocab_cpp.txt
+*.o
+*.exe
+.DS_Store
