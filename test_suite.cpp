@@ -485,6 +485,185 @@ void TestGradientCheckLstm() {
             << std::flush;
 }
 
+/** @brief Gradientes de Conv2D: peso, sesgo y dx, con stride y padding activos. */
+void TestGradientCheckConv2D() {
+  std::cout << "🧪 [Test 13] Gradientes de Conv2D... " << std::flush;
+
+  // stride y padding distintos de los valores por defecto: un backward que
+  // ignorase el desplazamiento o el relleno pasaria desapercibido con 1 y 0.
+  const int B = 2, IC = 2, OC = 3, HW = 5, K = 3, STRIDE = 2, PAD = 1;
+  Conv2D conv(IC, OC, K, STRIDE, PAD);
+
+  Tensor x({B, IC, HW, HW});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.4f * std::sin(0.9f * static_cast<float>(i)) + 0.05f;
+  }
+
+  Tensor probe = conv.Forward(x);
+  Tensor w(probe.Shape());
+  for (size_t i = 0; i < w.TotalSize(); ++i) {
+    w[i] = 0.5f + 0.5f * std::cos(1.1f * static_cast<float>(i));
+  }
+  auto loss_of = [&]() {
+    Tensor y = conv.Forward(x);
+    double s = 0.0;
+    for (size_t i = 0; i < y.TotalSize(); ++i) s += static_cast<double>(y[i]) * w[i];
+    return s;
+  };
+
+  loss_of();
+  Tensor dx = conv.Backward(w);
+
+  int checked = 0, skipped = 0;
+  const double worst_params =
+      MaxGradError(conv.GetParameters(), conv.GetGradients(), loss_of, 1e-2f, 12,
+                   &checked, &skipped);
+  Check(worst_params < 1e-2,
+        "el peor error relativo de los parametros de Conv2D es " + std::to_string(worst_params));
+
+  const float eps = 1e-2f;
+  double worst_dx = 0.0;
+  int dx_checked = 0;
+  for (size_t i = 0; i < x.TotalSize(); i += 5) {
+    const float orig = x[i];
+    x[i] = orig + eps; const double lp = loss_of();
+    x[i] = orig - eps; const double lm = loss_of();
+    x[i] = orig;
+
+    const double numeric = (lp - lm) / (2.0 * eps);
+    if (std::max(std::abs(numeric), std::abs(static_cast<double>(dx[i]))) < kNegligibleGrad) continue;
+    worst_dx = std::max(worst_dx, RelativeError(numeric, dx[i]));
+    ++dx_checked;
+  }
+  Check(worst_dx < 1e-2, "el peor error relativo de dx de Conv2D es " + std::to_string(worst_dx));
+
+  std::cout << "PASADO ✅ (" << checked << " params, " << dx_checked
+            << " dx; peor error rel: " << std::max(worst_params, worst_dx) << ")\n" << std::flush;
+}
+
+/** @brief Gradientes de LayerNorm respecto de x, gamma y beta. */
+void TestGradientCheckLayerNorm() {
+  std::cout << "🧪 [Test 14] Gradientes de LayerNorm... " << std::flush;
+
+  const int N = 3, D = 6;
+  Tensor x({N, D});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.8f * std::sin(1.7f * static_cast<float>(i)) + 0.2f;
+  }
+  Tensor gamma({D}), beta({D});
+  for (int j = 0; j < D; ++j) {
+    gamma[j] = 0.7f + 0.1f * static_cast<float>(j);
+    beta[j] = 0.05f * static_cast<float>(j) - 0.1f;
+  }
+
+  Tensor w({N, D});
+  for (size_t i = 0; i < w.TotalSize(); ++i) {
+    w[i] = 0.5f + 0.5f * std::cos(0.9f * static_cast<float>(i));
+  }
+  auto loss_of = [&]() {
+    Tensor out, mean, rstd;
+    LayerNormForward(x, gamma, beta, out, mean, rstd);
+    double s = 0.0;
+    for (size_t i = 0; i < out.TotalSize(); ++i) s += static_cast<double>(out[i]) * w[i];
+    return s;
+  };
+
+  Tensor out, mean, rstd, dx, dgamma, dbeta;
+  LayerNormForward(x, gamma, beta, out, mean, rstd);
+  LayerNormBackward(w, x, gamma, mean, rstd, dx, dgamma, dbeta);
+
+  const float eps = 1e-2f;
+  double worst = 0.0;
+  int checked = 0;
+
+  // Tres tensores con gradiente: la entrada y los dos parametros afines.
+  struct Target { Tensor* value; Tensor* grad; const char* name; };
+  Target targets[] = {{&x, &dx, "x"}, {&gamma, &dgamma, "gamma"}, {&beta, &dbeta, "beta"}};
+
+  for (const Target& t : targets) {
+    for (size_t i = 0; i < t.value->TotalSize(); ++i) {
+      const float orig = (*t.value)[i];
+      (*t.value)[i] = orig + eps; const double lp = loss_of();
+      (*t.value)[i] = orig - eps; const double lm = loss_of();
+      (*t.value)[i] = orig;
+
+      const double numeric = (lp - lm) / (2.0 * eps);
+      const double analytic = (*t.grad)[i];
+      if (std::max(std::abs(numeric), std::abs(analytic)) < kNegligibleGrad) continue;
+      const double rel = RelativeError(numeric, analytic);
+      if (rel > worst) worst = rel;
+      ++checked;
+    }
+  }
+
+  Check(worst < 1e-2, "el peor error relativo de LayerNorm es " + std::to_string(worst));
+  std::cout << "PASADO ✅ (" << checked << " elementos, peor error rel: " << worst << ")\n"
+            << std::flush;
+}
+
+/** @brief El Backward de las pérdidas coincide con la derivada de su Forward. */
+void TestGradientCheckLosses() {
+  std::cout << "🧪 [Test 15] Gradientes de CrossEntropy y MSE... " << std::flush;
+
+  const int N = 4, C = 5;
+  Tensor logits({N, C});
+  for (size_t i = 0; i < logits.TotalSize(); ++i) {
+    logits[i] = 0.9f * std::sin(1.3f * static_cast<float>(i));
+  }
+  Tensor targets({N});
+  for (int i = 0; i < N; ++i) targets[i] = static_cast<float>((i * 2 + 1) % C);
+
+  const float eps = 1e-2f;
+
+  // CrossEntropy: el gradiente debe ser (softmax - onehot) / N.
+  CrossEntropyLoss ce;
+  ce.Forward(logits, targets);
+  Tensor dce = ce.Backward();
+
+  double worst_ce = 0.0;
+  int n_ce = 0;
+  for (size_t i = 0; i < logits.TotalSize(); ++i) {
+    const float orig = logits[i];
+    logits[i] = orig + eps; const double lp = ce.Forward(logits, targets);
+    logits[i] = orig - eps; const double lm = ce.Forward(logits, targets);
+    logits[i] = orig;
+
+    const double numeric = (lp - lm) / (2.0 * eps);
+    if (std::max(std::abs(numeric), std::abs(static_cast<double>(dce[i]))) < kNegligibleGrad) continue;
+    worst_ce = std::max(worst_ce, RelativeError(numeric, dce[i]));
+    ++n_ce;
+  }
+  Check(worst_ce < 1e-2, "el peor error relativo de CrossEntropyLoss es " + std::to_string(worst_ce));
+
+  // MSE.
+  Tensor preds({N, C}), gold({N, C});
+  for (size_t i = 0; i < preds.TotalSize(); ++i) {
+    preds[i] = 0.6f * std::cos(0.8f * static_cast<float>(i));
+    gold[i] = 0.3f * std::sin(0.5f * static_cast<float>(i));
+  }
+  MSELoss mse;
+  mse.Forward(preds, gold);
+  Tensor dmse = mse.Backward();
+
+  double worst_mse = 0.0;
+  int n_mse = 0;
+  for (size_t i = 0; i < preds.TotalSize(); ++i) {
+    const float orig = preds[i];
+    preds[i] = orig + eps; const double lp = mse.Forward(preds, gold);
+    preds[i] = orig - eps; const double lm = mse.Forward(preds, gold);
+    preds[i] = orig;
+
+    const double numeric = (lp - lm) / (2.0 * eps);
+    if (std::max(std::abs(numeric), std::abs(static_cast<double>(dmse[i]))) < kNegligibleGrad) continue;
+    worst_mse = std::max(worst_mse, RelativeError(numeric, dmse[i]));
+    ++n_mse;
+  }
+  Check(worst_mse < 1e-2, "el peor error relativo de MSELoss es " + std::to_string(worst_mse));
+
+  std::cout << "PASADO ✅ (CE: " << n_ce << " elementos, " << worst_ce
+            << "; MSE: " << n_mse << " elementos, " << worst_mse << ")\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -502,6 +681,9 @@ int main() {
   TestReshapeSemantics();
   TestAssignmentKeepsSource();
   TestGradientCheckLstm();
+  TestGradientCheckConv2D();
+  TestGradientCheckLayerNorm();
+  TestGradientCheckLosses();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

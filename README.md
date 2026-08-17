@@ -32,10 +32,16 @@ implementa la celda estándar (puertas `i`, `f`, `g`, `o` y estado `c`) con
 retropropagación a través del tiempo, verificada por diferencias finitas sobre
 los cuatro tensores de parámetros y sobre el gradiente de entrada.
 
-**Sigue siendo software 0.x.** La cobertura de gradient checking aún no alcanza
-a `Conv2D`, `LayerNorm` ni `CrossEntropyLoss`; el formato de serialización no
-tiene cabecera ni versión; y no hay integración continua. El uso recomendado es
-educativo y de lectura del código.
+Las operaciones diferenciables del núcleo tienen gradient check por diferencias
+finitas: `GELU`, `MultiHeadAttention`, la matriz `wte` compartida por weight
+tying, `LSTM` (parámetros y gradiente de entrada), `Conv2D` (con stride y
+padding activos), `LayerNorm` (respecto de `x`, `gamma` y `beta`),
+`CrossEntropyLoss` y `MSELoss`. Cada comprobación se validó introduciendo
+defectos deliberados para confirmar que efectivamente los detecta.
+
+**Sigue siendo software 0.x.** Quedan sin cobertura `MaxPool2D`, `GraphConv` y
+`Residual`; el formato de serialización no tiene cabecera ni versión; y no hay
+integración continua. El uso recomendado es educativo y de lectura del código.
 
 ---
 
@@ -119,10 +125,10 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Pruebas**
 
-- `./test_suite`: Pruebas unitarias numéricas y verificación de gradientes por
-  diferencias finitas (GELU, `MultiHeadAttention` completa y la matriz `wte`
-  compartida por weight tying), más las invariantes de alineación entre
-  parámetros y gradientes y la validación de formas e índices.
+- `./test_suite`: 15 pruebas numéricas — gradient checks por diferencias finitas
+  de las operaciones diferenciables (ver la sección de estado), invariantes de
+  alineación entre parámetros y gradientes, y validación de formas e índices.
+  Devuelve un código de salida distinto de cero si alguna falla.
 
 **Redes densas, convolucionales y recurrentes**
 
