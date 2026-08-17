@@ -99,26 +99,35 @@ class CRNNModel : public Layer {
     return dinput;
   }
 
-  std::string Decode(const Tensor& logits, const std::vector<char>& vocab) {
+  std::string DecodeWord(const Tensor& logits, const std::vector<char>& vocab) {
     int batch_size = logits.Shape()[0];
-    int num_classes = logits.Shape()[1];
+    int timesteps = logits.Shape()[1];
+    int num_classes = logits.Shape()[2];
     std::string result = "";
 
     for (int b = 0; b < batch_size; ++b) {
-      int best_class = 0;
-      float max_val = logits[b * num_classes];
-      for (int c = 1; c < num_classes; ++c) {
-        if (logits[b * num_classes + c] > max_val) {
-          max_val = logits[b * num_classes + c];
-          best_class = c;
+      int prev_idx = -1;
+      for (int t = 0; t < timesteps; ++t) {
+        int best_class = 0;
+        float max_val = logits[(b * timesteps + t) * num_classes];
+        for (int c = 1; c < num_classes; ++c) {
+          float val = logits[(b * timesteps + t) * num_classes + c];
+          if (val > max_val) {
+            max_val = val;
+            best_class = c;
+          }
         }
-      }
-      if (best_class < static_cast<int>(vocab.size())) {
-        result += vocab[best_class];
+        if (best_class != prev_idx) {
+          if (best_class < static_cast<int>(vocab.size()) && vocab[best_class] != ' ') {
+            result += vocab[best_class];
+          }
+          prev_idx = best_class;
+        }
       }
     }
     return result;
   }
+
 
   std::vector<Tensor*> GetParameters() override {
     std::vector<Tensor*> p = conv_.GetParameters();
