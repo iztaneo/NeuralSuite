@@ -28,7 +28,9 @@ namespace neuralsuite {
 class GraphConv : public Layer {
  public:
   GraphConv(int in_features, int out_features)
-      : linear_(in_features, out_features), relu_(ActivationType::kRelu) {}
+      : linear_(in_features, out_features), relu_(ActivationType::kRelu) {
+    Register(&linear_);
+  }
 
   /**
    * @brief Forward pass of GCN layer: H_out = ReLU(A_norm * H_in * W)
@@ -72,9 +74,6 @@ class GraphConv : public Layer {
 
     return linear_.Backward(dH_linear);
   }
-
-  std::vector<Tensor*> GetParameters() override { return linear_.GetParameters(); }
-  std::vector<Tensor*> GetGradients() override { return linear_.GetGradients(); }
 
  private:
   Linear linear_;

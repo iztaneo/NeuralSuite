@@ -43,10 +43,7 @@ int main() {
   // Función de Pérdida Cuadrática Media (LMS / Least Mean Squares)
   MSELoss criterion;
 
-  std::vector<Tensor*> params = adaline.GetParameters();
-  std::vector<Tensor*> grads = adaline.GetGradients();
-
-  AdamW optimizer(params, grads, 0.05f);
+  AdamW optimizer(adaline.Parameters(), 0.05f);
 
   std::cout << "🏋️ Entrenando ADALINE con la Regla Delta (LMS / Gradient Descent)...\n" << std::flush;
   for (int epoch = 1; epoch <= 100; ++epoch) {

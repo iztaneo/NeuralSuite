@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include "../layer.h"
+#include "../parameter.h"
 
 namespace neuralsuite {
 
@@ -47,18 +48,18 @@ class LSTM : public Layer {
         weight_ih_({4 * hid_sz, in_sz}),
         weight_hh_({4 * hid_sz, hid_sz}),
         bias_ih_({4 * hid_sz}),
-        bias_hh_({4 * hid_sz}),
-        dweight_ih_({4 * hid_sz, in_sz}),
-        dweight_hh_({4 * hid_sz, hid_sz}),
-        dbias_ih_({4 * hid_sz}),
-        dbias_hh_({4 * hid_sz}) {
+        bias_hh_({4 * hid_sz}) {
+    Register(&weight_ih_);
+    Register(&weight_hh_);
+    Register(&bias_ih_);
+    Register(&bias_hh_);
     if (in_sz <= 0 || hid_sz <= 0) {
       throw std::invalid_argument("LSTM: input_size y hidden_size deben ser positivos.");
     }
-    weight_ih_.XavierInit(in_sz, 4 * hid_sz);
-    weight_hh_.XavierInit(hid_sz, 4 * hid_sz);
-    bias_ih_.Zeros();
-    bias_hh_.Zeros();
+    weight_ih_.Value().XavierInit(in_sz, 4 * hid_sz);
+    weight_hh_.Value().XavierInit(hid_sz, 4 * hid_sz);
+    bias_ih_.Value().Zeros();
+    bias_hh_.Value().Zeros();
   }
 
   Tensor Forward(const Tensor& input) override {
@@ -103,13 +104,13 @@ class LSTM : public Layer {
           float pre[4];
           for (int gate = 0; gate < 4; ++gate) {
             const int row = gate * H + k;
-            float acc = bias_ih_[row] + bias_hh_[row];
+            float acc = bias_ih_.Value()[row] + bias_hh_.Value()[row];
             for (int j = 0; j < input_size_; ++j) {
-              acc += weight_ih_[static_cast<size_t>(row) * input_size_ + j] * input[x_off + j];
+              acc += weight_ih_.Value()[static_cast<size_t>(row) * input_size_ + j] * input[x_off + j];
             }
             if (t > 0) {
               for (int j = 0; j < H; ++j) {
-                acc += weight_hh_[static_cast<size_t>(row) * H + j] * h_cache_[prev_off + j];
+                acc += weight_hh_.Value()[static_cast<size_t>(row) * H + j] * h_cache_[prev_off + j];
               }
             }
             pre[gate] = acc;
@@ -157,10 +158,14 @@ class LSTM : public Layer {
       throw std::invalid_argument("LSTM: dout no coincide con la forma de la salida.");
     }
 
-    dweight_ih_.Zeros();
-    dweight_hh_.Zeros();
-    dbias_ih_.Zeros();
-    dbias_hh_.Zeros();
+    Tensor& dweight_ih = weight_ih_.Grad();
+    Tensor& dweight_hh = weight_hh_.Grad();
+    Tensor& dbias_ih = bias_ih_.Grad();
+    Tensor& dbias_hh = bias_hh_.Grad();
+    dweight_ih.Zeros();
+    dweight_hh.Zeros();
+    dbias_ih.Zeros();
+    dbias_hh.Zeros();
 
     Tensor dx(last_input_.Shape());
     dx.Zeros();
@@ -214,18 +219,18 @@ class LSTM : public Layer {
             const int row = gate * H + k;
             const float d = dpre[gate];
 
-            dbias_ih_[row] += d;
-            dbias_hh_[row] += d;
+            dbias_ih[row] += d;
+            dbias_hh[row] += d;
 
             for (int j = 0; j < input_size_; ++j) {
-              dweight_ih_[static_cast<size_t>(row) * input_size_ + j] += d * last_input_[x_off + j];
-              dx[x_off + j] += d * weight_ih_[static_cast<size_t>(row) * input_size_ + j];
+              dweight_ih[static_cast<size_t>(row) * input_size_ + j] += d * last_input_[x_off + j];
+              dx[x_off + j] += d * weight_ih_.Value()[static_cast<size_t>(row) * input_size_ + j];
             }
 
             if (t > 0) {
               for (int j = 0; j < H; ++j) {
-                dweight_hh_[static_cast<size_t>(row) * H + j] += d * h_cache_[prev_off + j];
-                dh_prev_acc[st_off + j] += d * weight_hh_[static_cast<size_t>(row) * H + j];
+                dweight_hh[static_cast<size_t>(row) * H + j] += d * h_cache_[prev_off + j];
+                dh_prev_acc[st_off + j] += d * weight_hh_.Value()[static_cast<size_t>(row) * H + j];
               }
             }
           }
@@ -239,14 +244,6 @@ class LSTM : public Layer {
     return dx;
   }
 
-  std::vector<Tensor*> GetParameters() override {
-    return {&weight_ih_, &weight_hh_, &bias_ih_, &bias_hh_};
-  }
-
-  std::vector<Tensor*> GetGradients() override {
-    return {&dweight_ih_, &dweight_hh_, &dbias_ih_, &dbias_hh_};
-  }
-
  private:
   static float Sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
@@ -255,15 +252,10 @@ class LSTM : public Layer {
   int seq_len_ = 0;
   int batch_size_ = 0;
 
-  Tensor weight_ih_;
-  Tensor weight_hh_;
-  Tensor bias_ih_;
-  Tensor bias_hh_;
-
-  Tensor dweight_ih_;
-  Tensor dweight_hh_;
-  Tensor dbias_ih_;
-  Tensor dbias_hh_;
+  Parameter weight_ih_;
+  Parameter weight_hh_;
+  Parameter bias_ih_;
+  Parameter bias_hh_;
 
   Tensor last_input_;
 

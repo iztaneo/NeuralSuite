@@ -11,6 +11,7 @@
 
 #include <vector>
 #include "../layer.h"
+#include "../parameter.h"
 
 namespace neuralsuite {
 
@@ -27,11 +28,11 @@ class Conv2D : public Layer {
         stride_(str),
         padding_(pad),
         weight_({out_ch, in_ch, k_size, k_size}),
-        bias_({out_ch}),
-        dweight_({out_ch, in_ch, k_size, k_size}),
-        dbias_({out_ch}) {
-    weight_.XavierInit(in_ch * k_size * k_size, out_ch * k_size * k_size);
-    bias_.Zeros();
+        bias_({out_ch}) {
+    Register(&weight_);
+    Register(&bias_);
+    weight_.Value().XavierInit(in_ch * k_size * k_size, out_ch * k_size * k_size);
+    bias_.Value().Zeros();
   }
 
   Tensor Forward(const Tensor& input) override {
@@ -49,7 +50,7 @@ class Conv2D : public Layer {
       for (int oc = 0; oc < out_channels_; ++oc) {
         for (int oh = 0; oh < out_h; ++oh) {
           for (int ow = 0; ow < out_w; ++ow) {
-            float val = bias_[oc];
+            float val = bias_.Value()[oc];
             for (int ic = 0; ic < in_channels_; ++ic) {
               for (int kh = 0; kh < kernel_size_; ++kh) {
                 for (int kw = 0; kw < kernel_size_; ++kw) {
@@ -58,7 +59,7 @@ class Conv2D : public Layer {
                   if (ih >= 0 && ih < height && iw >= 0 && iw < width) {
                     size_t in_idx = ((b * in_channels_ + ic) * height + ih) * width + iw;
                     size_t w_idx = ((oc * in_channels_ + ic) * kernel_size_ + kh) * kernel_size_ + kw;
-                    val += input[in_idx] * weight_[w_idx];
+                    val += input[in_idx] * weight_.Value()[w_idx];
                   }
                 }
               }
@@ -82,8 +83,10 @@ class Conv2D : public Layer {
 
     Tensor dx({batch_size, in_channels_, height, width});
     dx.Zeros();
-    dweight_.Zeros();
-    dbias_.Zeros();
+    Tensor& dweight = weight_.Grad();
+    Tensor& dbias = bias_.Grad();
+    dweight.Zeros();
+    dbias.Zeros();
 
     for (int b = 0; b < batch_size; ++b) {
       for (int oc = 0; oc < out_channels_; ++oc) {
@@ -91,7 +94,7 @@ class Conv2D : public Layer {
           for (int ow = 0; ow < out_w; ++ow) {
             size_t dout_idx = ((b * out_channels_ + oc) * out_h + oh) * out_w + ow;
             float d = dout[dout_idx];
-            dbias_[oc] += d;
+            dbias[oc] += d;
 
             for (int ic = 0; ic < in_channels_; ++ic) {
               for (int kh = 0; kh < kernel_size_; ++kh) {
@@ -102,8 +105,8 @@ class Conv2D : public Layer {
                     size_t in_idx = ((b * in_channels_ + ic) * height + ih) * width + iw;
                     size_t w_idx = ((oc * in_channels_ + ic) * kernel_size_ + kh) * kernel_size_ + kw;
 
-                    dweight_[w_idx] += d * last_input_[in_idx];
-                    dx[in_idx] += d * weight_[w_idx];
+                    dweight[w_idx] += d * last_input_[in_idx];
+                    dx[in_idx] += d * weight_.Value()[w_idx];
                   }
                 }
               }
@@ -115,9 +118,6 @@ class Conv2D : public Layer {
     return dx;
   }
 
-  std::vector<Tensor*> GetParameters() override { return {&weight_, &bias_}; }
-  std::vector<Tensor*> GetGradients() override { return {&dweight_, &dbias_}; }
-
  private:
   int in_channels_;
   int out_channels_;
@@ -125,10 +125,8 @@ class Conv2D : public Layer {
   int stride_;
   int padding_;
 
-  Tensor weight_;
-  Tensor bias_;
-  Tensor dweight_;
-  Tensor dbias_;
+  Parameter weight_;
+  Parameter bias_;
   Tensor last_input_;
 };
 

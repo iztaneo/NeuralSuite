@@ -23,7 +23,9 @@ namespace neuralsuite {
 class ResidualBlock : public Layer {
  public:
   explicit ResidualBlock(std::shared_ptr<Layer> inner_layer)
-      : inner_layer_(inner_layer), relu_(ActivationType::kRelu) {}
+      : inner_layer_(inner_layer), relu_(ActivationType::kRelu) {
+    Register(inner_layer_.get());
+  }
 
   Tensor Forward(const Tensor& input) override {
     last_input_ = input;
@@ -54,9 +56,6 @@ class ResidualBlock : public Layer {
 
     return dinput;
   }
-
-  std::vector<Tensor*> GetParameters() override { return inner_layer_->GetParameters(); }
-  std::vector<Tensor*> GetGradients() override { return inner_layer_->GetGradients(); }
 
  private:
   std::shared_ptr<Layer> inner_layer_;

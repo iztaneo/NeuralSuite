@@ -58,7 +58,11 @@ class CRNNModel : public Layer {
         pool_(2, 2),
         fc1_(4 * 3 * 3, hidden_dim),
         fc2_(hidden_dim, num_classes),
-        num_classes_(num_classes) {}
+        num_classes_(num_classes) {
+    Register(&conv_);
+    Register(&fc1_);
+    Register(&fc2_);
+  }
 
   Tensor Forward(const Tensor& input_images) override {
     last_input_ = input_images;
@@ -136,24 +140,6 @@ class CRNNModel : public Layer {
     return result;
   }
 
-
-  std::vector<Tensor*> GetParameters() override {
-    std::vector<Tensor*> p = conv_.GetParameters();
-    auto p1 = fc1_.GetParameters();
-    auto p2 = fc2_.GetParameters();
-    p.insert(p.end(), p1.begin(), p1.end());
-    p.insert(p.end(), p2.begin(), p2.end());
-    return p;
-  }
-
-  std::vector<Tensor*> GetGradients() override {
-    std::vector<Tensor*> g = conv_.GetGradients();
-    auto g1 = fc1_.GetGradients();
-    auto g2 = fc2_.GetGradients();
-    g.insert(g.end(), g1.begin(), g1.end());
-    g.insert(g.end(), g2.begin(), g2.end());
-    return g;
-  }
 
   bool Save(const std::string& path) {
     std::ofstream out(path, std::ios::binary);

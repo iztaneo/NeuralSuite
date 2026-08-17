@@ -845,6 +845,60 @@ void TestGradientCheckRemainingLayers() {
             << ", gcn: " << worst_gcn << ")\n" << std::flush;
 }
 
+/**
+ * @brief Parameter y el registro automatico de Module.
+ *
+ * El defecto original consistia en que una capa declarase sus pesos y olvidase
+ * declarar sus gradientes. Ahora no hay dos declaraciones: `GetParameters()` y
+ * `GetGradients()` se derivan de la misma lista, asi que la desalineacion ya no
+ * es representable. Esta prueba comprueba lo que si puede fallar todavia: que
+ * el recorrido del arbol de submodulos los recoja todos.
+ */
+void TestParameterAndModule() {
+  std::cout << "🧪 [Test 18] Parameter y registro automático de Module... " << std::flush;
+
+  // Valor y gradiente nacen con la misma forma y se redimensionan juntos.
+  Parameter p({3, 4});
+  Check(p.Value().Shape() == p.Grad().Shape(), "el gradiente no nacio con la forma del valor");
+  p.Resize({2, 5});
+  Check(p.Value().Shape() == p.Grad().Shape(), "Resize dejo valor y gradiente con formas distintas");
+
+  // Una capa simple declara sus dos parametros.
+  Linear fc(4, 3);
+  Check(fc.Parameters().size() == 2, "Linear deberia declarar dos parametros");
+
+  // El arbol se recorre solo: un bloque del GPT reune los de sus cinco
+  // componentes sin que nadie los enumere a mano.
+  GPTConfig cfg;
+  cfg.vocab_size = 16; cfg.block_size = 8;
+  cfg.n_layer = 3; cfg.n_head = 2; cfg.n_embd = 8;
+
+  GPTBlock block(cfg);
+  Check(block.Parameters().size() == 12,
+        "un GPTBlock deberia reunir 12 parametros y reune " +
+            std::to_string(block.Parameters().size()));
+
+  // wte + wpe + 3 bloques * 12 + ln_f = 2 + 36 + 2 = 40
+  GPTModel model(cfg);
+  const size_t expected = 2 + static_cast<size_t>(cfg.n_layer) * 12 + 2;
+  Check(model.Parameters().size() == expected,
+        "el GPT deberia reunir " + std::to_string(expected) + " parametros y reune " +
+            std::to_string(model.Parameters().size()));
+
+  // Las dos vistas de la misma lista tienen que seguir emparejadas.
+  auto values = model.GetParameters();
+  auto grads = model.GetGradients();
+  Check(values.size() == grads.size(), "las listas derivadas tienen tamanos distintos");
+  bool shapes_ok = true;
+  for (size_t i = 0; i < values.size() && i < grads.size(); ++i) {
+    if (values[i]->Shape() != grads[i]->Shape()) shapes_ok = false;
+  }
+  Check(shapes_ok, "hay un par valor/gradiente con formas distintas");
+
+  std::cout << "PASADO ✅ (" << model.Parameters().size() << " parámetros en el árbol)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -867,6 +921,7 @@ int main() {
   TestGradientCheckLosses();
   TestViewSemantics();
   TestGradientCheckRemainingLayers();
+  TestParameterAndModule();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

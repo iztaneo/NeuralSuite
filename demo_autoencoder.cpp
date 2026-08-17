@@ -35,13 +35,11 @@ int main() {
 
   MSELoss criterion;
 
-  std::vector<Tensor*> params, grads;
-  for (auto p : encoder.GetParameters()) params.push_back(p);
-  for (auto p : decoder.GetParameters()) params.push_back(p);
-  for (auto g : encoder.GetGradients()) grads.push_back(g);
-  for (auto g : decoder.GetGradients()) grads.push_back(g);
+  std::vector<Parameter*> params;
+  for (Parameter* p : encoder.Parameters()) params.push_back(p);
+  for (Parameter* p : decoder.Parameters()) params.push_back(p);
 
-  AdamW optimizer(params, grads, 0.03f);
+  AdamW optimizer(params, 0.03f);
 
   std::cout << "🏋️ Entrenando Autoencoder durante 200 épocas en C++...\n" << std::flush;
   for (int epoch = 1; epoch <= 200; ++epoch) {

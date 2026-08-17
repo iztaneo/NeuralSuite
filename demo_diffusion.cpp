@@ -28,7 +28,7 @@ int main() {
   denoiser.Add(std::make_shared<Linear>(16, 4));
 
   MSELoss criterion;
-  AdamW optimizer(denoiser.GetParameters(), denoiser.GetGradients(), 0.03f);
+  AdamW optimizer(denoiser.Parameters(), 0.03f);
 
   std::cout << "🏋️ Entrenando Modelo de Difusión (Forward Noise + Reverse Denoising) durante 100 épocas...\n" << std::flush;
   for (int epoch = 1; epoch <= 100; ++epoch) {

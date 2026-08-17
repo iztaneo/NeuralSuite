@@ -57,6 +57,13 @@ paso de entrenamiento del GPT (B=8, T=64, 4 capas, n_embd=128): la memoria
 reservada baja de 118 MB a 72,6 MB. El tiempo por paso no cambia de forma
 apreciable — el cuello de botella es el cómputo, no las reservas.
 
+Los pesos entrenables viven en un `Parameter`, que reúne el valor y su
+gradiente en un solo objeto, y las capas los declaran una vez con `Register()`.
+Antes cada capa exponía dos listas paralelas que el optimizador recorría por
+índice, y que una capa declarase sus pesos y olvidase sus gradientes es
+exactamente el defecto que invalidaba el entrenamiento del Transformer. Ahora
+ambas listas se derivan de la misma declaración.
+
 Cada push ejecuta en [integración continua](.github/workflows/ci.yml) la
 compilación en Linux (GCC y Clang), macOS y Windows, en modo `Debug` y
 `Release`; la suite numérica; las demos; un entrenamiento del LLM de extremo a
@@ -170,7 +177,7 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Pruebas**
 
-- `./test_suite`: 17 pruebas numéricas — gradient checks por diferencias finitas
+- `./test_suite`: 18 pruebas numéricas — gradient checks por diferencias finitas
   de las operaciones diferenciables (ver la sección de estado), invariantes de
   alineación entre parámetros y gradientes, semántica de `Tensor`, y validación
   de formas e índices. Devuelve un código de salida distinto de cero si alguna

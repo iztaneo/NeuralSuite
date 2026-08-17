@@ -33,7 +33,7 @@ int main() {
   model.Add(std::make_shared<Linear>(16, 2));
 
   CrossEntropyLoss criterion;
-  AdamW optimizer(model.GetParameters(), model.GetGradients(), 0.05f);
+  AdamW optimizer(model.Parameters(), 0.05f);
 
   std::cout << "🏋️ Entrenando modelo de alto nivel Sequential durante 100 épocas...\n" << std::flush;
   for (int epoch = 1; epoch <= 100; ++epoch) {

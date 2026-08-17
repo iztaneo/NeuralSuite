@@ -50,8 +50,7 @@ class Sequential {
 
   void Add(std::shared_ptr<Layer> layer) {
     layers_.push_back(layer);
-    for (auto p : layer->GetParameters()) params_.push_back(p);
-    for (auto g : layer->GetGradients()) grads_.push_back(g);
+    for (Parameter* p : layer->Parameters()) params_.push_back(p);
   }
 
   Tensor Forward(const Tensor& input) {
@@ -70,14 +69,26 @@ class Sequential {
     return dx;
   }
 
-  std::vector<Tensor*>& GetParameters() { return params_; }
-  std::vector<Tensor*>& GetGradients() { return grads_; }
+  [[nodiscard]] std::vector<Parameter*>& Parameters() { return params_; }
+
+  [[nodiscard]] std::vector<Tensor*> GetParameters() {
+    std::vector<Tensor*> out;
+    for (Parameter* p : params_) out.push_back(&p->Value());
+    return out;
+  }
+
+  [[nodiscard]] std::vector<Tensor*> GetGradients() {
+    std::vector<Tensor*> out;
+    for (Parameter* p : params_) out.push_back(&p->Grad());
+    return out;
+  }
 
   bool Save(const std::string& filepath) {
     std::ofstream out(filepath, std::ios::binary);
     if (!out.is_open()) return false;
-    for (auto p : params_) {
-      out.write(reinterpret_cast<const char*>(p->Data()), p->TotalSize() * sizeof(float));
+    for (Parameter* p : params_) {
+      out.write(reinterpret_cast<const char*>(p->Value().Data()),
+                p->TotalSize() * sizeof(float));
     }
     return true;
   }
@@ -85,16 +96,15 @@ class Sequential {
   bool Load(const std::string& filepath) {
     std::ifstream in(filepath, std::ios::binary);
     if (!in.is_open()) return false;
-    for (auto p : params_) {
-      in.read(reinterpret_cast<char*>(p->Data()), p->TotalSize() * sizeof(float));
+    for (Parameter* p : params_) {
+      in.read(reinterpret_cast<char*>(p->Value().Data()), p->TotalSize() * sizeof(float));
     }
     return true;
   }
 
  private:
   std::vector<std::shared_ptr<Layer>> layers_;
-  std::vector<Tensor*> params_;
-  std::vector<Tensor*> grads_;
+  std::vector<Parameter*> params_;
 };
 
 }  // namespace neuralsuite

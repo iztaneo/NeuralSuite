@@ -15,10 +15,10 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | --------------------------------- | ------------------------------------------------------------- |
 | Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
 | Robustez de `Tensor`              | ✅ formas validadas, sin estados inválidos, vistas sin copia    |
-| Testing                           | ✅ 17 pruebas, validadas por mutación, con código de salida     |
+| Testing                           | ✅ 18 pruebas, validadas por mutación, con código de salida     |
 | Portabilidad                      | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release    |
 | Serialización                     | ❌ sin cabecera ni versión: un checkpoint incompatible da basura |
-| API para terceros                 | ⚠️ `Parameter`/`Module` pendientes                              |
+| API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
 | Autograd                          | ❌ cada capa implementa su backward a mano                      |
 | Rendimiento                       | ⚠️ correcto pero sin optimizar; el cómputo domina               |
 
@@ -81,13 +81,22 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
       operación consume vistas no contiguas, así que sería refactor sin
       beneficio. Gana sentido junto con el autograd.
 
-## Fase 03 — `Parameter` y `Module` ⬜
+## Fase 03 — `Parameter` y `Module` ✅
 
-- [ ] `Parameter { Tensor data; Tensor grad; }` en lugar de dos listas
-      paralelas. Haría **imposible por diseño** el defecto de la Fase 01, que
-      hoy solo está atrapado por una guarda en el optimizador.
-- [ ] Base `Module` con registro automático de submódulos, para eliminar las
-      cascadas manuales de `GetParameters()`.
+- [x] **`Parameter` reúne valor y gradiente en un solo objeto**, creados juntos
+      y con la misma forma. `GetParameters()` y `GetGradients()` dejan de ser
+      dos métodos virtuales independientes y pasan a derivarse de la misma
+      lista: ya no hay dos declaraciones que puedan discrepar, de modo que el
+      defecto de la Fase 01 deja de ser representable en lugar de quedar
+      atrapado por una guarda.
+- [x] **`Module` con registro automático de submódulos.** Un `GPTBlock`
+      enumeraba a mano sus cinco componentes en dos métodos que debían coincidir
+      entre sí; ahora los declara una vez en el constructor y el recorrido del
+      árbol es automático.
+- [x] Los optimizadores aceptan una sola lista de `Parameter*`. Se conserva el
+      constructor anterior, validado, para el código que aún pase dos listas.
+- [x] Las doce demos y `train_llm` construyen el optimizador con la lista
+      única: desaparece el patrón de armar dos vectores paralelos a mano.
 
 ## Fase 04 — Verificación matemática ✅
 

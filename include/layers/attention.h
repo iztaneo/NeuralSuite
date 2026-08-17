@@ -31,6 +31,8 @@ class MultiHeadAttention : public Layer {
         head_dim_(embd / heads),
         c_attn_(embd, 3 * embd),
         c_proj_(embd, embd) {
+    Register(&c_attn_);
+    Register(&c_proj_);
     // Si embd no es múltiplo de heads, head_dim_ trunca y las dimensiones
     // sobrantes quedan sin asignar a ninguna cabeza, en silencio.
     if (embd <= 0 || heads <= 0) {
@@ -174,24 +176,6 @@ class MultiHeadAttention : public Layer {
     Tensor dx_2d = c_attn_.Backward(dqkv);
     dx_2d.Reshape({batch_size, seq_len, n_embd_});
     return dx_2d;
-  }
-
-  std::vector<Tensor*> GetParameters() override {
-    std::vector<Tensor*> p = c_attn_.GetParameters();
-    auto p2 = c_proj_.GetParameters();
-    p.insert(p.end(), p2.begin(), p2.end());
-    return p;
-  }
-
-  // Debe devolver los gradientes en el mismo orden que GetParameters(): el
-  // optimizador empareja ambas listas por índice. Omitir este override hacía
-  // que la clase heredara el vector vacío de Layer, desalineando parámetros y
-  // gradientes en cada GPTBlock (12 params frente a 8 grads).
-  std::vector<Tensor*> GetGradients() override {
-    std::vector<Tensor*> g = c_attn_.GetGradients();
-    auto g2 = c_proj_.GetGradients();
-    g.insert(g.end(), g2.begin(), g2.end());
-    return g;
   }
 
   static void ApplyRoPE(float* vec, int head_dim, int pos) {

@@ -32,8 +32,8 @@ int main() {
 
   CrossEntropyLoss criterion;
 
-  AdamW opt_d(discriminator.GetParameters(), discriminator.GetGradients(), 0.02f);
-  AdamW opt_g(generator.GetParameters(), generator.GetGradients(), 0.02f);
+  AdamW opt_d(discriminator.Parameters(), 0.02f);
+  AdamW opt_g(generator.Parameters(), 0.02f);
 
   std::cout << "🏋️ Entrenando GAN (Juego Minimax Generador vs Discriminador) durante 100 épocas...\n" << std::flush;
   for (int epoch = 1; epoch <= 100; ++epoch) {

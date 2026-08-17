@@ -46,7 +46,15 @@ class GPTBlock : public Layer {
         ln_2_(config.n_embd),
         mlp_fc_(config.n_embd, 4 * config.n_embd),
         mlp_gelu_(ActivationType::kGelu),
-        mlp_proj_(4 * config.n_embd, config.n_embd) {}
+        mlp_proj_(4 * config.n_embd, config.n_embd) {
+    // El orden de registro fija el orden de los parametros. Antes esta misma
+    // secuencia se repetia a mano en dos metodos que debian coincidir entre si.
+    Register(&ln_1_);
+    Register(&attn_);
+    Register(&ln_2_);
+    Register(&mlp_fc_);
+    Register(&mlp_proj_);
+  }
 
   Tensor Forward(const Tensor& input) override {
     Tensor x_norm1 = ln_1_.Forward(input);
@@ -105,27 +113,6 @@ class GPTBlock : public Layer {
     attn_.ClearKVCache();
   }
 
-  std::vector<Tensor*> GetParameters() override {
-
-    std::vector<Tensor*> p;
-    for (auto p1 : ln_1_.GetParameters()) p.push_back(p1);
-    for (auto p2 : attn_.GetParameters()) p.push_back(p2);
-    for (auto p3 : ln_2_.GetParameters()) p.push_back(p3);
-    for (auto p4 : mlp_fc_.GetParameters()) p.push_back(p4);
-    for (auto p5 : mlp_proj_.GetParameters()) p.push_back(p5);
-    return p;
-  }
-
-  std::vector<Tensor*> GetGradients() override {
-    std::vector<Tensor*> g;
-    for (auto g1 : ln_1_.GetGradients()) g.push_back(g1);
-    for (auto g2 : attn_.GetGradients()) g.push_back(g2);
-    for (auto g3 : ln_2_.GetGradients()) g.push_back(g3);
-    for (auto g4 : mlp_fc_.GetGradients()) g.push_back(g4);
-    for (auto g5 : mlp_proj_.GetGradients()) g.push_back(g5);
-    return g;
-  }
-
  private:
   LayerNormLayer ln_1_;
   MultiHeadAttention attn_;
@@ -139,16 +126,20 @@ class GPTBlock : public Layer {
  * @class GPTModel
  * @brief Complete GPT LLM Model.
  */
-class GPTModel {
+class GPTModel : public Module {
  public:
   explicit GPTModel(const GPTConfig& cfg)
       : config_(cfg),
         wte_(cfg.vocab_size, cfg.n_embd),
         wpe_(cfg.block_size, cfg.n_embd),
         ln_f_(cfg.n_embd) {
+    Register(&wte_);
+    Register(&wpe_);
     for (int i = 0; i < cfg.n_layer; ++i) {
       blocks_.push_back(std::make_shared<GPTBlock>(cfg));
+      Register(blocks_.back().get());
     }
+    Register(&ln_f_);
   }
 
 
@@ -265,35 +256,25 @@ class GPTModel {
     wpe_.Backward(dx);
 
     // dW_total = dW_embedding + dW_output.
-    Tensor* wte_grad = wte_.GetGradients()[0];
-    for (size_t i = 0; i < wte_grad->TotalSize(); ++i) {
-      (*wte_grad)[i] += dwte_output[i];
+    Tensor& wte_grad = wte_.WeightParam().Grad();
+    for (size_t i = 0; i < wte_grad.TotalSize(); ++i) {
+      wte_grad[i] += dwte_output[i];
     }
 
     return dx;
   }
 
-  std::vector<Tensor*> GetParameters() {
-
-    std::vector<Tensor*> p;
-    for (auto p1 : wte_.GetParameters()) p.push_back(p1);
-    for (auto p2 : wpe_.GetParameters()) p.push_back(p2);
-    for (auto& block : blocks_) {
-      for (auto pb : block->GetParameters()) p.push_back(pb);
-    }
-    for (auto pf : ln_f_.GetParameters()) p.push_back(pf);
-    return p;
+  /** @brief Pesos y gradientes, derivados ambos del recorrido de submodulos. */
+  [[nodiscard]] std::vector<Tensor*> GetParameters() {
+    std::vector<Tensor*> out;
+    for (Parameter* p : Parameters()) out.push_back(&p->Value());
+    return out;
   }
 
-  std::vector<Tensor*> GetGradients() {
-    std::vector<Tensor*> g;
-    for (auto g1 : wte_.GetGradients()) g.push_back(g1);
-    for (auto g2 : wpe_.GetGradients()) g.push_back(g2);
-    for (auto& block : blocks_) {
-      for (auto gb : block->GetGradients()) g.push_back(gb);
-    }
-    for (auto gf : ln_f_.GetGradients()) g.push_back(gf);
-    return g;
+  [[nodiscard]] std::vector<Tensor*> GetGradients() {
+    std::vector<Tensor*> out;
+    for (Parameter* p : Parameters()) out.push_back(&p->Grad());
+    return out;
   }
 
   bool SaveWeights(const std::string& filepath) {

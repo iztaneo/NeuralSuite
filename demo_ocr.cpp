@@ -29,7 +29,7 @@ int main() {
   CRNNModel ocr_model(1 /*canales*/, 16 /*ocultas*/, 4 /*clases*/);
 
   CrossEntropyLoss criterion;
-  AdamW optimizer(ocr_model.GetParameters(), ocr_model.GetGradients(), 0.03f);
+  AdamW optimizer(ocr_model.Parameters(), 0.03f);
 
   std::cout << "🏋️ Entrenando CRNNModel de Biblioteca durante 50 épocas...\n" << std::flush;
   for (int epoch = 1; epoch <= 50; ++epoch) {

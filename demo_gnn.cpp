@@ -40,13 +40,11 @@ int main() {
 
   CrossEntropyLoss criterion;
 
-  std::vector<Tensor*> params, grads;
-  for (auto p : gcn_layer1.GetParameters()) params.push_back(p);
-  for (auto p : classifier.GetParameters()) params.push_back(p);
-  for (auto g : gcn_layer1.GetGradients()) grads.push_back(g);
-  for (auto g : classifier.GetGradients()) grads.push_back(g);
+  std::vector<Parameter*> params;
+  for (Parameter* p : gcn_layer1.Parameters()) params.push_back(p);
+  for (Parameter* p : classifier.Parameters()) params.push_back(p);
 
-  AdamW optimizer(params, grads, 0.05f);
+  AdamW optimizer(params, 0.05f);
 
   std::cout << "🏋️ Entrenando GNN (Clasificación de Nodos de Grafo) durante 50 épocas...\n" << std::flush;
   for (int epoch = 1; epoch <= 50; ++epoch) {

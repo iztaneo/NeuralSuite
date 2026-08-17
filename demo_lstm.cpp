@@ -32,13 +32,11 @@ int main() {
 
   MSELoss criterion;
 
-  std::vector<Tensor*> params, grads;
-  for (auto p : lstm.GetParameters()) params.push_back(p);
-  for (auto p : fc.GetParameters()) params.push_back(p);
-  for (auto g : lstm.GetGradients()) grads.push_back(g);
-  for (auto g : fc.GetGradients()) grads.push_back(g);
+  std::vector<Parameter*> params;
+  for (Parameter* p : lstm.Parameters()) params.push_back(p);
+  for (Parameter* p : fc.Parameters()) params.push_back(p);
 
-  AdamW optimizer(params, grads, 0.01f);
+  AdamW optimizer(params, 0.01f);
 
   std::cout << "🏋️ Entrenando LSTM durante 10 iteraciones...\n" << std::flush;
   for (int epoch = 1; epoch <= 10; ++epoch) {

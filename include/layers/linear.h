@@ -12,6 +12,7 @@
 #include <cstring>
 #include <vector>
 #include "../layer.h"
+#include "../parameter.h"
 
 namespace neuralsuite {
 
@@ -25,11 +26,11 @@ class Linear : public Layer {
       : in_features_(in_features),
         out_features_(out_features),
         weight_({in_features, out_features}),
-        bias_({out_features}),
-        dweight_({in_features, out_features}),
-        dbias_({out_features}) {
-    weight_.RandomNormal(0.0f, 0.02f);
-    bias_.Zeros();
+        bias_({out_features}) {
+    Register(&weight_);
+    Register(&bias_);
+    weight_.Value().RandomNormal(0.0f, 0.02f);
+    bias_.Value().Zeros();
   }
 
   Tensor Forward(const Tensor& input) override {
@@ -43,11 +44,11 @@ class Linear : public Layer {
     const Tensor input_2d = input.View({N, in_dim});
 
     Tensor output_2d({N, out_features_});
-    MatMul(input_2d, weight_, output_2d);
+    MatMul(input_2d, weight_.Value(), output_2d);
 
     for (int i = 0; i < N; ++i) {
       for (int j = 0; j < out_features_; ++j) {
-        output_2d[i * out_features_ + j] += bias_[j];
+        output_2d[i * out_features_ + j] += bias_.Value()[j];
       }
     }
 
@@ -70,18 +71,19 @@ class Linear : public Layer {
 
     // dx_2d = dout_2d * weight_^T  ([N, out] * [out, in] -> [N, in])
     Tensor dx_2d({N, in_dim});
-    Tensor weight_t = Transpose(weight_);
+    Tensor weight_t = Transpose(weight_.Value());
     MatMul(dout_2d, weight_t, dx_2d);
 
     // dweight = input_2d^T * dout_2d ([in, N] * [N, out] -> [in, out])
     Tensor input_t = Transpose(input_2d);
-    MatMul(input_t, dout_2d, dweight_);
+    MatMul(input_t, dout_2d, weight_.Grad());
 
     // dbias = sum(dout, dim=0)
-    dbias_.Zeros();
+    Tensor& dbias = bias_.Grad();
+    dbias.Zeros();
     for (int i = 0; i < N; ++i) {
       for (int j = 0; j < out_features_; ++j) {
-        dbias_[j] += dout_2d[i * out_features_ + j];
+        dbias[j] += dout_2d[i * out_features_ + j];
       }
     }
 
@@ -90,22 +92,17 @@ class Linear : public Layer {
     return dx_2d;
   }
 
-  std::vector<Tensor*> GetParameters() override { return {&weight_, &bias_}; }
-  std::vector<Tensor*> GetGradients() override { return {&dweight_, &dbias_}; }
-
-  [[nodiscard]] const Tensor& Weight() const { return weight_; }
-  Tensor& Weight() { return weight_; }
-  [[nodiscard]] const Tensor& Bias() const { return bias_; }
-  Tensor& Bias() { return bias_; }
+  [[nodiscard]] const Tensor& Weight() const { return weight_.Value(); }
+  Tensor& Weight() { return weight_.Value(); }
+  [[nodiscard]] const Tensor& Bias() const { return bias_.Value(); }
+  Tensor& Bias() { return bias_.Value(); }
 
  private:
   int in_features_;
   int out_features_;
 
-  Tensor weight_;
-  Tensor bias_;
-  Tensor dweight_;
-  Tensor dbias_;
+  Parameter weight_;
+  Parameter bias_;
 
   Tensor last_input_;
 };

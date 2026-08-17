@@ -37,13 +37,11 @@ int main() {
 
   CrossEntropyLoss criterion;
 
-  std::vector<Tensor*> params, grads;
-  for (auto p : conv.GetParameters()) params.push_back(p);
-  for (auto p : fc.GetParameters()) params.push_back(p);
-  for (auto g : conv.GetGradients()) grads.push_back(g);
-  for (auto g : fc.GetGradients()) grads.push_back(g);
+  std::vector<Parameter*> params;
+  for (Parameter* p : conv.Parameters()) params.push_back(p);
+  for (Parameter* p : fc.Parameters()) params.push_back(p);
 
-  AdamW optimizer(params, grads, 0.01f);
+  AdamW optimizer(params, 0.01f);
 
   std::cout << "🏋️ Entrenando CNN durante 20 iteraciones...\n" << std::flush;
   for (int epoch = 1; epoch <= 20; ++epoch) {

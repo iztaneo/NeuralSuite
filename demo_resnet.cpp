@@ -38,7 +38,7 @@ int main() {
   model.Add(std::make_shared<Linear>(8, 2));
 
   CrossEntropyLoss criterion;
-  AdamW optimizer(model.GetParameters(), model.GetGradients(), 0.05f);
+  AdamW optimizer(model.Parameters(), 0.05f);
 
   std::cout << "🏋️ Entrenando Red Residual ResNet durante 100 épocas en C++...\n" << std::flush;
   for (int epoch = 1; epoch <= 100; ++epoch) {

@@ -109,23 +109,21 @@ int SampleToken(const float* logits, int vocab_size, float temperature = 0.7f, i
   return dist(rng);
 }
 
-void ClipGradients(const std::vector<Tensor*>& grads, float max_norm = 1.0f) {
+void ClipGradients(const std::vector<Parameter*>& params, float max_norm = 1.0f) {
   float total_norm_sq = 0.0f;
-  for (auto g : grads) {
-    size_t sz = g->TotalSize();
-    for (size_t i = 0; i < sz; ++i) {
-      float val = g->operator[](i);
+  for (Parameter* p : params) {
+    const Tensor& g = p->Grad();
+    for (size_t i = 0; i < g.TotalSize(); ++i) {
+      const float val = g[i];
       total_norm_sq += val * val;
     }
   }
-  float total_norm = std::sqrt(total_norm_sq);
+  const float total_norm = std::sqrt(total_norm_sq);
   if (total_norm > max_norm && total_norm > 0.0f) {
-    float scale = max_norm / total_norm;
-    for (auto g : grads) {
-      size_t sz = g->TotalSize();
-      for (size_t i = 0; i < sz; ++i) {
-        (*g)[i] *= scale;
-      }
+    const float scale = max_norm / total_norm;
+    for (Parameter* p : params) {
+      Tensor& g = p->Grad();
+      for (size_t i = 0; i < g.TotalSize(); ++i) g[i] *= scale;
     }
   }
 }
@@ -178,12 +176,11 @@ int main(int argc, char** argv) {
   GPTModel model(config);
   std::cout << "🧠 Modelo GPT C++ Creado exitosamente.\n" << std::flush;
 
-  std::vector<Tensor*> params = model.GetParameters();
-  std::vector<Tensor*> grads = model.GetGradients();
+  std::vector<Parameter*> params = model.Parameters();
 
   float base_lr = args.learning_rate;
   float min_lr = base_lr * 0.033f;
-  AdamW optimizer(params, grads, base_lr);
+  AdamW optimizer(params, base_lr);
   CrossEntropyLoss criterion;
 
   int max_iters = args.max_iters;
@@ -227,7 +224,7 @@ int main(int argc, char** argv) {
     std::memcpy(dlogits.Data(), dlogits_2d.Data(), dlogits_2d.TotalSize() * sizeof(float));
 
     model.Backward(dlogits);
-    ClipGradients(grads, 1.0f);
+    ClipGradients(params, 1.0f);
     optimizer.Step();
 
     if (iter % 25 == 0 || iter == max_iters) {

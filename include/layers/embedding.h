@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include "../layer.h"
+#include "../parameter.h"
 
 namespace neuralsuite {
 
@@ -25,9 +26,9 @@ class Embedding : public Layer {
   Embedding(int num_embeddings, int embedding_dim)
       : num_embeddings_(num_embeddings),
         embedding_dim_(embedding_dim),
-        weight_({num_embeddings, embedding_dim}),
-        dweight_({num_embeddings, embedding_dim}) {
-    weight_.RandomNormal(0.0f, 0.02f);
+        weight_({num_embeddings, embedding_dim}) {
+    Register(&weight_);
+    weight_.Value().RandomNormal(0.0f, 0.02f);
   }
 
   Tensor Forward(const Tensor& input) override {
@@ -50,7 +51,7 @@ class Embedding : public Layer {
 
         for (int d = 0; d < embedding_dim_; ++d) {
           size_t out_idx = (b * seq_len + t) * embedding_dim_ + d;
-          output[out_idx] = weight_[tok * embedding_dim_ + d];
+          output[out_idx] = weight_.Value()[tok * embedding_dim_ + d];
         }
       }
     }
@@ -58,7 +59,8 @@ class Embedding : public Layer {
   }
 
   Tensor Backward(const Tensor& dout) override {
-    dweight_.Zeros();
+    Tensor& dweight = weight_.Grad();
+    dweight.Zeros();
     int batch_size = dout.Shape()[0];
     int seq_len = dout.Shape()[1];
     size_t num_cached = last_tokens_.size();
@@ -70,7 +72,7 @@ class Embedding : public Layer {
         int tok = last_tokens_[cache_idx];
         for (int d = 0; d < embedding_dim_; ++d) {
           size_t dout_idx = (b * seq_len + t) * embedding_dim_ + d;
-          dweight_[tok * embedding_dim_ + d] += dout[dout_idx];
+          dweight[tok * embedding_dim_ + d] += dout[dout_idx];
         }
       }
     }
@@ -78,17 +80,14 @@ class Embedding : public Layer {
   }
 
 
-  std::vector<Tensor*> GetParameters() override { return {&weight_}; }
-  std::vector<Tensor*> GetGradients() override { return {&dweight_}; }
-
-  [[nodiscard]] Tensor& Weight() { return weight_; }
+  [[nodiscard]] Tensor& Weight() { return weight_.Value(); }
+  [[nodiscard]] Parameter& WeightParam() { return weight_; }
 
  private:
   int num_embeddings_;
   int embedding_dim_;
 
-  Tensor weight_;
-  Tensor dweight_;
+  Parameter weight_;
   std::vector<int> last_tokens_;
 };
 

@@ -11,6 +11,7 @@
 
 #include <vector>
 #include "../layer.h"
+#include "../parameter.h"
 
 namespace neuralsuite {
 
@@ -24,37 +25,33 @@ class LayerNormLayer : public Layer {
       : normalized_shape_(shape),
         eps_(epsilon),
         gamma_({shape}),
-        beta_({shape}),
-        dgamma_({shape}),
-        dbeta_({shape}) {
-    gamma_.Ones();
-    beta_.Zeros();
+        beta_({shape}) {
+    Register(&gamma_);
+    Register(&beta_);
+    gamma_.Value().Ones();
+    beta_.Value().Zeros();
   }
 
   Tensor Forward(const Tensor& input) override {
     last_input_ = input;
     Tensor output(input.Shape());
-    LayerNormForward(input, gamma_, beta_, output, mean_cache_, rstd_cache_, eps_);
+    LayerNormForward(input, gamma_.Value(), beta_.Value(), output, mean_cache_, rstd_cache_, eps_);
     return output;
   }
 
   Tensor Backward(const Tensor& dout) override {
     Tensor dx(last_input_.Shape());
-    LayerNormBackward(dout, last_input_, gamma_, mean_cache_, rstd_cache_, dx, dgamma_, dbeta_);
+    LayerNormBackward(dout, last_input_, gamma_.Value(), mean_cache_, rstd_cache_, dx,
+                      gamma_.Grad(), beta_.Grad());
     return dx;
   }
-
-  std::vector<Tensor*> GetParameters() override { return {&gamma_, &beta_}; }
-  std::vector<Tensor*> GetGradients() override { return {&dgamma_, &dbeta_}; }
 
  private:
   int normalized_shape_;
   float eps_;
 
-  Tensor gamma_;
-  Tensor beta_;
-  Tensor dgamma_;
-  Tensor dbeta_;
+  Parameter gamma_;
+  Parameter beta_;
 
   Tensor last_input_;
   Tensor mean_cache_;

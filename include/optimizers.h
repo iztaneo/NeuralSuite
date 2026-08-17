@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "parameter.h"
 #include "tensor.h"
 
 namespace neuralsuite {
@@ -64,6 +65,29 @@ inline void ValidateParamGradPairs(const std::vector<Tensor*>& params,
  */
 class SGD : public Optimizer {
  public:
+  /**
+   * @brief Construccion recomendada: una sola lista de parametros.
+   *
+   * Cada Parameter lleva su gradiente dentro, asi que no hay dos listas que
+   * puedan dejar de corresponderse.
+   */
+  explicit SGD(const std::vector<Parameter*>& parameters, float learning_rate = 0.01f,
+               float mom = 0.9f)
+      : lr_(learning_rate), momentum_(mom) {
+    for (Parameter* p : parameters) {
+      if (p == nullptr) throw std::invalid_argument("SGD: parametro nulo.");
+      params_.push_back(&p->Value());
+      grads_.push_back(&p->Grad());
+    }
+    ValidateParamGradPairs(params_, grads_);
+    for (auto p : params_) {
+      Tensor v(p->Shape());
+      v.Zeros();
+      velocities_.push_back(v);
+    }
+  }
+
+  /** @brief Forma heredada, con dos listas que se validan al construir. */
   SGD(const std::vector<Tensor*>& parameters, const std::vector<Tensor*>& gradients,
       float learning_rate = 0.01f, float mom = 0.9f)
       : params_(parameters), grads_(gradients), lr_(learning_rate), momentum_(mom) {
@@ -103,6 +127,26 @@ class SGD : public Optimizer {
  */
 class AdamW : public Optimizer {
  public:
+  /**
+   * @brief Construccion recomendada: una sola lista de parametros.
+   */
+  explicit AdamW(const std::vector<Parameter*>& parameters, float learning_rate = 1e-3f,
+                 float b1 = 0.9f, float b2 = 0.95f, float epsilon = 1e-8f, float wd = 0.01f)
+      : lr_(learning_rate), beta1_(b1), beta2_(b2), eps_(epsilon), weight_decay_(wd),
+        step_count_(0) {
+    for (Parameter* p : parameters) {
+      if (p == nullptr) throw std::invalid_argument("AdamW: parametro nulo.");
+      params_.push_back(&p->Value());
+      grads_.push_back(&p->Grad());
+    }
+    ValidateParamGradPairs(params_, grads_);
+    for (auto p : params_) {
+      Tensor m_i(p->Shape()); m_i.Zeros(); m_.push_back(m_i);
+      Tensor v_i(p->Shape()); v_i.Zeros(); v_.push_back(v_i);
+    }
+  }
+
+  /** @brief Forma heredada, con dos listas que se validan al construir. */
   AdamW(const std::vector<Tensor*>& parameters, const std::vector<Tensor*>& gradients,
         float learning_rate = 1e-3f, float b1 = 0.9f, float b2 = 0.95f, float epsilon = 1e-8f, float wd = 0.01f)
       : params_(parameters),
