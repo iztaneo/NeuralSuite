@@ -218,7 +218,8 @@ void MatMul(const Tensor& A, const Tensor& B, Tensor& C) {
       float a = A[i * K + k];
       const float* b_row = &B[k * N];
       float* c_row = &C[i * N];
-      #pragma omp simd
+      // Sin `omp simd`: MSVC solo lo admite con -openmp:experimental. El bucle
+      // es vectorizable de por si y los compiladores lo autovectorizan.
       for (int j = 0; j < N; ++j) {
         c_row[j] += a * b_row[j];
       }
@@ -375,8 +376,11 @@ void GeluForward(const Tensor& input, Tensor& output) {
   size_t sz = input.TotalSize();
   output.Resize(input.Shape());
 
+  // El indice va con signo: el OpenMP de MSVC (2.0) rechaza size_t en el bucle
+  // de un `parallel for`.
+  const long long n = static_cast<long long>(sz);
   #pragma omp parallel for schedule(static)
-  for (size_t i = 0; i < sz; ++i) {
+  for (long long i = 0; i < n; ++i) {
     float x = input[i];
     float cube = 0.044715f * x * x * x;
     float inner = 0.7978845608f * (x + cube);
@@ -388,8 +392,9 @@ void GeluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
   size_t sz = input.TotalSize();
   dx.Resize(input.Shape());
 
+  const long long n = static_cast<long long>(sz);
   #pragma omp parallel for schedule(static)
-  for (size_t i = 0; i < sz; ++i) {
+  for (long long i = 0; i < n; ++i) {
     float x = input[i];
     float cube = 0.044715f * x * x * x;
     float inner = 0.7978845608f * (x + cube);

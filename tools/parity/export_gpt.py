@@ -82,8 +82,12 @@ def collect_params_in_cpp_order(model, cfg):
 
 
 def main():
+    # Por defecto se busca el proyecto de referencia junto a este repositorio.
+    # Nunca una ruta absoluta: dependeria de la maquina de quien lo escribio.
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    default_llmrasec = os.path.join(os.path.dirname(repo_root), "LLMRasec")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--llmrasec", default="/Users/indra/Documents/Proyectos/LLMRasec")
+    ap.add_argument("--llmrasec", default=default_llmrasec)
     ap.add_argument("--out", default="/tmp/gpt_ref.nsp")
     ap.add_argument("--vocab_size", type=int, default=11)
     ap.add_argument("--block_size", type=int, default=16)

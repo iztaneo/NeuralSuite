@@ -49,8 +49,12 @@ def build_and_run(cfg_kwargs, idx, targets, dtype, llmrasec, seed):
 
 
 def main():
+    # Por defecto se busca el proyecto de referencia junto a este repositorio.
+    # Nunca una ruta absoluta: dependeria de la maquina de quien lo escribio.
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    default_llmrasec = os.path.join(os.path.dirname(repo_root), "LLMRasec")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--llmrasec", default="/Users/indra/Documents/Proyectos/LLMRasec")
+    ap.add_argument("--llmrasec", default=default_llmrasec)
     ap.add_argument("--ref", default="/tmp/gpt_ref.nsp")
     ap.add_argument("--cpp", default="/tmp/gpt_cpp.nsp")
     ap.add_argument("--seed", type=int, default=1234)

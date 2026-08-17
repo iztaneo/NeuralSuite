@@ -51,7 +51,14 @@ run_case() {
   else
     g++ "${CXXFLAGS[@]}" "${HERE}/parity_${name}.cpp" "${SRC[@]}" -o "${WORK}/parity_${name}"
   fi
-  "${PY}" "${HERE}/export_${name}.py" --out "${WORK}/${name}_ref.nsp" >/dev/null
+  # La ruta del proyecto de referencia se pasa siempre de forma explicita: si se
+  # dejara al valor por defecto del script, este solo funcionaria en las maquinas
+  # donde ambos repositorios estan uno al lado del otro.
+  local export_args=(--out "${WORK}/${name}_ref.nsp")
+  if grep -q -- "--llmrasec" "${HERE}/export_${name}.py"; then
+    export_args+=(--llmrasec "${LLMRASEC}")
+  fi
+  "${PY}" "${HERE}/export_${name}.py" "${export_args[@]}" >/dev/null
   "${WORK}/parity_${name}" --in "${WORK}/${name}_ref.nsp" --out "${WORK}/${name}_cpp.nsp" >/dev/null
   if ! "${PY}" "${HERE}/compare_${name}.py" \
         --ref "${WORK}/${name}_ref.nsp" --cpp "${WORK}/${name}_cpp.nsp"; then

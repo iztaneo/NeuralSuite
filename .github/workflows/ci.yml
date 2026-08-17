@@ -114,12 +114,10 @@ jobs:
   # Los sanitizers detectan accesos invalidos y comportamiento indefinido que
   # las pruebas numericas pueden atravesar sin dar sintoma.
   #
-  # NOTA: este es el unico job que no se pudo comprobar en local antes de
-  # subirlo. En la maquina de desarrollo (macOS, AppleClang) el binario
+  # No se pudo comprobar en local: sobre macOS con AppleClang el binario
   # instrumentado se queda colgado al arrancar, incluso una demo que sin
-  # instrumentar tarda milisegundos; es una particularidad de ese toolchain.
-  # Sobre Linux, que es donde corre aqui, la combinacion es estandar. Si el job
-  # falla en su primera ejecucion, ese es el motivo a descartar primero.
+  # instrumentar tarda milisegundos. Aqui, sobre Linux, paso a la primera, lo
+  # que confirma que aquel cuelgue era del toolchain y no del codigo.
   sanitizers:
     name: ASan y UBSan
     runs-on: ubuntu-latest
