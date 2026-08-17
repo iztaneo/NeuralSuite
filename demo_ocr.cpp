@@ -21,13 +21,9 @@ int main() {
   // Vocabulario de caracteres a reconocer: 'A', 'B', 'C', 'D'
   std::vector<char> vocab = {'A', 'B', 'C', 'D'};
 
-  // Entradas: 4 imágenes sintéticas de 8x8 píxeles representando letras
-  Tensor images({4, 1, 8, 8});
-  images.RandomNormal(0.5f, 0.2f);
-
-  // Etiquetas objetivo: 0 -> 'A', 1 -> 'B', 2 -> 'C', 3 -> 'D'
-  Tensor labels({4});
-  labels[0] = 0.0f; labels[1] = 1.0f; labels[2] = 2.0f; labels[3] = 3.0f;
+  // 📍 Generación de imágenes y etiquetas sintéticas mediante SynthTextGenerator
+  Tensor images, labels;
+  SynthTextGenerator::GenerateBatch(images, labels, 4);
 
   // Instanciar el modelo OCR reutilizable de alto nivel desde la biblioteca
   CRNNModel ocr_model(1 /*canales*/, 16 /*ocultas*/, 4 /*clases*/);

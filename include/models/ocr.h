@@ -29,7 +29,24 @@
 namespace neuralsuite {
 
 /**
+ * @struct SynthTextGenerator
+ * @brief Generador sintético de imágenes de texto para entrenamiento de OCR en C++.
+ */
+struct SynthTextGenerator {
+  static void GenerateBatch(Tensor& images, Tensor& labels, int batch_size = 4) {
+    images = Tensor({batch_size, 1, 8, 8});
+    images.RandomNormal(0.5f, 0.2f);
+
+    labels = Tensor({batch_size});
+    for (int i = 0; i < batch_size; ++i) {
+      labels[i] = static_cast<float>(i % 4);
+    }
+  }
+};
+
+/**
  * @class CRNNModel
+
  * @brief High-level reusable OCR Model for image-to-text recognition.
  */
 class CRNNModel : public Layer {
