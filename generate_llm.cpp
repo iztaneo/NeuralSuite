@@ -3,7 +3,7 @@
 
 /**
  * @file generate_llm.cpp
- * @brief Autoregressive Text Generation Demo loading trained checkpoint model_cpp.bin.
+ * @brief Autoregressive Text Generation Demo loading trained checkpoint model_cpp.bin with custom prompt support.
  */
 
 #include <cmath>
@@ -17,7 +17,7 @@
 
 using namespace neuralsuite;
 
-int SampleToken(const float* logits, int vocab_size, float temperature = 0.8f) {
+int SampleToken(const float* logits, int vocab_size, float temperature = 0.7f, int prev_token = -1, int newline_token = -1) {
   std::vector<float> probs(vocab_size);
   float max_val = logits[0] / temperature;
   for (int v = 1; v < vocab_size; ++v) {
@@ -27,19 +27,22 @@ int SampleToken(const float* logits, int vocab_size, float temperature = 0.8f) {
   float sum = 0.0f;
   for (int v = 0; v < vocab_size; ++v) {
     probs[v] = std::exp(logits[v] / temperature - max_val);
+    if (v == newline_token && prev_token == newline_token) {
+      probs[v] *= 0.1f; // Penalizar saltos de línea consecutivos
+    }
     sum += probs[v];
   }
 
   for (int v = 0; v < vocab_size; ++v) probs[v] /= sum;
 
-  static std::mt19937 rng(42);
+  static std::mt19937 rng(std::random_device{}());
   std::discrete_distribution<int> dist(probs.begin(), probs.end());
   return dist(rng);
 }
 
-int main() {
+int main(int argc, char** argv) {
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "🤖 GENERACIÓN DE TEXTO AUTORREGRESIVA C++ DESDE CHECKPOINT\n" << std::flush;
+  std::cout << "🤖 GENERACIÓN DE TEXTO AUTORREGRESIVA C++ (NeuralSuite)\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
 
   CharTokenizer tokenizer;
@@ -61,14 +64,19 @@ int main() {
   if (model.LoadWeights("model_cpp.bin")) {
     std::cout << "✅ Pesos del modelo C++ cargados desde 'model_cpp.bin'.\n" << std::flush;
   } else {
-    std::cout << "⚠️ No se encontró 'model_cpp.bin'. Usando pesos no entrenados...\n" << std::flush;
+    std::cout << "⚠️ No se encontró 'model_cpp.bin'. Usando pesos aleatorios...\n" << std::flush;
   }
 
-  std::string prompt = "First Citizen:\n";
-  std::cout << "\nPrompt de entrada:\n" << prompt << "\n" << std::flush;
+  std::string prompt = "We are accounted poor";
+  if (argc > 1) {
+    prompt = argv[1];
+  }
+
+  std::cout << "\nPrompt de entrada: '" << prompt << "'\n" << std::flush;
 
   std::vector<int> tokens = tokenizer.Encode(prompt);
   int max_new_tokens = 150;
+  int newline_token = tokenizer.Encode("\n")[0];
 
   for (int step = 0; step < max_new_tokens; ++step) {
     int seq_len = static_cast<int>(tokens.size());
@@ -83,7 +91,8 @@ int main() {
     Tensor logits = model.Forward(idx);
     int last_offset = (curr_len - 1) * config.vocab_size;
 
-    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, 0.8f);
+    int prev_token = tokens.empty() ? -1 : tokens.back();
+    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, 0.7f, prev_token, newline_token);
     tokens.push_back(sampled_token);
   }
 
