@@ -19,7 +19,7 @@ OBJS = $(SRCS:.cpp=.o)
 LIB_STATIC = libneuralsuite.a
 LIB_SHARED = libneuralsuite$(LIB_EXT)
 
-TARGETS = $(LIB_STATIC) $(LIB_SHARED) test_suite demo_adaline demo_mlp demo_sequential demo_cnn demo_lstm train_llm generate_llm
+TARGETS = $(LIB_STATIC) $(LIB_SHARED) test_suite demo_adaline demo_mlp demo_sequential demo_autoencoder demo_resnet demo_gan demo_gnn demo_diffusion demo_ocr demo_cnn demo_lstm train_llm generate_llm
 
 
 all: $(TARGETS)
@@ -58,6 +58,9 @@ demo_gnn: demo_gnn.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
 demo_diffusion: demo_diffusion.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
+demo_ocr: demo_ocr.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
 demo_cnn: demo_cnn.cpp $(LIB_STATIC)
