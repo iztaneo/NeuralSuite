@@ -13,12 +13,39 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-# Banderas de optimización y OpenMP
+# OpenMP acelera algunos bucles pero no es imprescindible: sin el, los pragmas
+# se ignoran y todo se ejecuta secuencialmente. Exigirlo con REQUIRED rompia la
+# configuracion en macOS, porque AppleClang no lo trae, de modo que el build
+# documentado en el README no funcionaba en una de las plataformas que anuncia.
+option(NEURALSUITE_ENABLE_OPENMP "Usar OpenMP si esta disponible" ON)
+
+# -march=native compila para la CPU de la maquina actual: va bien para medir en
+# local, pero produce binarios que pueden no arrancar en otro procesador.
+# -ffast-math relaja las garantias IEEE-754 (NaN, infinitos, asociatividad), lo
+# que estorba justo cuando se verifican gradientes. Ambas quedan desactivadas
+# por defecto y se piden explicitamente para hacer benchmarks.
+option(NEURALSUITE_NATIVE_ARCH "Optimizar para la CPU local (-march=native)" OFF)
+option(NEURALSUITE_FAST_MATH "Relajar las garantias IEEE-754 (-ffast-math)" OFF)
+
 if(MSVC)
     add_compile_options(/W4)
 else()
-    add_compile_options(-Wall -Wextra -march=native -ffast-math)
-    find_package(OpenMP REQUIRED)
+    add_compile_options(-Wall -Wextra)
+    if(NEURALSUITE_NATIVE_ARCH)
+        add_compile_options(-march=native)
+    endif()
+    if(NEURALSUITE_FAST_MATH)
+        add_compile_options(-ffast-math)
+    endif()
+endif()
+
+if(NEURALSUITE_ENABLE_OPENMP)
+    find_package(OpenMP)
+    if(OpenMP_CXX_FOUND)
+        message(STATUS "OpenMP encontrado: ejecucion paralela activada.")
+    else()
+        message(STATUS "OpenMP no disponible: se compila la version secuencial.")
+    endif()
 endif()
 
 include_directories(include)
@@ -61,6 +88,17 @@ foreach(exe ${NEURALSUITE_EXECUTABLES})
   add_executable(${exe} ${exe}.cpp)
   target_link_libraries(${exe} PRIVATE neuralsuite_static)
 endforeach()
+
+# Binarios de las pruebas de paridad contra PyTorch (ver tools/parity/README.md).
+foreach(exe parity_gpt parity_lstm)
+  add_executable(${exe} tools/parity/${exe}.cpp)
+  target_link_libraries(${exe} PRIVATE neuralsuite_static)
+endforeach()
+
+# `ctest` ejecuta la suite numerica. Se registran los dos modos de uso que debe
+# soportar test_suite: devolver codigo de salida y no depender del directorio.
+enable_testing()
+add_test(NAME test_suite COMMAND test_suite)
 
 # Reglas de Instalación como Biblioteca de C++
 install(TARGETS neuralsuite_shared neuralsuite_static

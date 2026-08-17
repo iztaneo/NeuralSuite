@@ -1,5 +1,7 @@
 # 🧠 NeuralSuite: C++17 Deep Learning Framework from Scratch
 
+[![CI](https://github.com/iztaneo/NeuralSuite/actions/workflows/ci.yml/badge.svg)](https://github.com/iztaneo/NeuralSuite/actions/workflows/ci.yml)
+
 **NeuralSuite** es un framework y suite de aprendizaje profundo escrita totalmente en **C++17 puro desde cero** (sin PyTorch, TensorFlow, BLAS, Eigen ni librerías externas de IA).
 
 Es totalmente **multiplataforma (Linux, macOS y Windows)** y cuenta con soporte para **ejecución paralela multi-hilo en CPU (OpenMP/SIMD)**.
@@ -54,9 +56,14 @@ paso de entrenamiento del GPT (B=8, T=64, 4 capas, n_embd=128): la memoria
 reservada baja de 118 MB a 72,6 MB. El tiempo por paso no cambia de forma
 apreciable — el cuello de botella es el cómputo, no las reservas.
 
+Cada push ejecuta en [integración continua](.github/workflows/ci.yml) la
+compilación en Linux (GCC y Clang), macOS y Windows, en modo `Debug` y
+`Release`; la suite numérica; las demos; un entrenamiento del LLM de extremo a
+extremo; y la comparación contra PyTorch.
+
 **Sigue siendo software 0.x.** Quedan sin cobertura `MaxPool2D`, `GraphConv` y
-`Residual`; el formato de serialización no tiene cabecera ni versión; y no hay
-integración continua. El uso recomendado es educativo y de lectura del código.
+`Residual`, y el formato de serialización no tiene cabecera ni versión. El uso
+recomendado es educativo y de lectura del código.
 
 ---
 
@@ -103,11 +110,29 @@ cmake -B build
 cmake --build build
 ```
 
-El build por defecto es `Release`. Para desarrollo conviene el build con
-comprobaciones, que activa la validación de índices de `Tensor::operator[]`:
+El build por defecto es `Release` y es portable: no usa `-march=native`, así que
+el binario resultante funciona en otras máquinas. Para desarrollo conviene el
+build con comprobaciones, que activa la validación de índices de
+`Tensor::operator[]`:
 
 ```bash
 cmake -B build-debug -DCMAKE_BUILD_TYPE=Debug
+```
+
+Opciones disponibles:
+
+| Opción                      | Por defecto | Efecto                                                 |
+| --------------------------- | ----------- | ------------------------------------------------------ |
+| `NEURALSUITE_ENABLE_OPENMP` | `ON`        | Usa OpenMP si está disponible; si no, compila secuencial |
+| `NEURALSUITE_NATIVE_ARCH`   | `OFF`       | `-march=native`: más rápido en esta CPU, no portable    |
+| `NEURALSUITE_FAST_MATH`     | `OFF`       | `-ffast-math`: relaja IEEE-754, estorba al verificar    |
+
+OpenMP es **opcional**. Sin él los pragmas se ignoran y todo corre de forma
+secuencial, que es lo que ocurre en macOS con AppleClang. Para medir
+rendimiento en local:
+
+```bash
+cmake -B build-bench -DNEURALSUITE_NATIVE_ARCH=ON -DNEURALSUITE_FAST_MATH=ON
 ```
 
 ---

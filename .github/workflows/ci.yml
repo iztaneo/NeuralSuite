@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Compila y ejecuta la suite numerica en las tres plataformas que anuncia el
+  # README, en los dos modos de build. Debug importa tanto como Release: es el
+  # unico que activa la comprobacion de indices de Tensor::operator[].
+  build-and-test:
+    name: ${{ matrix.name }} · ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    # Las combinaciones se enumeran una a una en lugar de cruzar dimensiones con
+    # `include`: las reglas de fusion de GitHub Actions en ese caso son sutiles
+    # y aqui no hay forma de comprobarlas antes de ejecutar el workflow.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Linux GCC,        os: ubuntu-latest,  build_type: Debug,   cc: gcc,   cxx: g++}
+          - {name: Linux GCC,        os: ubuntu-latest,  build_type: Release, cc: gcc,   cxx: g++}
+          - {name: Linux Clang,      os: ubuntu-latest,  build_type: Debug,   cc: clang, cxx: clang++}
+          - {name: Linux Clang,      os: ubuntu-latest,  build_type: Release, cc: clang, cxx: clang++}
+          - {name: macOS AppleClang, os: macos-latest,   build_type: Debug}
+          - {name: macOS AppleClang, os: macos-latest,   build_type: Release}
+          - {name: Windows MSVC,     os: windows-latest, build_type: Debug}
+          - {name: Windows MSVC,     os: windows-latest, build_type: Release}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar compilador
+        if: matrix.cc != ''
+        shell: bash
+        run: |
+          echo "CC=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CXX=${{ matrix.cxx }}" >> "$GITHUB_ENV"
+
+      - name: Configurar
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
+      - name: Compilar
+        run: cmake --build build --config ${{ matrix.build_type }} --parallel
+
+      - name: Pruebas
+        working-directory: build
+        run: ctest --output-on-failure --build-config ${{ matrix.build_type }}
+
+      # Las demos son parte del contrato del repositorio: si una deja de
+      # ejecutarse, el fallo debe verse aqui y no cuando alguien la prueba.
+      - name: Ejecutar demos
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bin_dir="build"
+          failed=0
+          for demo in demo_adaline demo_mlp demo_cnn demo_lstm demo_autoencoder \
+                      demo_diffusion demo_gan demo_gnn demo_ocr demo_resnet \
+                      demo_sequential ocr_cli; do
+            if ! "./${bin_dir}/${demo}" > /dev/null 2>&1; then
+              echo "::error::La demo ${demo} termino con error"
+              failed=1
+            fi
+          done
+          exit "${failed}"
+
+      - name: Entrenar el LLM de extremo a extremo
+        if: runner.os != 'Windows'
+        run: |
+          ./build/train_llm --max_iters 5 --batch_size 2 --block_size 16 \
+                            --n_layer 2 --n_head 2 --n_embd 32
+
+  # Compara contra la implementacion de referencia en PyTorch. Es la unica
+  # comprobacion que detecta que un Forward calcule algo distinto de lo que dice
+  # calcular; el gradient checking, por construccion, no puede verlo.
+  parity:
+    name: Paridad con PyTorch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clonar la implementacion de referencia
+        uses: actions/checkout@v4
+        with:
+          repository: iztaneo/LLMRasec
+          path: LLMRasec
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar PyTorch (solo CPU)
+        run: |
+          python -m venv LLMRasec/venv
+          LLMRasec/venv/bin/pip install --upgrade pip
+          LLMRasec/venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch
+          LLMRasec/venv/bin/pip install numpy
+
+      - name: Configurar y compilar
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Comparar GPT y LSTM contra PyTorch
+        run: tools/parity/run_parity.sh "${GITHUB_WORKSPACE}/LLMRasec"
+
+  # Los sanitizers detectan accesos invalidos y comportamiento indefinido que
+  # las pruebas numericas pueden atravesar sin dar sintoma.
+  #
+  # NOTA: este es el unico job que no se pudo comprobar en local antes de
+  # subirlo. En la maquina de desarrollo (macOS, AppleClang) el binario
+  # instrumentado se queda colgado al arrancar, incluso una demo que sin
+  # instrumentar tarda milisegundos; es una particularidad de ese toolchain.
+  # Sobre Linux, que es donde corre aqui, la combinacion es estandar. Si el job
+  # falla en su primera ejecucion, ese es el motivo a descartar primero.
+  sanitizers:
+    name: ASan y UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # RelWithDebInfo y no Debug: los sanitizers ya multiplican el coste, y con
+      # -O0 los bucles anidados de Conv2D y de los gradient checks tardan tanto
+      # que el job deja de ser util. Con optimizacion se conservan los simbolos
+      # y ASan detecta igual los accesos invalidos.
+      - name: Configurar con sanitizers
+        env:
+          CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -g
+          LDFLAGS: -fsanitize=address,undefined
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Compilar
+        run: cmake --build build --parallel
+
+      - name: Pruebas bajo sanitizers
+        working-directory: build
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --output-on-failure --timeout 900

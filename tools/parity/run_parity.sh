@@ -40,7 +40,17 @@ run_case() {
   local name="$1"
   echo
   echo "### Paridad: ${name} ###"
-  g++ "${CXXFLAGS[@]}" "${HERE}/parity_${name}.cpp" "${SRC[@]}" -o "${WORK}/parity_${name}"
+
+  # Si el proyecto ya se compilo con CMake, se usan esos binarios: asi la
+  # comparacion se hace sobre los artefactos que realmente se distribuyen, en
+  # lugar de sobre una copia compilada aparte con otras banderas.
+  local prebuilt="${NEURALSUITE_BUILD_DIR:-${REPO}/build}/parity_${name}"
+  if [[ -x "${prebuilt}" ]]; then
+    echo "usando el binario ya compilado: ${prebuilt}"
+    cp "${prebuilt}" "${WORK}/parity_${name}"
+  else
+    g++ "${CXXFLAGS[@]}" "${HERE}/parity_${name}.cpp" "${SRC[@]}" -o "${WORK}/parity_${name}"
+  fi
   "${PY}" "${HERE}/export_${name}.py" --out "${WORK}/${name}_ref.nsp" >/dev/null
   "${WORK}/parity_${name}" --in "${WORK}/${name}_ref.nsp" --out "${WORK}/${name}_cpp.nsp" >/dev/null
   if ! "${PY}" "${HERE}/compare_${name}.py" \
