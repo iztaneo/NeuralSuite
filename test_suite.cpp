@@ -419,38 +419,70 @@ void TestAssignmentKeepsSource() {
 }
 
 /**
- * @brief Deja constancia de que LSTM::Backward() sigue sin implementarse.
+ * @brief Gradientes del LSTM por retropropagación a través del tiempo.
  *
- * No es una prueba de corrección sino un recordatorio ejecutable: mientras la
- * capa devuelva gradientes nulos avisa por pantalla, y en cuanto alguien
- * implemente el BPTT esta prueba lo detectará para que se sustituya por un
- * gradient check de verdad.
+ * Comprueba los cuatro tensores de parámetros y también `dx`, el gradiente que
+ * la capa propaga hacia atrás: una versión anterior devolvía ceros en ambos, de
+ * modo que la capa no aprendía y ademas cortaba la cadena hacia capas previas.
  */
-void TestLstmBackwardIsStub() {
-  std::cout << "🧪 [Test 12] Estado de LSTM::Backward()... " << std::flush;
+void TestGradientCheckLstm() {
+  std::cout << "🧪 [Test 12] Gradientes del LSTM (BPTT)... " << std::flush;
 
-  LSTM lstm(4, 6);
-  Tensor x({3, 2, 4});
+  const int T = 4, B = 2, IN = 3, H = 5;
+  LSTM lstm(IN, H);
+
+  Tensor x({T, B, IN});
   for (size_t i = 0; i < x.TotalSize(); ++i) {
-    x[i] = 0.1f * static_cast<float>((i * 7) % 13) - 0.4f;
-  }
-  Tensor y = lstm.Forward(x);
-
-  Tensor dout(y.Shape());
-  dout.Ones();
-  lstm.Backward(dout);
-
-  double total = 0.0;
-  for (auto* g : lstm.GetGradients()) {
-    for (size_t i = 0; i < g->TotalSize(); ++i) total += std::abs((*g)[i]);
+    x[i] = 0.3f * std::sin(0.7f * static_cast<float>(i)) + 0.1f;
   }
 
-  if (total == 0.0) {
-    std::cout << "PENDIENTE ⚠️  (gradientes nulos: la capa no aprende)\n" << std::flush;
-  } else {
-    std::cout << "\n   ℹ️  LSTM::Backward ya produce gradientes: sustituye esta prueba"
-                 " por un gradient check por diferencias finitas.\n" << std::flush;
+  // Pérdida escalar con pesos variables por posición: una suma simple podría
+  // ocultar errores que se cancelan entre pasos temporales.
+  Tensor w({T, B, H});
+  for (size_t i = 0; i < w.TotalSize(); ++i) {
+    w[i] = 0.5f + 0.5f * std::cos(1.3f * static_cast<float>(i));
   }
+  auto loss_of = [&]() {
+    Tensor y = lstm.Forward(x);
+    double s = 0.0;
+    for (size_t i = 0; i < y.TotalSize(); ++i) s += static_cast<double>(y[i]) * w[i];
+    return s;
+  };
+
+  loss_of();
+  Tensor dout(w.Shape());
+  for (size_t i = 0; i < w.TotalSize(); ++i) dout[i] = w[i];
+  Tensor dx = lstm.Backward(dout);
+
+  // Los gradientes de los pesos son pequeños y el paso corto los ahoga en el
+  // ruido de float32: medido, eps=1e-4 da 0.23 de error y eps=5e-2 da 6e-4.
+  int checked = 0, skipped = 0;
+  const double worst_params =
+      MaxGradError(lstm.GetParameters(), lstm.GetGradients(), loss_of, 5e-2f, 12,
+                   &checked, &skipped);
+  Check(worst_params < 1e-2,
+        "el peor error relativo de los parametros del LSTM es " + std::to_string(worst_params));
+
+  // dx: sin esto la capa no propagaria gradiente a las capas anteriores.
+  const float eps = 5e-2f;
+  double worst_dx = 0.0;
+  int dx_checked = 0;
+  for (size_t i = 0; i < x.TotalSize(); i += 2) {
+    const float orig = x[i];
+    x[i] = orig + eps; const double lp = loss_of();
+    x[i] = orig - eps; const double lm = loss_of();
+    x[i] = orig;
+
+    const double numeric = (lp - lm) / (2.0 * eps);
+    if (std::max(std::abs(numeric), std::abs(static_cast<double>(dx[i]))) < kNegligibleGrad) continue;
+    worst_dx = std::max(worst_dx, RelativeError(numeric, dx[i]));
+    ++dx_checked;
+  }
+  Check(worst_dx < 1e-2, "el peor error relativo de dx del LSTM es " + std::to_string(worst_dx));
+
+  std::cout << "PASADO ✅ (" << checked << " params, " << dx_checked
+            << " dx; peor error rel: " << std::max(worst_params, worst_dx) << ")\n"
+            << std::flush;
 }
 
 int main() {
@@ -469,7 +501,7 @@ int main() {
   TestInputValidation();
   TestReshapeSemantics();
   TestAssignmentKeepsSource();
-  TestLstmBackwardIsStub();
+  TestGradientCheckLstm();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

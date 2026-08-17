@@ -23,17 +23,19 @@ Los optimizadores ahora rechazan listas de parámetros y gradientes que no
 casen, en lugar de continuar en silencio, y `Tensor`, `MatMul`, `Embedding` y
 `MultiHeadAttention` validan formas e índices.
 
-**Defecto abierto: `LSTM::Backward()` no está implementado.** Ignora el
-gradiente entrante, deja sus cuatro gradientes en cero y devuelve un `dx` nulo,
-de modo que **la capa LSTM no aprende** y además corta la propagación hacia
-capas anteriores. `demo_lstm` combina LSTM con una capa `Linear`: la pérdida
-baja porque aprende el `Linear`, no el LSTM. Implementarlo exige BPTT sobre las
-cuatro puertas, con su gradient check.
+La capa `LSTM` **se reimplementó por completo**. La versión anterior no era una
+LSTM: su `Forward()` no usaba ninguno de los cuatro parámetros, no tenía
+puertas, ignoraba el estado de celda y solo leía el primer elemento del vector
+de entrada; su `Backward()` devolvía siempre ceros, de modo que la capa no
+aprendía y además cortaba la propagación hacia capas anteriores. Ahora
+implementa la celda estándar (puertas `i`, `f`, `g`, `o` y estado `c`) con
+retropropagación a través del tiempo, verificada por diferencias finitas sobre
+los cuatro tensores de parámetros y sobre el gradiente de entrada.
 
 **Sigue siendo software 0.x.** La cobertura de gradient checking aún no alcanza
-a `Conv2D`, `LayerNorm`, `LSTM` ni `CrossEntropyLoss`; el formato de
-serialización no tiene cabecera ni versión; y no hay integración continua. El
-uso recomendado es educativo y de lectura del código.
+a `Conv2D`, `LayerNorm` ni `CrossEntropyLoss`; el formato de serialización no
+tiene cabecera ni versión; y no hay integración continua. El uso recomendado es
+educativo y de lectura del código.
 
 ---
 
@@ -127,8 +129,7 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 - `./demo_adaline`: Regla de aprendizaje Adaline / Widrow-Hoff.
 - `./demo_mlp`: Entrenamiento de un clasificador MLP (XOR).
 - `./demo_cnn`: Entrenamiento de una Red Convolucional (CNN 2D).
-- `./demo_lstm`: Red Recurrente (LSTM). **Los pesos del LSTM no se actualizan**:
-  su `Backward()` está sin implementar (ver la advertencia de estado).
+- `./demo_lstm`: Entrenamiento de una Red Recurrente (LSTM).
 - `./demo_sequential`: Uso del contenedor `Sequential` para apilar capas.
 - `./demo_resnet`: Bloques residuales.
 - `./demo_gnn`: Convolución sobre grafos.
