@@ -1,12 +1,40 @@
+# Directorios de build
 build/
 bin/
+
+# Ejecutables de demos y herramientas
 test_suite
+demo_adaline
 demo_mlp
 demo_cnn
 demo_lstm
+demo_autoencoder
+demo_diffusion
+demo_gan
+demo_gnn
+demo_ocr
+demo_resnet
+demo_sequential
 train_llm
+train_llm_debug
 generate_llm
-vocab_cpp.txt
+ocr_cli
+
+# Objetos y bibliotecas compiladas
 *.o
+*.a
+*.so
+*.dylib
+*.dll
 *.exe
+
+# Pesos de modelos y vocabularios generados por entrenamiento.
+# Los checkpoints grandes van a Releases, no al historial de git.
+*.ns
+*.bin
+vocab_cpp.txt
+
+# Salidas generadas por las demos
+resultado*.txt
+
 .DS_Store

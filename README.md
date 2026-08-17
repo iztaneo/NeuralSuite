@@ -6,7 +6,28 @@ Es totalmente **multiplataforma (Linux, macOS y Windows)** y cuenta con soporte 
 
 ---
 
+## ⚠️ Estado del proyecto: fase experimental 0.x
+
+NeuralSuite está en desarrollo activo y **no debe considerarse todavía
+matemáticamente confiable para entrenamiento general**. Hay defectos abiertos
+conocidos en el sistema de gradientes del Transformer:
+
+- `MultiHeadAttention` expone sus parámetros pero no sus gradientes, por lo que
+  parámetros y gradientes se desalinean dentro de `GPTBlock` y el optimizador
+  puede aplicar el gradiente equivocado a un peso.
+- El *weight tying* del `GPTModel` pierde la contribución de la cabeza de salida,
+  porque `Embedding::Backward()` reinicia el acumulador de gradiente.
+
+Hasta que estos puntos se cierren, **los resultados de entrenamiento del GPT no
+son válidos**. La cobertura de tests tampoco alcanza aún a `MultiHeadAttention`,
+`Conv2D`, `LayerNorm` ni `CrossEntropyLoss`. El uso recomendado por ahora es
+educativo y de lectura del código.
+
+---
+
 ## 🛠️ Arquitectura y Capas Soportadas
+
+**Núcleo**
 
 1. **Perceptrón Multicapa (MLP / Redes Densas)**: Capas `Linear` ($Y = XW + b$).
 2. **Redes Convolucionales (CNN)**: Capas `Conv2D` y `MaxPool2D` para visión por computador.
@@ -14,6 +35,13 @@ Es totalmente **multiplataforma (Linux, macOS y Windows)** y cuenta con soporte 
 4. **Transformers / LLM**: `MultiHeadAttention` (Atención Causal Multi-Cabeza), `Embedding`, `LayerNormLayer` y `GPTModel`.
 5. **Optimizadores**: `AdamW` (con Weight Decay desacoplado) y `SGD` con Momentum.
 6. **Funciones de Pérdida**: `CrossEntropyLoss` y `MSELoss`.
+
+**Capas y modelos adicionales**
+
+7. **Bloques residuales**: `Residual` (base de la demo ResNet).
+8. **Redes de grafos**: `GraphConv` (base de la demo GNN).
+9. **Modelo OCR**: `CRNNModel` (Conv2D + MaxPool2D + Linear) — ver la nota de
+   alcance en la sección de demostraciones.
 
 ---
 
@@ -44,9 +72,50 @@ cmake --build build
 
 ## 🧪 Ejecutables y Demostraciones
 
+Todos los ejecutables están registrados en `CMakeLists.txt`, que es la única
+fuente de verdad del build: ninguna demo debe compilarse a mano.
+
+**Pruebas**
+
 - `./test_suite`: Pruebas unitarias numéricas y verificación de gradientes por diferencias finitas.
+
+**Redes densas, convolucionales y recurrentes**
+
+- `./demo_adaline`: Regla de aprendizaje Adaline / Widrow-Hoff.
 - `./demo_mlp`: Entrenamiento de un clasificador MLP (XOR).
 - `./demo_cnn`: Entrenamiento de una Red Convolucional (CNN 2D).
 - `./demo_lstm`: Entrenamiento de una Red Recurrente (LSTM).
+- `./demo_sequential`: Uso del contenedor `Sequential` para apilar capas.
+- `./demo_resnet`: Bloques residuales.
+- `./demo_gnn`: Convolución sobre grafos.
+
+**Modelos generativos**
+
+- `./demo_autoencoder`: Autoencoder encoder/decoder.
+- `./demo_gan`: Generador y discriminador adversarios.
+- `./demo_diffusion`: Denoiser de difusión.
+
+**LLM / Transformer**
+
 - `./train_llm`: Entrenamiento del LLM Transformer sobre dataset de texto.
+  Ver la advertencia de estado: los gradientes del Transformer tienen defectos abiertos.
 - `./generate_llm`: Inferencia y generación de texto autorregresivo desde la consola C++.
+
+**OCR**
+
+- `./demo_ocr`: Entrena el `CRNNModel` sobre lotes sintéticos.
+- `./ocr_cli`: Ejecuta el forward del `CRNNModel` y escribe la salida a un `.txt`.
+
+> **Alcance del OCR.** NeuralSuite **no incluye un decodificador de imagen
+> PNG/JPG propio**, así que `ocr_cli` no lee los píxeles del archivo que se le
+> pasa en `--image`: corre el forward sobre un tensor sintético de ruido 8×8.
+> `demo_ocr` entrena igualmente sobre ruido sintético con 4 etiquetas fijas.
+> Ambos sirven para ejercitar el camino `Conv2D → MaxPool2D → Linear → decode`,
+> **no son reconocimiento de texto real** y su salida no debe interpretarse como
+> una transcripción.
+
+---
+
+## 📄 Licencia
+
+Distribuido bajo la [Licencia Apache 2.0](LICENSE).

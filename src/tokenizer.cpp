@@ -1,4 +1,4 @@
-// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Copyright 2026 NeuralSuite Authors.
 // Licensed under the Apache License, Version 2.0.
 
 #include "tokenizer.h"

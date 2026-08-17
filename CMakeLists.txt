@@ -28,27 +28,30 @@ if(OpenMP_CXX_FOUND)
     target_link_libraries(neuralsuite_static PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
-# Ejecutables Demo
-add_executable(test_suite test_suite.cpp)
-target_link_libraries(test_suite PRIVATE neuralsuite_static)
+# Ejecutables: pruebas, demos y herramientas.
+# Toda fuente ejecutable del repositorio debe estar registrada aquí; CMake es la
+# única fuente de verdad del build. Nada debe compilarse a mano.
+set(NEURALSUITE_EXECUTABLES
+    test_suite
+    demo_adaline
+    demo_mlp
+    demo_cnn
+    demo_lstm
+    demo_autoencoder
+    demo_diffusion
+    demo_gan
+    demo_gnn
+    demo_ocr
+    demo_resnet
+    demo_sequential
+    train_llm
+    generate_llm
+    ocr_cli)
 
-add_executable(demo_adaline demo_adaline.cpp)
-target_link_libraries(demo_adaline PRIVATE neuralsuite_static)
-
-add_executable(demo_mlp demo_mlp.cpp)
-target_link_libraries(demo_mlp PRIVATE neuralsuite_static)
-
-add_executable(demo_cnn demo_cnn.cpp)
-target_link_libraries(demo_cnn PRIVATE neuralsuite_static)
-
-add_executable(demo_lstm demo_lstm.cpp)
-target_link_libraries(demo_lstm PRIVATE neuralsuite_static)
-
-add_executable(train_llm train_llm.cpp)
-target_link_libraries(train_llm PRIVATE neuralsuite_static)
-
-add_executable(generate_llm generate_llm.cpp)
-target_link_libraries(generate_llm PRIVATE neuralsuite_static)
+foreach(exe ${NEURALSUITE_EXECUTABLES})
+  add_executable(${exe} ${exe}.cpp)
+  target_link_libraries(${exe} PRIVATE neuralsuite_static)
+endforeach()
 
 # Reglas de Instalación como Biblioteca de C++
 install(TARGETS neuralsuite_shared neuralsuite_static

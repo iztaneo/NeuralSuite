@@ -1,4 +1,4 @@
-// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Copyright 2026 NeuralSuite Authors.
 // Licensed under the Apache License, Version 2.0.
 
 /**
@@ -56,17 +56,19 @@ int main() {
   ocr_model.Save("ocr_model.ns");
   std::cout << "💾 Pesos del modelo OCR guardados en 'ocr_model.ns'.\n" << std::flush;
 
-  std::cout << "\n🎯 Predicción de Caracteres usando CRNNModel::Decode de Biblioteca:\n" << std::flush;
+  std::cout << "\n🎯 Predicción de Caracteres usando CRNNModel::DecodeWord de Biblioteca:\n" << std::flush;
   Tensor final_logits = ocr_model.Forward(images);
-  std::string decoded_text = ocr_model.Decode(final_logits, vocab);
+  std::string decoded_text = ocr_model.DecodeWord(final_logits, vocab);
 
-  for (size_t i = 0; i < decoded_text.size(); ++i) {
-    std::cout << "   - Imagen " << i + 1 << " -> Carácter Decodificado: '" << decoded_text[i]
-              << "' (Esperado: '" << vocab[static_cast<int>(labels[i])] << "') ✅\n" << std::flush;
-  }
+  std::cout << "   - Secuencia decodificada: '" << decoded_text << "'\n" << std::flush;
+  std::cout << "   - Etiquetas esperadas:    '";
+  for (int i = 0; i < 4; ++i) std::cout << vocab[static_cast<int>(labels[i])];
+  std::cout << "'\n" << std::flush;
 
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "✅ ¡Demostración de OCR en modo biblioteca completada exitosamente!\n" << std::flush;
+  std::cout << "Demostración de OCR en modo biblioteca finalizada.\n" << std::flush;
+  std::cout << "Nota: entrena sobre imágenes sintéticas de ruido 8x8 con 4\n" << std::flush;
+  std::cout << "etiquetas fijas; no es reconocimiento de texto real.\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
 
   return 0;

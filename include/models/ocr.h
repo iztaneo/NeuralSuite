@@ -1,4 +1,4 @@
-// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Copyright 2026 NeuralSuite Authors.
 // Licensed under the Apache License, Version 2.0.
 
 /**
@@ -16,6 +16,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "../activations.h"
@@ -100,9 +101,16 @@ class CRNNModel : public Layer {
   }
 
   std::string DecodeWord(const Tensor& logits, const std::vector<char>& vocab) {
-    int batch_size = logits.Shape()[0];
-    int timesteps = logits.Shape()[1];
-    int num_classes = logits.Shape()[2];
+    const std::vector<int>& shape = logits.Shape();
+    if (shape.size() != 2 && shape.size() != 3) {
+      throw std::invalid_argument("DecodeWord espera logits de rango 2 [B, C] o 3 [B, T, C]");
+    }
+
+    // Forward() produce logits 2D [batch, num_classes]; el rango 3 queda
+    // soportado para modelos secuenciales con varios timesteps por muestra.
+    int batch_size = shape[0];
+    int timesteps = (shape.size() == 3) ? shape[1] : 1;
+    int num_classes = shape.back();
     std::string result = "";
 
     for (int b = 0; b < batch_size; ++b) {
