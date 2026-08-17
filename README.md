@@ -67,6 +67,9 @@ versión, de modo que cargar un checkpoint que no corresponde a la arquitectura
 no da error sino datos sin sentido. El uso recomendado es educativo y de lectura
 del código.
 
+El estado detallado de cada fase, con los defectos encontrados y lo que queda
+pendiente, está en [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
 ---
 
 ## 🛠️ Arquitectura y Capas Soportadas
