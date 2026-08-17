@@ -30,10 +30,12 @@
 #include "layers/attention.h"
 #include "layers/conv2d.h"
 #include "layers/embedding.h"
+#include "layers/graph_conv.h"
 #include "layers/linear.h"
 #include "layers/lstm.h"
 #include "layers/maxpool2d.h"
 #include "layers/residual.h"
+
 
 
 namespace neuralsuite {

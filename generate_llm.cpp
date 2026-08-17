@@ -28,6 +28,7 @@ struct GenerateArgs {
   int n_head = 4;
   int n_embd = 128;
 
+  bool use_cache = true;
 };
 
 void PrintGenerateUsage(const char* prog_name) {
@@ -39,7 +40,8 @@ void PrintGenerateUsage(const char* prog_name) {
             << "  --block_size <int>        Longitud del contexto (default: 64)\n"
             << "  --n_layer <int>           Número de capas del modelo (default: 4)\n"
             << "  --n_head <int>            Número de cabezas de atención (default: 4)\n"
-            << "  --n_embd <int>            Dimensión del embedding (default: 64)\n"
+            << "  --n_embd <int>            Dimensión del embedding (default: 128)\n"
+            << "  --no_cache                Desactivar aceleración por KV-Cache\n"
             << "  --model_path <path>       Ruta al archivo binario del modelo (default: model_cpp.bin)\n"
             << "  --vocab_path <path>       Ruta al archivo de vocabulario (default: vocab_cpp.txt)\n"
             << "  --help                    Muestra este mensaje de ayuda\n";
@@ -66,12 +68,13 @@ GenerateArgs ParseGenerateArgs(int argc, char** argv) {
       args.n_head = std::stoi(argv[++i]);
     } else if (arg == "--n_embd" && i + 1 < argc) {
       args.n_embd = std::stoi(argv[++i]);
+    } else if (arg == "--no_cache") {
+      args.use_cache = false;
     } else if (arg == "--model_path" && i + 1 < argc) {
       args.model_path = argv[++i];
     } else if (arg == "--vocab_path" && i + 1 < argc) {
       args.vocab_path = argv[++i];
     } else if (i == 1 && arg[0] != '-') {
-      // Positional argument fallback for prompt string
       args.prompt = arg;
     }
   }
@@ -106,6 +109,7 @@ int main(int argc, char** argv) {
 
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🤖 GENERACIÓN DE TEXTO AUTORREGRESIVA C++ (NeuralSuite CLI)\n" << std::flush;
+  std::cout << "⚡ Aceleración por KV-Cache: " << (args.use_cache ? "ACTIVADA (Inferencia O(1))" : "DESACTIVADA") << "\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
 
   CharTokenizer tokenizer;
@@ -135,23 +139,44 @@ int main(int argc, char** argv) {
   std::vector<int> tokens = tokenizer.Encode(args.prompt);
   int newline_token = tokenizer.Encode("\n")[0];
 
-  for (int step = 0; step < args.max_new_tokens; ++step) {
-    int seq_len = static_cast<int>(tokens.size());
-    int start_idx = (seq_len > config.block_size) ? (seq_len - config.block_size) : 0;
-    int curr_len = seq_len - start_idx;
-
-    Tensor idx({1, curr_len});
-    for (int i = 0; i < curr_len; ++i) {
-      idx[i] = static_cast<float>(tokens[start_idx + i]);
+  if (args.use_cache) {
+    // 1. Inicializar la caché con los tokens del Prompt inicial
+    model.ClearKVCache();
+    for (size_t pos = 0; pos < tokens.size(); ++pos) {
+      model.ForwardWithKVCache(tokens[pos], static_cast<int>(pos));
     }
 
-    Tensor logits = model.Forward(idx);
-    int last_offset = (curr_len - 1) * config.vocab_size;
+    // 2. Generación rápida token por token reutilizando la memoria KV-Cache
+    for (int step = 0; step < args.max_new_tokens; ++step) {
+      int prev_token = tokens.back();
+      int current_pos = static_cast<int>(tokens.size()) - 1;
 
-    int prev_token = tokens.empty() ? -1 : tokens.back();
-    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, args.temperature, prev_token, newline_token);
-    tokens.push_back(sampled_token);
+      Tensor logits = model.ForwardWithKVCache(prev_token, current_pos);
+
+      int sampled_token = SampleToken(logits.Data(), config.vocab_size, args.temperature, prev_token, newline_token);
+      tokens.push_back(sampled_token);
+    }
+  } else {
+    // Modo tradicional sin caché
+    for (int step = 0; step < args.max_new_tokens; ++step) {
+      int seq_len = static_cast<int>(tokens.size());
+      int start_idx = (seq_len > config.block_size) ? (seq_len - config.block_size) : 0;
+      int curr_len = seq_len - start_idx;
+
+      Tensor idx({1, curr_len});
+      for (int i = 0; i < curr_len; ++i) {
+        idx[i] = static_cast<float>(tokens[start_idx + i]);
+      }
+
+      Tensor logits = model.Forward(idx);
+      int last_offset = (curr_len - 1) * config.vocab_size;
+
+      int prev_token = tokens.empty() ? -1 : tokens.back();
+      int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, args.temperature, prev_token, newline_token);
+      tokens.push_back(sampled_token);
+    }
   }
+
 
   std::string generated = tokenizer.Decode(tokens);
   std::cout << "------------------------------------------------------------\n" << std::flush;

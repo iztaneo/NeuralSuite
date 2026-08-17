@@ -85,7 +85,28 @@ class GPTBlock : public Layer {
   }
 
 
+  Tensor ForwardWithKVCache(const Tensor& input) {
+    Tensor x_norm1 = ln_1_.Forward(input);
+    Tensor attn_out = attn_.ForwardWithKVCache(x_norm1);
+    Tensor x1(input.Shape());
+    ElementwiseAdd(input, attn_out, x1);
+
+    Tensor x_norm2 = ln_2_.Forward(x1);
+    Tensor fc_out = mlp_fc_.Forward(x_norm2);
+    Tensor gelu_out = mlp_gelu_.Forward(fc_out);
+    Tensor proj_out = mlp_proj_.Forward(gelu_out);
+    Tensor x2(x1.Shape());
+    ElementwiseAdd(x1, proj_out, x2);
+
+    return x2;
+  }
+
+  void ClearKVCache() {
+    attn_.ClearKVCache();
+  }
+
   std::vector<Tensor*> GetParameters() override {
+
     std::vector<Tensor*> p;
     for (auto p1 : ln_1_.GetParameters()) p.push_back(p1);
     for (auto p2 : attn_.GetParameters()) p.push_back(p2);
@@ -131,7 +152,47 @@ class GPTModel {
   }
 
 
+  void ClearKVCache() {
+    for (auto& block : blocks_) {
+      block->ClearKVCache();
+    }
+  }
+
+  Tensor ForwardWithKVCache(int token_idx, int pos_idx) {
+    Tensor tok_tensor({1, 1});
+    tok_tensor[0] = static_cast<float>(token_idx);
+    Tensor tok_emb = wte_.Forward(tok_tensor);
+
+    Tensor pos_tensor({1, 1});
+    pos_tensor[0] = static_cast<float>(pos_idx);
+    Tensor pos_emb = wpe_.Forward(pos_tensor);
+
+    Tensor x({1, 1, config_.n_embd});
+    for (int d = 0; d < config_.n_embd; ++d) {
+      x[d] = tok_emb[d] + pos_emb[d];
+    }
+
+    for (auto& block : blocks_) {
+      x = block->ForwardWithKVCache(x);
+    }
+
+    x = ln_f_.Forward(x);
+
+    Tensor x_2d({1, config_.n_embd});
+    std::memcpy(x_2d.Data(), x.Data(), config_.n_embd * sizeof(float));
+
+    Tensor wte_T = Transpose(wte_.Weight());
+    Tensor logits_2d;
+    MatMul(x_2d, wte_T, logits_2d);
+
+    Tensor logits({1, 1, config_.vocab_size});
+    std::memcpy(logits.Data(), logits_2d.Data(), config_.vocab_size * sizeof(float));
+
+    return logits;
+  }
+
   Tensor Forward(const Tensor& idx) {
+
     int batch_size = idx.Shape()[0];
     int seq_len = idx.Shape()[1];
 

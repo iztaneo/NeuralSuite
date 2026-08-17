@@ -177,11 +177,89 @@ class MultiHeadAttention : public Layer {
     return p;
   }
 
-  std::vector<Tensor*> GetGradients() override {
-    std::vector<Tensor*> g = c_attn_.GetGradients();
-    auto g2 = c_proj_.GetGradients();
-    g.insert(g.end(), g2.begin(), g2.end());
-    return g;
+  static void ApplyRoPE(float* vec, int head_dim, int pos) {
+    for (int i = 0; i < head_dim - 1; i += 2) {
+      float theta = static_cast<float>(pos) / std::pow(10000.0f, static_cast<float>(i) / head_dim);
+      float cos_th = std::cos(theta);
+      float sin_th = std::sin(theta);
+      float x0 = vec[i];
+      float x1 = vec[i + 1];
+      vec[i]     = x0 * cos_th - x1 * sin_th;
+      vec[i + 1] = x0 * sin_th + x1 * cos_th;
+    }
+  }
+
+  void ClearKVCache() {
+
+    k_cache_.clear();
+    v_cache_.clear();
+  }
+
+  Tensor ForwardWithKVCache(const Tensor& single_token_input) {
+    // single_token_input shape: [1, 1, n_embd]
+    int batch_size = 1;
+    int seq_len = 1;
+
+    Tensor input_2d({1, n_embd_});
+    std::memcpy(input_2d.Data(), single_token_input.Data(), n_embd_ * sizeof(float));
+
+    Tensor qkv = c_attn_.Forward(input_2d);
+
+    // Extraer Q_t, K_t, V_t para el token actual
+    std::vector<float> q_curr(n_embd_), k_curr(n_embd_), v_curr(n_embd_);
+    std::memcpy(q_curr.data(), qkv.Data(), n_embd_ * sizeof(float));
+    std::memcpy(k_curr.data(), qkv.Data() + n_embd_, n_embd_ * sizeof(float));
+    std::memcpy(v_curr.data(), qkv.Data() + 2 * n_embd_, n_embd_ * sizeof(float));
+
+    // Acumular K y V en la memoria caché
+    k_cache_.push_back(k_curr);
+    v_cache_.push_back(v_curr);
+
+    int total_t = static_cast<int>(k_cache_.size());
+
+    Tensor attn_out({1, 1, n_embd_});
+    attn_out.Zeros();
+    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
+
+    for (int h = 0; h < n_head_; ++h) {
+      std::vector<float> scores(total_t, 0.0f);
+      float max_score = -1e9f;
+
+      for (int t = 0; t < total_t; ++t) {
+        float dot = 0.0f;
+        for (int d = 0; d < head_dim_; ++d) {
+          float q_val = q_curr[h * head_dim_ + d];
+          float k_val = k_cache_[t][h * head_dim_ + d];
+          dot += q_val * k_val;
+        }
+        scores[t] = dot * scale;
+        if (scores[t] > max_score) max_score = scores[t];
+      }
+
+      float sum_exp = 0.0f;
+      for (int t = 0; t < total_t; ++t) {
+        scores[t] = std::exp(scores[t] - max_score);
+        sum_exp += scores[t];
+      }
+
+      for (int d = 0; d < head_dim_; ++d) {
+        float val = 0.0f;
+        for (int t = 0; t < total_t; ++t) {
+          float prob = scores[t] / sum_exp;
+          val += prob * v_cache_[t][h * head_dim_ + d];
+        }
+        attn_out[h * head_dim_ + d] = val;
+      }
+    }
+
+    Tensor attn_out_2d({1, n_embd_});
+    std::memcpy(attn_out_2d.Data(), attn_out.Data(), n_embd_ * sizeof(float));
+
+    Tensor final_2d = c_proj_.Forward(attn_out_2d);
+    Tensor final_output({1, 1, n_embd_});
+    std::memcpy(final_output.Data(), final_2d.Data(), n_embd_ * sizeof(float));
+
+    return final_output;
   }
 
  private:
@@ -195,7 +273,11 @@ class MultiHeadAttention : public Layer {
   Tensor last_input_;
   Tensor qkv_cache_;
   Tensor attn_probs_cache_;
+
+  std::vector<std::vector<float>> k_cache_;
+  std::vector<std::vector<float>> v_cache_;
 };
+
 
 }  // namespace neuralsuite
 

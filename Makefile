@@ -51,6 +51,15 @@ demo_autoencoder: demo_autoencoder.cpp $(LIB_STATIC)
 demo_resnet: demo_resnet.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
+demo_gan: demo_gan.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
+demo_gnn: demo_gnn.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
+demo_diffusion: demo_diffusion.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
 demo_cnn: demo_cnn.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
