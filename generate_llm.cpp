@@ -55,10 +55,11 @@ int main(int argc, char** argv) {
 
   GPTConfig config;
   config.vocab_size = tokenizer.VocabSize();
-  config.block_size = 32;
+  config.block_size = 64;
   config.n_layer = 2;
   config.n_head = 2;
   config.n_embd = 32;
+
 
   GPTModel model(config);
   if (model.LoadWeights("model_cpp.bin")) {

@@ -94,10 +94,11 @@ int main(int argc, char** argv) {
 
   GPTConfig config;
   config.vocab_size = tokenizer.VocabSize();
-  config.block_size = 32;
+  config.block_size = 64;
   config.n_layer = 2;
   config.n_head = 2;
   config.n_embd = 32;
+
 
   GPTModel model(config);
   std::cout << "🧠 Modelo GPT C++ Creado exitosamente.\n" << std::flush;
@@ -111,9 +112,10 @@ int main(int argc, char** argv) {
 
   CrossEntropyLoss criterion;
 
-  int max_iters = 300;
-  int batch_size = 8;
-  int block_size = config.block_size;
+  int max_iters = 1500;
+  int batch_size = 16;
+  int block_size = 64;
+
 
   std::cout << "🏋️ Entrenando durante " << max_iters << " iteraciones en C++...\n" << std::flush;
   auto start_time = std::chrono::high_resolution_clock::now();

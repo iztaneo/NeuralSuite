@@ -243,11 +243,14 @@ void SoftmaxForward(const Tensor& input, Tensor& output) {
 }
 
 void CausalSoftmaxForward(const Tensor& input, Tensor& output, int seq_len) {
-  int B = input.Shape()[0];
-  output.Reshape({B, seq_len, seq_len});
+  int num_dims = input.Shape().size();
+  int B = (num_dims == 3) ? input.Shape()[0] : 1;
+
+  output.Reshape(input.Shape());
 
   #pragma omp parallel for schedule(static)
   for (int b = 0; b < B; ++b) {
+
     for (int i = 0; i < seq_len; ++i) {
       int offset = (b * seq_len + i) * seq_len;
       float max_val = input[offset];
