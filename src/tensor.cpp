@@ -121,16 +121,20 @@ void MatMul(const Tensor& A, const Tensor& B, Tensor& C) {
   C.Reshape({M, N});
   C.Zeros();
 
-  #pragma omp parallel for schedule(static) if(M >= 64)
+  #pragma omp parallel for schedule(static) if(M >= 16)
   for (int i = 0; i < M; ++i) {
     for (int k = 0; k < K; ++k) {
       float a = A[i * K + k];
+      const float* b_row = &B[k * N];
+      float* c_row = &C[i * N];
+      #pragma omp simd
       for (int j = 0; j < N; ++j) {
-        C[i * N + j] += a * B[k * N + j];
+        c_row[j] += a * b_row[j];
       }
     }
   }
 }
+
 
 
 Tensor Transpose(const Tensor& A) {

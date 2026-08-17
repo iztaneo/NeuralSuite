@@ -31,7 +31,8 @@ struct TrainArgs {
   int block_size = 64;
   int n_layer = 4;
   int n_head = 4;
-  int n_embd = 64;
+  int n_embd = 128;
+
   float learning_rate = 0.003f;
 };
 

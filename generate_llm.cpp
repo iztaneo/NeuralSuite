@@ -26,7 +26,8 @@ struct GenerateArgs {
   int block_size = 64;
   int n_layer = 4;
   int n_head = 4;
-  int n_embd = 64;
+  int n_embd = 128;
+
 };
 
 void PrintGenerateUsage(const char* prog_name) {

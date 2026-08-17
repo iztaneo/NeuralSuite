@@ -1,5 +1,6 @@
 CXX ?= g++
-CXXFLAGS ?= -O3 -std=c++17 -Wall -Iinclude
+CXXFLAGS ?= -O3 -std=c++17 -Wall -march=native -ffast-math -Iinclude
+
 
 # Detección de Sistema Operativo
 UNAME_S := $(shell uname -s)
