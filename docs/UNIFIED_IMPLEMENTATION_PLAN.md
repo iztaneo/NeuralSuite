@@ -1,6 +1,8 @@
-# Plan de Implementación Unificado y Priorizado por Dificultad
+# Plan de Implementación Unificado: Paridad Total en Ambos Proyectos
 
-Este plan unifica la hoja de ruta para la extensión de **`NeuralSuite` (C++)** y **`LLMRasec` (Python)**, cubriendo todas las familias faltantes de redes neuronales y las mejoras avanzadas de LLM, **ordenadas de menor a mayor dificultad**.
+Este plan establece la hoja de ruta para implementar cada una de las arquitecturas y optimizaciones **en AMBOS PROYECTOS en paralelo**:
+- **`NeuralSuite`** (C++17 puro desde cero).
+- **`LLMRasec`** (Python / PyTorch).
 
 ---
 
@@ -8,82 +10,84 @@ Este plan unifica la hoja de ruta para la extensión de **`NeuralSuite` (C++)** 
 
 ```text
 FASE 1: Dificultad Baja 🟢 (Fácil / Implementación Rápida)
-  ├── 1. Autoencoders (AE / Denoising AE)
-  └── 2. Redes Residuales (ResNet Block / Skip Connections)
+  ├── 1. Autoencoders (AE / Denoising AE) [C++ & Python]
+  └── 2. Redes Residuales (ResNet Block / Skip Connections) [C++ & Python]
 
 FASE 2: Dificultad Media 🟡 (Complejidad Intermedia)
-  ├── 3. KV-Cache (Caché de Llaves y Valores para LLM)
-  ├── 4. RoPE (Rotary Position Embeddings para LLM)
-  ├── 5. Redes Generativas Adversarias (GANs)
-  └── 6. Redes Neuronales para Grafos (GNN / GCN)
+  ├── 3. KV-Cache (Caché de Llaves y Valores para LLM) [C++ & Python]
+  ├── 4. RoPE (Rotary Position Embeddings para LLM) [C++ & Python]
+  ├── 5. Redes Generativas Adversarias (GANs) [C++ & Python]
+  └── 6. Redes Neuronales para Grafos (GNN / GCN) [C++ & Python]
 
 FASE 3: Dificultad Alta 🔴 (Complejidad Avanzada)
-  └── 7. Modelos de Difusión (Toy DDPM)
+  └── 7. Modelos de Difusión (Toy DDPM) [C++ & Python]
 ```
 
 ---
 
-## 📋 Detalle Técnico por Fases
+## 📋 Detalle de Entregables por Proyecto y Fase
 
-### 🟢 FASE 1: Dificultad Baja (Construcción Rápida con Bloques Existentes)
+### 🟢 FASE 1: Dificultad Baja
 
-#### 1. Autoencoder (`demo_autoencoder.cpp`)
-- **Arquitectura**:
-  - *Encoder*: `Linear(input_dim, hidden_dim)` $\to$ `ReLU` $\to$ `Linear(hidden_dim, latent_dim)`
-  - *Decoder*: `Linear(latent_dim, hidden_dim)` $\to$ `ReLU` $\to$ `Linear(hidden_dim, input_dim)`
-- **Función de Pérdida**: `MSELoss` (Reconstrucción $\hat{X} \approx X$).
-- **Archivos a crear/modificar**:
-  - `demo_autoencoder.cpp` en `NeuralSuite`.
-  - Integración en `Makefile` y `CMakeLists.txt`.
+#### 1. Autoencoders (AE / Denoising AE)
+- **C++ (`NeuralSuite`)**:
+  - Crear `demo_autoencoder.cpp` compilado contra `libneuralsuite.so`.
+  - Probar compresión y reconstrucción de datos con capas `Linear` y `MSELoss`.
+- **Python (`LLMRasec`)**:
+  - Crear `src/autoencoder.py` y `demo_autoencoder.py` en PyTorch.
+  - Verificar convergencia de pérdida de reconstrucción idéntica.
 
-#### 2. Redes Residuales - ResNet Block (`demo_resnet.cpp` & `layers/residual.h`)
-- **Arquitectura**:
-  - `ResidualBlock`: $y = \text{ReLU}(\text{Conv2D}_2(\text{ReLU}(\text{Conv2D}_1(x))) + x)$
-- **Archivos a crear/modificar**:
-  - `include/layers/residual.h` (Capa de suma shortcut $x + f(x)$).
-  - `demo_resnet.cpp` en `NeuralSuite`.
+#### 2. Redes Residuales (ResNet Block)
+- **C++ (`NeuralSuite`)**:
+  - Crear `include/layers/residual.h` (Capa de suma shortcut $y = \text{ReLU}(f(x) + x)$).
+  - Crear `demo_resnet.cpp` y agregar al `Makefile`.
+- **Python (`LLMRasec`)**:
+  - Crear `src/resnet.py` y `demo_resnet.py` en PyTorch.
 
 ---
 
-### 🟡 FASE 2: Dificultad Media (Optimizaciones y Estructuras Compuestas)
+### 🟡 FASE 2: Dificultad Media
 
 #### 3. KV-Cache (Inferencia $O(1)$ para LLMs)
-- **Objetivo**: Acelerar la generación autorregresiva de 10x a 50x.
-- **Archivos a modificar**:
-  - `include/layers/attention.h` (Búferes `k_cache_` y `v_cache_`).
-  - `include/gpt.h` (`GPTModel::Forward` con soporte `use_cache`).
-  - `generate_llm.cpp` en C++ y `generate.py` en Python.
+- **C++ (`NeuralSuite`)**:
+  - Modificar `include/layers/attention.h` y `include/gpt.h` para almacenar tensores `k_cache_` y `v_cache_`.
+  - Actualizar `generate_llm.cpp`.
+- **Python (`LLMRasec`)**:
+  - Modificar `src/model.py` (`CausalSelfAttention`) y `generate.py` para usar caché de llaves/valores.
 
-#### 4. RoPE - Rotary Position Embeddings
-- **Objetivo**: Reemplazar la tabla estática `wpe_` por rotaciones matriciales en el plano complejo sobre $Q$ y $K$.
-- **Archivos a modificar**:
-  - `include/layers/attention.h` (Función `ApplyRoPE`).
-  - `src/model.py` en Python (`apply_rotary_emb`).
+#### 4. RoPE (Rotary Position Embeddings)
+- **C++ (`NeuralSuite`)**:
+  - Añadir rotaciones vectoriales complejas en $Q$ y $K$ en `MultiHeadAttention::Forward`.
+- **Python (`LLMRasec`)**:
+  - Añadir `apply_rotary_emb` en `src/model.py`.
 
-#### 5. GAN - Redes Generativas Adversarias (`demo_gan.cpp`)
-- **Arquitectura**:
-  - *Generador $G(z)$*: `Sequential` (Ruido $z \to$ Datos sintéticos).
-  - *Discriminador $D(x)$*: `Sequential` (Clasificación Real/Falso $\to$ Sigmoid).
-- **Entrenamiento Minimax**: Actualización alternada de $D$ y $G$.
+#### 5. Redes Generativas Adversarias (GANs)
+- **C++ (`NeuralSuite`)**:
+  - Crear `demo_gan.cpp` con redes *Generador* y *Discriminador* enfrentadas.
+- **Python (`LLMRasec`)**:
+  - Crear `src/gan.py` y `demo_gan.py` en PyTorch.
 
-#### 6. GNN - Redes para Grafos (`demo_gnn.cpp` & `layers/graph_conv.h`)
-- **Arquitectura**:
-  - `GraphConv`: $H^{(l+1)} = \text{ReLU}(\tilde{D}^{-1/2} \tilde{A} \tilde{D}^{-1/2} H^{(l)} W)$
-- **Entrenamiento**: Clasificación de nodos sobre matrices de adyacencia de grafos.
-
----
-
-### 🔴 FASE 3: Dificultad Alta (Síntesis Probabilística Avanzada)
-
-#### 7. Modelo de Difusión (`demo_diffusion.cpp`)
-- **Arquitectura**:
-  - Proceso estocástico de adición de ruido gaussiano (*Forward Process*).
-  - Red U-Net simplificada para predecir y eliminar el ruido (*Reverse Denoising*).
+#### 6. Redes Neuronales para Grafos (GNN / GCN)
+- **C++ (`NeuralSuite`)**:
+  - Crear `include/layers/graph_conv.h` y `demo_gnn.cpp`.
+- **Python (`LLMRasec`)**:
+  - Crear `src/gnn.py` y `demo_gnn.py`.
 
 ---
 
-## 🧪 Plan de Verificación y Entregables
+### 🔴 FASE 3: Dificultad Alta
 
-1. Cada fase incluirá su propio programa demostrativo ejecutable (`demo_autoencoder`, `demo_resnet`, `demo_gan`, `demo_gnn`, `demo_diffusion`).
-2. Todos los binarios se vincularán automáticamente a `libneuralsuite.a` y `libneuralsuite.so`.
-3. Se verificará que las pérdidas (*Loss*) desciendan limpiamente a cero en cada demo.
+#### 7. Modelos de Difusión (Toy DDPM)
+- **C++ (`NeuralSuite`)**:
+  - Crear `demo_diffusion.cpp` (Proceso de adición y eliminación de ruido gaussiano).
+- **Python (`LLMRasec`)**:
+  - Crear `src/diffusion.py` y `demo_diffusion.py`.
+
+---
+
+## 🧪 Plan de Verificación
+
+En cada paso de la implementación:
+1. Se ejecutarán las demos en **C++** y en **Python**.
+2. Se verificará que ambas salidas, pérdidas (*Loss*) y comportamientos de convergencia sean matemáticamente equivalentes.
+3. Se confirmará y publicará el código en los repositorios de GitHub correspondientes (`NeuralSuite` y `LLMRasec`).
