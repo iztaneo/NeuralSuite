@@ -1,6 +1,6 @@
 /**
  * @file attention.h
- * @brief Capa Causal Multi-Head Self-Attention del paper "Attention Is All You Need".
+ * @brief Capa de Atención Causal Multi-Cabeza (Multi-Head Self-Attention) del paper "Attention Is All You Need".
  */
 
 #ifndef NEURAL_SUITE_ATTENTION_H
@@ -10,16 +10,21 @@
 
 namespace ns {
 
+/**
+ * @class MultiHeadAttention
+ * @brief Mecanismo de Atención Causal Multi-Cabeza para Transformers Decoder-Only (GPT).
+ * @details Calcula Q, K, V = X * W_qkv, luego Attn = Softmax( (Q * K^T) / sqrt(d_k) + Mask ) * V.
+ */
 class MultiHeadAttention : public Layer {
 public:
-    int n_embd;
-    int n_head;
-    int head_dim;
+    int n_embd;   ///< Dimensión total del modelo d_model
+    int n_head;   ///< Número de cabezas de atención h
+    int head_dim; ///< Dimensión de cada cabeza d_k = d_model / h
 
-    Tensor c_attn_weight; // [3 * n_embd, n_embd]
-    Tensor c_attn_bias;   // [3 * n_embd]
-    Tensor c_proj_weight; // [n_embd, n_embd]
-    Tensor c_proj_bias;   // [n_embd]
+    Tensor c_attn_weight;  ///< Pesos combinados Q, K, V [3 * n_embd, n_embd]
+    Tensor c_attn_bias;    ///< Sesgos combinados Q, K, V [3 * n_embd]
+    Tensor c_proj_weight;  ///< Pesos de proyección final de salida [n_embd, n_embd]
+    Tensor c_proj_bias;    ///< Sesgos de proyección final [n_embd]
 
     Tensor dc_attn_weight;
     Tensor dc_attn_bias;
@@ -45,7 +50,7 @@ public:
         int B = input.shape[0];
         int T = input.shape[1];
 
-        // 1. Proyección Q, K, V combinada
+        // 1. Proyección conjunta Q, K, V
         Tensor qkv({B * T, 3 * n_embd});
         Tensor input_2d({B * T, n_embd});
         std::memcpy(input_2d.data, input.data, input.total_size() * sizeof(float));
@@ -53,7 +58,7 @@ public:
         Tensor W_T = transpose(c_attn_weight);
         matmul(input_2d, W_T, qkv);
 
-        // 2. Atención Causal por cabeza
+        // 2. Cálculo de Atención Causal dividida por cabezas
         Tensor output({B, T, n_embd});
         output.zeros();
 
@@ -61,7 +66,6 @@ public:
 
         for (int b = 0; b < B; ++b) {
             for (int h = 0; h < n_head; ++h) {
-                // Matriz de atención T x T para esta cabeza
                 Tensor scores({T, T});
                 scores.zeros();
 
@@ -81,7 +85,7 @@ public:
                 Tensor attn({T, T});
                 causal_softmax_forward(scores, attn, T);
 
-                // Multiplicar por V
+                // Multiplicar por Valores V
                 for (int i = 0; i < T; ++i) {
                     for (int d = 0; d < head_dim; ++d) {
                         float val = 0.0f;

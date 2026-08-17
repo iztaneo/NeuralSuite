@@ -1,6 +1,6 @@
 /**
  * @file optimizers.h
- * @brief Optimizadores AdamW y SGD con Momentum en C++ puro.
+ * @brief Optimizadores de parámetros (AdamW y SGD con Momentum) en C++17 puro.
  */
 
 #ifndef NEURAL_SUITE_OPTIMIZERS_H
@@ -11,13 +11,25 @@
 
 namespace ns {
 
+/**
+ * @class Optimizer
+ * @brief Interfaz abstracta para optimizadores de gradiente.
+ */
 class Optimizer {
 public:
     virtual ~Optimizer() = default;
+
+    /** @brief Actualiza los pesos de los tensores según sus gradientes */
     virtual void step() = 0;
+
+    /** @brief Reinicia a cero todos los acumuladores de gradiente */
     virtual void zero_grad() = 0;
 };
 
+/**
+ * @class SGD
+ * @brief Descenso por el Gradiente Estocástico con Momentum.
+ */
 class SGD : public Optimizer {
 public:
     std::vector<Tensor*> params;
@@ -50,6 +62,10 @@ public:
     }
 };
 
+/**
+ * @class AdamW
+ * @brief Optimizador Adaptive Moment Estimation con Weight Decay Desacoplado (Loshchilov & Hutter 2019).
+ */
 class AdamW : public Optimizer {
 public:
     std::vector<Tensor*> params;
@@ -82,7 +98,7 @@ public:
             for (size_t k = 0; k < sz; ++k) {
                 float g = grads[i]->data[k];
 
-                // 1. Momento de 1er y 2do orden
+                // 1. Momento de 1er orden (media) y 2do orden (varianza no centrada)
                 m[i].data[k] = beta1 * m[i].data[k] + (1.0f - beta1) * g;
                 v[i].data[k] = beta2 * v[i].data[k] + (1.0f - beta2) * g * g;
 
@@ -90,7 +106,7 @@ public:
                 float m_hat = m[i].data[k] / bias_correction1;
                 float v_hat = v[i].data[k] / bias_correction2;
 
-                // 3. Weight decay desacoplado si la matriz es 2D+
+                // 3. Weight Decay desacoplado (AdamW)
                 if (params[i]->shape.size() >= 2 && weight_decay > 0.0f) {
                     params[i]->data[k] -= lr * weight_decay * params[i]->data[k];
                 }

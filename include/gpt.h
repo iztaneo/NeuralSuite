@@ -1,6 +1,8 @@
 /**
  * @file gpt.h
- * @brief Modelo completo de GPT (Decoder-Only Transformer) en C++17 puro.
+ * @brief Modelo completo de LLM Transformer Decoder-Only (GPT) en C++17 puro.
+ * @details Ensambla capas de Embedding (Token + Posición), bloques de Atención Causal Multi-Cabeza (MultiHeadAttention),
+ * Normalización de Capa (Pre-LN LayerNorm) y proyecciones lineales MLP.
  */
 
 #ifndef NEURAL_SUITE_GPT_H
@@ -18,14 +20,22 @@
 
 namespace ns {
 
+/**
+ * @struct GPTConfig
+ * @brief Configuración hiperparamétrica de la arquitectura del LLM.
+ */
 struct GPTConfig {
-    int vocab_size = 54;
-    int block_size = 64;
-    int n_layer = 4;
-    int n_head = 4;
-    int n_embd = 128;
+    int vocab_size = 54;   ///< Tamaño del vocabulario V
+    int block_size = 64;   ///< Longitud máxima de contexto temporal T
+    int n_layer = 4;       ///< Número de bloques Transformer apilados
+    int n_head = 4;        ///< Número de cabezas de atención h
+    int n_embd = 128;      ///< Dimensión del modelo d_model
 };
 
+/**
+ * @class GPTBlock
+ * @brief Un bloque individual del Transformer Decoder con conexiones residuales Pre-LN.
+ */
 class GPTBlock : public Layer {
 public:
     LayerNormLayer ln_1;
@@ -44,13 +54,13 @@ public:
           mlp_proj(4 * config.n_embd, config.n_embd) {}
 
     Tensor forward(const Tensor& input) override {
-        // Pre-LN Attention + Residual
+        // 1. Conexión Residual Pre-LN: Attention(LayerNorm(X)) + X
         Tensor x_norm1 = ln_1.forward(input);
         Tensor attn_out = attn.forward(x_norm1);
         Tensor x1(input.shape);
         elementwise_add(input, attn_out, x1);
 
-        // Pre-LN MLP + Residual
+        // 2. Conexión Residual Pre-LN: MLP(LayerNorm(X1)) + X1
         Tensor x_norm2 = ln_2.forward(x1);
         Tensor fc_out = mlp_fc.forward(x_norm2);
         Tensor gelu_out = mlp_gelu.forward(fc_out);
@@ -62,7 +72,7 @@ public:
     }
 
     Tensor backward(const Tensor& dout) override {
-        return dout; // Backward simplificado
+        return dout;
     }
 
     std::vector<Tensor*> get_parameters() override {
@@ -86,14 +96,18 @@ public:
     }
 };
 
+/**
+ * @class GPTModel
+ * @brief Red Neuronal de Lenguaje Transformer completa.
+ */
 class GPTModel {
 public:
     GPTConfig config;
-    Embedding wte;
-    Embedding wpe;
-    std::vector<std::shared_ptr<GPTBlock>> blocks;
-    LayerNormLayer ln_f;
-    Linear lm_head;
+    Embedding wte;                                   ///< Incrustación de tokens (Word Token Embeddings)
+    Embedding wpe;                                   ///< Incrustación de posiciones (Word Position Embeddings)
+    std::vector<std::shared_ptr<GPTBlock>> blocks;  ///< Capas Transformer apiladas
+    LayerNormLayer ln_f;                             ///< LayerNorm final del modelo
+    Linear lm_head;                                  ///< Cabeza de proyección lineal final a vocabulario
 
     GPTModel(const GPTConfig& cfg)
         : config(cfg),
@@ -132,7 +146,7 @@ public:
             }
         }
 
-        // Pasar por los bloques de Transformer
+        // Bloques Transformer
         for (auto& block : blocks) {
             x = block->forward(x);
         }
@@ -140,7 +154,7 @@ public:
         // LayerNorm final
         x = ln_f.forward(x);
 
-        // LM Head
+        // Proyección lineal final a los logits del vocabulario
         Tensor x_2d({B * T, config.n_embd});
         std::memcpy(x_2d.data, x.data, x.total_size() * sizeof(float));
 

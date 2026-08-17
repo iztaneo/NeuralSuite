@@ -1,6 +1,6 @@
 /**
  * @file layernorm.h
- * @brief Capa de Normalización LayerNorm para Transformers.
+ * @brief Capa de Normalización de Capa (LayerNorm) para Transformers.
  */
 
 #ifndef NEURAL_SUITE_LAYERNORM_H
@@ -10,14 +10,18 @@
 
 namespace ns {
 
+/**
+ * @class LayerNormLayer
+ * @brief Aplica Pre-LN Normalización en la dimensión interna de los vectores de atención.
+ */
 class LayerNormLayer : public Layer {
 public:
-    int normalized_shape;
-    float eps;
-    Tensor gamma;
-    Tensor beta;
-    Tensor dgamma;
-    Tensor dbeta;
+    int normalized_shape;  ///< Dimensión d_model a normalizar
+    float eps;             ///< Epsilon para estabilidad numérica (1e-5)
+    Tensor gamma;          ///< Escala entrenable [normalized_shape]
+    Tensor beta;           ///< Desplazamiento entrenable [normalized_shape]
+    Tensor dgamma;         ///< Gradiente acumulado de gamma
+    Tensor dbeta;          ///< Gradiente acumulado de beta
 
     Tensor last_input;
     Tensor mean_cache;

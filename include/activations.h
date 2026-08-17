@@ -1,6 +1,6 @@
 /**
  * @file activations.h
- * @brief Capas de Activación (ReLU, GELU, Sigmoid, Tanh) para NeuralSuite.
+ * @brief Capas de Activación no lineales (ReLU, GELU, Sigmoide, Tanh) para NeuralSuite.
  */
 
 #ifndef NEURAL_SUITE_ACTIVATIONS_H
@@ -10,13 +10,18 @@
 
 namespace ns {
 
+/** @enum ActivationType Tipo de función de activación */
 enum class ActivationType { RELU, GELU, SIGMOID, TANH };
 
+/**
+ * @class Activation
+ * @brief Wrapper de capa polimórfica para funciones de activación.
+ */
 class Activation : public Layer {
 public:
-    ActivationType type;
-    Tensor last_input;
-    Tensor last_output;
+    ActivationType type;  ///< Tipo de activación elegida
+    Tensor last_input;    ///< Caché de la entrada para el paso backward
+    Tensor last_output;   ///< Caché de la salida
 
     Activation(ActivationType act_type) : type(act_type) {}
 

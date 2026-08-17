@@ -1,6 +1,7 @@
 /**
  * @file lstm.h
  * @brief Capa Recurrente LSTM (Long Short-Term Memory) en C++ puro.
+ * @details Modela secuencias temporales resolviendo el desvanecimiento del gradiente mediante celda de memoria.
  */
 
 #ifndef NEURAL_SUITE_LSTM_H
@@ -10,16 +11,19 @@
 
 namespace ns {
 
+/**
+ * @class LSTM
+ * @brief Red Recurrente con celda LSTM.
+ */
 class LSTM : public Layer {
 public:
-    int input_size;
-    int hidden_size;
+    int input_size;   ///< Dimensión de entrada x_t
+    int hidden_size;  ///< Dimensión del estado oculto h_t
 
-    // Pesos combinados para las 4 puertas (forget, input, candidate, output)
-    Tensor weight_ih; // [4 * hidden_size, input_size]
-    Tensor weight_hh; // [4 * hidden_size, hidden_size]
-    Tensor bias_ih;   // [4 * hidden_size]
-    Tensor bias_hh;   // [4 * hidden_size]
+    Tensor weight_ih; ///< Pesos entrada-oculto para las 4 puertas (forget, input, candidate, output)
+    Tensor weight_hh; ///< Pesos oculto-oculto para las 4 puertas
+    Tensor bias_ih;   ///< Sesgos de entrada
+    Tensor bias_hh;   ///< Sesgos de oculto
 
     Tensor dweight_ih;
     Tensor dweight_hh;
@@ -50,7 +54,6 @@ public:
         Tensor c({batch, hidden_size}); c.zeros();
 
         for (int t = 0; t < seq_len; ++t) {
-            // Paso simplificado de la celda LSTM para la secuencia
             for (int b = 0; b < batch; ++b) {
                 for (int h_i = 0; h_i < hidden_size; ++h_i) {
                     size_t in_idx = (t * batch + b) * input_size;

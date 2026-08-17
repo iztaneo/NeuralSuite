@@ -1,6 +1,6 @@
 /**
  * @file embedding.h
- * @brief Capa de Embedding de Tokens y Posición para Transformers.
+ * @brief Capa de Incrustación de Tokens y Posición (Embedding) para Transformers y LLMs.
  */
 
 #ifndef NEURAL_SUITE_EMBEDDING_H
@@ -10,12 +10,16 @@
 
 namespace ns {
 
+/**
+ * @class Embedding
+ * @brief Mapea índices enteros de tokens a vectores continuos de dimensión `embedding_dim`.
+ */
 class Embedding : public Layer {
 public:
-    int num_embeddings;
-    int embedding_dim;
-    Tensor weight;  // [num_embeddings, embedding_dim]
-    Tensor dweight;
+    int num_embeddings;     ///< Tamaño del vocabulario V
+    int embedding_dim;      ///< Dimensión del vector de embedding d_model
+    Tensor weight;          ///< Matriz de embeddings entrenables [V, d_model]
+    Tensor dweight;         ///< Gradientes acumulados de la matriz de embedding
     std::vector<int> last_tokens;
 
     Embedding(int num_emb, int emb_dim)
@@ -59,7 +63,7 @@ public:
                 }
             }
         }
-        return Tensor(); // No dx for discrete integer tokens
+        return Tensor();
     }
 
     std::vector<Tensor*> get_parameters() override { return {&weight}; }

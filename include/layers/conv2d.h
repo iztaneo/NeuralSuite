@@ -1,6 +1,6 @@
 /**
  * @file conv2d.h
- * @brief Capa Convolucional 2D para redes CNNs en C++ puro.
+ * @brief Capa Convolucional 2D para procesamiento de imágenes y visión por computador.
  */
 
 #ifndef NEURAL_SUITE_CONV2D_H
@@ -10,20 +10,28 @@
 
 namespace ns {
 
+/**
+ * @class Conv2D
+ * @brief Operación Convolucional bidimensional.
+ * @details Desliza filtros de dimensión (out_channels, in_channels, k, k) sobre tensores 4D [Batch, Channels, Height, Width].
+ */
 class Conv2D : public Layer {
 public:
-    int in_channels;
-    int out_channels;
-    int kernel_size;
-    int stride;
-    int padding;
+    int in_channels;   ///< Número de canales de entrada
+    int out_channels;  ///< Número de mapas de características de salida (filtros)
+    int kernel_size;   ///< Tamaño del filtro convolucional k x k
+    int stride;        ///< Paso de deslizamiento del filtro
+    int padding;       ///< Relleno de ceros en los bordes de la imagen
 
-    Tensor weight; // [out_channels, in_channels, kernel_size, kernel_size]
-    Tensor bias;   // [out_channels]
-    Tensor dweight;
-    Tensor dbias;
-    Tensor last_input;
+    Tensor weight;     ///< Pesos de los filtros [out_channels, in_channels, k, k]
+    Tensor bias;       ///< Vector de sesgos [out_channels]
+    Tensor dweight;    ///< Acumulador de gradientes de filtros
+    Tensor dbias;      ///< Acumulador de gradientes de sesgos
+    Tensor last_input; ///< Caché del tensor de entrada
 
+    /**
+     * @brief Constructor de la Capa Convolucional 2D.
+     */
     Conv2D(int in_ch, int out_ch, int k_size, int str = 1, int pad = 0)
         : in_channels(in_ch), out_channels(out_ch), kernel_size(k_size), stride(str), padding(pad),
           weight({out_ch, in_ch, k_size, k_size}), bias({out_ch}),
@@ -32,6 +40,9 @@ public:
         bias.zeros();
     }
 
+    /**
+     * @brief Computa la convolución 2D: Y = X * K + b
+     */
     Tensor forward(const Tensor& input) override {
         last_input = input;
         int B = input.shape[0];
@@ -70,6 +81,9 @@ public:
         return output;
     }
 
+    /**
+     * @brief Retropropagación de gradientes en Convolución 2D
+     */
     Tensor backward(const Tensor& dout) override {
         int B = last_input.shape[0];
         int H = last_input.shape[2];

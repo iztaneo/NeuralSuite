@@ -1,6 +1,6 @@
 /**
  * @file maxpool2d.h
- * @brief Capa de Max Pooling 2D para redes CNNs.
+ * @brief Capa de Max Pooling 2D para submuestreo espacial en CNNs.
  */
 
 #ifndef NEURAL_SUITE_MAXPOOL2D_H
@@ -10,12 +10,16 @@
 
 namespace ns {
 
+/**
+ * @class MaxPool2D
+ * @brief Reduce la resolución espacial tomando el valor máximo en cada ventana.
+ */
 class MaxPool2D : public Layer {
 public:
-    int pool_size;
-    int stride;
-    Tensor last_input;
-    std::vector<size_t> max_indices;
+    int pool_size;                     ///< Tamaños de la ventana de agrupamiento (ej: 2x2)
+    int stride;                        ///< Paso de deslizamiento de la ventana
+    Tensor last_input;                 ///< Caché del tensor de entrada
+    std::vector<size_t> max_indices;   ///< Guarda los índices de la posición del máximo para la propagación del gradiente
 
     MaxPool2D(int p_size = 2, int str = 2) : pool_size(p_size), stride(str) {}
 

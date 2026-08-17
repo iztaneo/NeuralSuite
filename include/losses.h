@@ -1,6 +1,6 @@
 /**
  * @file losses.h
- * @brief Funciones de Pérdida (CrossEntropyLoss, MSELoss) en C++ puro.
+ * @brief Funciones de Pérdida (CrossEntropyLoss, MSELoss) para entrenamiento de redes en C++ puro.
  */
 
 #ifndef NEURAL_SUITE_LOSSES_H
@@ -10,6 +10,10 @@
 
 namespace ns {
 
+/**
+ * @class Loss
+ * @brief Clase base para calcular el costo (loss) y los gradientes iniciales dL/dLogits.
+ */
 class Loss {
 public:
     virtual ~Loss() = default;
@@ -17,6 +21,11 @@ public:
     virtual Tensor backward() = 0;
 };
 
+/**
+ * @class CrossEntropyLoss
+ * @brief Entropía Cruzada con Softmax numéricamente estable.
+ * @details Computa Loss = -log( softmax(logits)[target] ) y dLogits = prob - y_onehot.
+ */
 class CrossEntropyLoss : public Loss {
 public:
     Tensor last_preds;
@@ -33,7 +42,6 @@ public:
         for (int i = 0; i < N; ++i) {
             int target_cls = static_cast<int>(targets.data[i]);
             
-            // Softmax en el vuelo
             float max_val = predictions.data[i * C];
             for (int c = 1; c < C; ++c) {
                 if (predictions.data[i * C + c] > max_val) max_val = predictions.data[i * C + c];
@@ -75,6 +83,10 @@ public:
     }
 };
 
+/**
+ * @class MSELoss
+ * @brief Error Cuadrático Medio: L = (1/N) * sum( (y_pred - y_true)^2 )
+ */
 class MSELoss : public Loss {
 public:
     Tensor last_preds;
