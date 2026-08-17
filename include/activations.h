@@ -1,55 +1,59 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file activations.h
- * @brief Capas de Activación no lineales (ReLU, GELU, Sigmoide, Tanh) para NeuralSuite.
+ * @brief Non-linear Activation Layers following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_ACTIVATIONS_H
-#define NEURAL_SUITE_ACTIVATIONS_H
+#ifndef NEURAL_SUITE_INCLUDE_ACTIVATIONS_H_
+#define NEURAL_SUITE_INCLUDE_ACTIVATIONS_H_
 
+#include <vector>
 #include "layer.h"
 
-namespace ns {
+namespace neuralsuite {
 
-/** @enum ActivationType Tipo de función de activación */
-enum class ActivationType { RELU, GELU, SIGMOID, TANH };
+enum class ActivationType { kRelu, kGelu, kSigmoid, kTanh };
 
 /**
  * @class Activation
- * @brief Wrapper de capa polimórfica para funciones de activación.
+ * @brief Layer wrapper for non-linear activation functions.
  */
 class Activation : public Layer {
-public:
-    ActivationType type;  ///< Tipo de activación elegida
-    Tensor last_input;    ///< Caché de la entrada para el paso backward
-    Tensor last_output;   ///< Caché de la salida
+ public:
+  explicit Activation(ActivationType act_type) : type_(act_type) {}
 
-    Activation(ActivationType act_type) : type(act_type) {}
-
-    Tensor forward(const Tensor& input) override {
-        last_input = input;
-        Tensor output;
-        switch (type) {
-            case ActivationType::RELU:    relu_forward(input, output); break;
-            case ActivationType::GELU:    gelu_forward(input, output); break;
-            case ActivationType::SIGMOID: sigmoid_forward(input, output); break;
-            case ActivationType::TANH:    tanh_forward(input, output); break;
-        }
-        last_output = output;
-        return output;
+  Tensor Forward(const Tensor& input) override {
+    last_input_ = input;
+    Tensor output;
+    switch (type_) {
+      case ActivationType::kRelu:    ReluForward(input, output); break;
+      case ActivationType::kGelu:    GeluForward(input, output); break;
+      case ActivationType::kSigmoid: SigmoidForward(input, output); break;
+      case ActivationType::kTanh:    TanhForward(input, output); break;
     }
+    last_output_ = output;
+    return output;
+  }
 
-    Tensor backward(const Tensor& dout) override {
-        Tensor dx;
-        switch (type) {
-            case ActivationType::RELU:    relu_backward(dout, last_input, dx); break;
-            case ActivationType::GELU:    gelu_backward(dout, last_input, dx); break;
-            case ActivationType::SIGMOID: sigmoid_backward(dout, last_output, dx); break;
-            case ActivationType::TANH:    tanh_backward(dout, last_output, dx); break;
-        }
-        return dx;
+  Tensor Backward(const Tensor& dout) override {
+    Tensor dx;
+    switch (type_) {
+      case ActivationType::kRelu:    ReluBackward(dout, last_input_, dx); break;
+      case ActivationType::kGelu:    GeluBackward(dout, last_input_, dx); break;
+      case ActivationType::kSigmoid: SigmoidBackward(dout, last_output_, dx); break;
+      case ActivationType::kTanh:    TanhBackward(dout, last_output_, dx); break;
     }
+    return dx;
+  }
+
+ private:
+  ActivationType type_;
+  Tensor last_input_;
+  Tensor last_output_;
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_ACTIVATIONS_H
+#endif  // NEURAL_SUITE_INCLUDE_ACTIVATIONS_H_

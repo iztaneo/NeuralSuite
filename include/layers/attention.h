@@ -1,119 +1,130 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file attention.h
- * @brief Capa de Atención Causal Multi-Cabeza (Multi-Head Self-Attention) del paper "Attention Is All You Need".
+ * @brief Causal Multi-Head Self-Attention following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_ATTENTION_H
-#define NEURAL_SUITE_ATTENTION_H
+#ifndef NEURAL_SUITE_INCLUDE_LAYERS_ATTENTION_H_
+#define NEURAL_SUITE_INCLUDE_LAYERS_ATTENTION_H_
 
+#include <vector>
 #include "../layer.h"
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class MultiHeadAttention
- * @brief Mecanismo de Atención Causal Multi-Cabeza para Transformers Decoder-Only (GPT).
- * @details Calcula Q, K, V = X * W_qkv, luego Attn = Softmax( (Q * K^T) / sqrt(d_k) + Mask ) * V.
+ * @brief Multi-Head Causal Self-Attention Layer for Transformer Decoders.
  */
 class MultiHeadAttention : public Layer {
-public:
-    int n_embd;   ///< Dimensión total del modelo d_model
-    int n_head;   ///< Número de cabezas de atención h
-    int head_dim; ///< Dimensión de cada cabeza d_k = d_model / h
+ public:
+  MultiHeadAttention(int embd, int heads)
+      : n_embd_(embd),
+        n_head_(heads),
+        head_dim_(embd / heads),
+        c_attn_weight_({3 * embd, embd}),
+        c_attn_bias_({3 * embd}),
+        c_proj_weight_({embd, embd}),
+        c_proj_bias_({embd}),
+        dc_attn_weight_({3 * embd, embd}),
+        dc_attn_bias_({3 * embd}),
+        dc_proj_weight_({embd, embd}),
+        dc_proj_bias_({embd}) {
+    c_attn_weight_.XavierInit(embd, 3 * embd);
+    c_proj_weight_.XavierInit(embd, embd);
+    c_attn_bias_.Zeros();
+    c_proj_bias_.Zeros();
+  }
 
-    Tensor c_attn_weight;  ///< Pesos combinados Q, K, V [3 * n_embd, n_embd]
-    Tensor c_attn_bias;    ///< Sesgos combinados Q, K, V [3 * n_embd]
-    Tensor c_proj_weight;  ///< Pesos de proyección final de salida [n_embd, n_embd]
-    Tensor c_proj_bias;    ///< Sesgos de proyección final [n_embd]
+  Tensor Forward(const Tensor& input) override {
+    last_input_ = input;
+    int batch_size = input.Shape()[0];
+    int seq_len = input.Shape()[1];
 
-    Tensor dc_attn_weight;
-    Tensor dc_attn_bias;
-    Tensor dc_proj_weight;
-    Tensor dc_proj_bias;
+    Tensor qkv({batch_size * seq_len, 3 * n_embd_});
+    Tensor input_2d({batch_size * seq_len, n_embd_});
+    std::memcpy(input_2d.Data(), input.Data(), input.TotalSize() * sizeof(float));
 
-    Tensor last_input;
+    Tensor weight_t = Transpose(c_attn_weight_);
+    MatMul(input_2d, weight_t, qkv);
 
-    MultiHeadAttention(int embd, int heads)
-        : n_embd(embd), n_head(heads), head_dim(embd / heads),
-          c_attn_weight({3 * embd, embd}), c_attn_bias({3 * embd}),
-          c_proj_weight({embd, embd}), c_proj_bias({embd}),
-          dc_attn_weight({3 * embd, embd}), dc_attn_bias({3 * embd}),
-          dc_proj_weight({embd, embd}), dc_proj_bias({embd}) {
-        c_attn_weight.xavier_init(embd, 3 * embd);
-        c_proj_weight.xavier_init(embd, embd);
-        c_attn_bias.zeros();
-        c_proj_bias.zeros();
-    }
+    Tensor output({batch_size, seq_len, n_embd_});
+    output.Zeros();
 
-    Tensor forward(const Tensor& input) override {
-        last_input = input;
-        int B = input.shape[0];
-        int T = input.shape[1];
+    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
 
-        // 1. Proyección conjunta Q, K, V
-        Tensor qkv({B * T, 3 * n_embd});
-        Tensor input_2d({B * T, n_embd});
-        std::memcpy(input_2d.data, input.data, input.total_size() * sizeof(float));
+    for (int b = 0; b < batch_size; ++b) {
+      for (int h = 0; h < n_head_; ++h) {
+        Tensor scores({seq_len, seq_len});
+        scores.Zeros();
 
-        Tensor W_T = transpose(c_attn_weight);
-        matmul(input_2d, W_T, qkv);
-
-        // 2. Cálculo de Atención Causal dividida por cabezas
-        Tensor output({B, T, n_embd});
-        output.zeros();
-
-        float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
-
-        for (int b = 0; b < B; ++b) {
-            for (int h = 0; h < n_head; ++h) {
-                Tensor scores({T, T});
-                scores.zeros();
-
-                for (int i = 0; i < T; ++i) {
-                    for (int j = 0; j <= i; ++j) {
-                        float dot = 0.0f;
-                        for (int d = 0; d < head_dim; ++d) {
-                            size_t q_idx = (b * T + i) * (3 * n_embd) + (h * head_dim + d);
-                            size_t k_idx = (b * T + j) * (3 * n_embd) + n_embd + (h * head_dim + d);
-                            dot += qkv.data[q_idx] * qkv.data[k_idx];
-                        }
-                        scores.data[i * T + j] = dot * scale;
-                    }
-                }
-
-                // Causal Softmax
-                Tensor attn({T, T});
-                causal_softmax_forward(scores, attn, T);
-
-                // Multiplicar por Valores V
-                for (int i = 0; i < T; ++i) {
-                    for (int d = 0; d < head_dim; ++d) {
-                        float val = 0.0f;
-                        for (int j = 0; j <= i; ++j) {
-                            size_t v_idx = (b * T + j) * (3 * n_embd) + 2 * n_embd + (h * head_dim + d);
-                            val += attn.data[i * T + j] * qkv.data[v_idx];
-                        }
-                        size_t out_idx = (b * T + i) * n_embd + (h * head_dim + d);
-                        output.data[out_idx] = val;
-                    }
-                }
+        for (int i = 0; i < seq_len; ++i) {
+          for (int j = 0; j <= i; ++j) {
+            float dot = 0.0f;
+            for (int d = 0; d < head_dim_; ++d) {
+              size_t q_idx = (b * seq_len + i) * (3 * n_embd_) + (h * head_dim_ + d);
+              size_t k_idx = (b * seq_len + j) * (3 * n_embd_) + n_embd_ + (h * head_dim_ + d);
+              dot += qkv[q_idx] * qkv[k_idx];
             }
+            scores[i * seq_len + j] = dot * scale;
+          }
         }
-        return output;
-    }
 
-    Tensor backward(const Tensor& dout) override {
-        Tensor dx(last_input.shape);
-        dx.zeros();
-        dc_attn_weight.zeros(); dc_attn_bias.zeros();
-        dc_proj_weight.zeros(); dc_proj_bias.zeros();
-        return dx;
-    }
+        Tensor attn({seq_len, seq_len});
+        CausalSoftmaxForward(scores, attn, seq_len);
 
-    std::vector<Tensor*> get_parameters() override { return {&c_attn_weight, &c_attn_bias, &c_proj_weight, &c_proj_bias}; }
-    std::vector<Tensor*> get_gradients() override { return {&dc_attn_weight, &dc_attn_bias, &dc_proj_weight, &dc_proj_bias}; }
+        for (int i = 0; i < seq_len; ++i) {
+          for (int d = 0; d < head_dim_; ++d) {
+            float val = 0.0f;
+            for (int j = 0; j <= i; ++j) {
+              size_t v_idx = (b * seq_len + j) * (3 * n_embd_) + 2 * n_embd_ + (h * head_dim_ + d);
+              val += attn[i * seq_len + j] * qkv[v_idx];
+            }
+            size_t out_idx = (b * seq_len + i) * n_embd_ + (h * head_dim_ + d);
+            output[out_idx] = val;
+          }
+        }
+      }
+    }
+    return output;
+  }
+
+  Tensor Backward(const Tensor& dout) override {
+    Tensor dx(last_input_.Shape());
+    dx.Zeros();
+    dc_attn_weight_.Zeros(); dc_attn_bias_.Zeros();
+    dc_proj_weight_.Zeros(); dc_proj_bias_.Zeros();
+    return dx;
+  }
+
+  std::vector<Tensor*> GetParameters() override {
+    return {&c_attn_weight_, &c_attn_bias_, &c_proj_weight_, &c_proj_bias_};
+  }
+
+  std::vector<Tensor*> GetGradients() override {
+    return {&dc_attn_weight_, &dc_attn_bias_, &dc_proj_weight_, &dc_proj_bias_};
+  }
+
+ private:
+  int n_embd_;
+  int n_head_;
+  int head_dim_;
+
+  Tensor c_attn_weight_;
+  Tensor c_attn_bias_;
+  Tensor c_proj_weight_;
+  Tensor c_proj_bias_;
+
+  Tensor dc_attn_weight_;
+  Tensor dc_attn_bias_;
+  Tensor dc_proj_weight_;
+  Tensor dc_proj_bias_;
+
+  Tensor last_input_;
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_ATTENTION_H
+#endif  // NEURAL_SUITE_INCLUDE_LAYERS_ATTENTION_H_

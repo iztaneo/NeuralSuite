@@ -1,105 +1,88 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file linear.h
- * @brief Capa Densa (Fully Connected / Linear Layer): Y = X * W + b
- * @details Realiza una transformación afín lineal en el espacio vectorial.
+ * @brief Fully Connected Linear Layer: Y = X * W + b following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_LINEAR_H
-#define NEURAL_SUITE_LINEAR_H
+#ifndef NEURAL_SUITE_INCLUDE_LAYERS_LINEAR_H_
+#define NEURAL_SUITE_INCLUDE_LAYERS_LINEAR_H_
 
+#include <vector>
 #include "../layer.h"
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class Linear
- * @brief Capa Densa Fully Connected.
- * @details Multiplica la matriz de entrada X [B, in_features] por la matriz de pesos W [in_features, out_features]
- * y le suma el vector de sesgos b [out_features].
+ * @brief Fully Connected Dense Layer.
  */
 class Linear : public Layer {
-public:
-    int in_features;   ///< Dimensión de las características de entrada
-    int out_features;  ///< Dimensión de las características de salida
+ public:
+  Linear(int in_dim, int out_dim)
+      : in_features_(in_dim),
+        out_features_(out_dim),
+        weight_({in_dim, out_dim}),
+        bias_({out_dim}),
+        dweight_({in_dim, out_dim}),
+        dbias_({out_dim}) {
+    weight_.XavierInit(in_dim, out_dim);
+    bias_.Zeros();
+  }
 
-    Tensor weight;     ///< Matriz de pesos entrenables [in_features, out_features]
-    Tensor bias;       ///< Vector de sesgos entrenables [out_features]
-    Tensor dweight;    ///< Acumulador de gradientes de pesos [in_features, out_features]
-    Tensor dbias;      ///< Acumulador de gradientes de sesgos [out_features]
-    Tensor last_input; ///< Caché de la entrada para el cálculo del gradiente en el paso backward
+  Tensor Forward(const Tensor& input) override {
+    last_input_ = input;
+    int batch_size = input.Shape()[0];
+    Tensor output({batch_size, out_features_});
 
-    /**
-     * @brief Construye una capa densa lineal con inicialización Xavier/Glorot.
-     * @param in_dim Dimensión de entrada (fan_in)
-     * @param out_dim Dimensión de salida (fan_out)
-     */
-    Linear(int in_dim, int out_dim)
-        : in_features(in_dim), out_features(out_dim),
-          weight({in_dim, out_dim}), bias({out_dim}),
-          dweight({in_dim, out_dim}), dbias({out_dim}) {
-        weight.xavier_init(in_dim, out_dim);
-        bias.zeros();
+    MatMul(input, weight_, output);
+
+    for (int i = 0; i < batch_size; ++i) {
+      for (int j = 0; j < out_features_; ++j) {
+        output[i * out_features_ + j] += bias_[j];
+      }
     }
+    return output;
+  }
 
-    /**
-     * @brief Computa Y = X * W + b
-     * @param input Tensor de entrada [B, in_features]
-     * @return Tensor de salida [B, out_features]
-     */
-    Tensor forward(const Tensor& input) override {
-        last_input = input;
-        int B = input.shape[0];
-        Tensor output({B, out_features});
-        
-        // Multiplicación matricial paralela GEMM: output = input * weight
-        matmul(input, weight, output);
+  Tensor Backward(const Tensor& dout) override {
+    int batch_size = last_input_.Shape()[0];
+    Tensor dx({batch_size, in_features_});
 
-        // Suma Broadcasting del vector de sesgos
-        for (int i = 0; i < B; ++i) {
-            for (int j = 0; j < out_features; ++j) {
-                output.data[i * out_features + j] += bias.data[j];
-            }
-        }
-        return output;
+    Tensor weight_t = Transpose(weight_);
+    MatMul(dout, weight_t, dx);
+
+    Tensor input_t = Transpose(last_input_);
+    MatMul(input_t, dout, dweight_);
+
+    dbias_.Zeros();
+    for (int i = 0; i < batch_size; ++i) {
+      for (int j = 0; j < out_features_; ++j) {
+        dbias_[j] += dout[i * out_features_ + j];
+      }
     }
+    return dx;
+  }
 
-    /**
-     * @brief Computa los gradientes analíticos por la regla de la cadena:
-     * dx = dout * W^T
-     * dW = X^T * dout
-     * db = sum_batch(dout)
-     * @param dout Gradiente de la salida dL/dY [B, out_features]
-     * @return Gradiente de la entrada dL/dX [B, in_features]
-     */
-    Tensor backward(const Tensor& dout) override {
-        int B = last_input.shape[0];
-        Tensor dx({B, in_features});
+  std::vector<Tensor*> GetParameters() override { return {&weight_, &bias_}; }
+  std::vector<Tensor*> GetGradients() override { return {&dweight_, &dbias_}; }
 
-        // 1. dx = dout * W^T
-        Tensor W_T = transpose(weight);
-        matmul(dout, W_T, dx);
+  // Accessors
+  [[nodiscard]] Tensor& Weight() { return weight_; }
+  [[nodiscard]] Tensor& Bias() { return bias_; }
 
-        // 2. dW = X^T * dout
-        Tensor X_T = transpose(last_input);
-        matmul(X_T, dout, dweight);
+ private:
+  int in_features_;
+  int out_features_;
 
-        // 3. db = sum_batch(dout)
-        dbias.zeros();
-        for (int i = 0; i < B; ++i) {
-            for (int j = 0; j < out_features; ++j) {
-                dbias.data[j] += dout.data[i * out_features + j];
-            }
-        }
-        return dx;
-    }
-
-    /** @brief Retorna referencias a los parámetros entrenables {weight, bias} */
-    std::vector<Tensor*> get_parameters() override { return {&weight, &bias}; }
-
-    /** @brief Retorna referencias a los gradientes {dweight, dbias} */
-    std::vector<Tensor*> get_gradients() override { return {&dweight, &dbias}; }
+  Tensor weight_;
+  Tensor bias_;
+  Tensor dweight_;
+  Tensor dbias_;
+  Tensor last_input_;
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_LINEAR_H
+#endif  // NEURAL_SUITE_INCLUDE_LAYERS_LINEAR_H_

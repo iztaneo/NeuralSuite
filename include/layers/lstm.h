@@ -1,86 +1,100 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file lstm.h
- * @brief Capa Recurrente LSTM (Long Short-Term Memory) en C++ puro.
- * @details Modela secuencias temporales resolviendo el desvanecimiento del gradiente mediante celda de memoria.
+ * @brief LSTM Recurrent Layer following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_LSTM_H
-#define NEURAL_SUITE_LSTM_H
+#ifndef NEURAL_SUITE_INCLUDE_LAYERS_LSTM_H_
+#define NEURAL_SUITE_INCLUDE_LAYERS_LSTM_H_
 
+#include <vector>
 #include "../layer.h"
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class LSTM
- * @brief Red Recurrente con celda LSTM.
+ * @brief Long Short-Term Memory Recurrent Cell Layer.
  */
 class LSTM : public Layer {
-public:
-    int input_size;   ///< Dimensión de entrada x_t
-    int hidden_size;  ///< Dimensión del estado oculto h_t
+ public:
+  LSTM(int in_sz, int hid_sz)
+      : input_size_(in_sz),
+        hidden_size_(hid_sz),
+        weight_ih_({4 * hid_sz, in_sz}),
+        weight_hh_({4 * hid_sz, hid_sz}),
+        bias_ih_({4 * hid_sz}),
+        bias_hh_({4 * hid_sz}),
+        dweight_ih_({4 * hid_sz, in_sz}),
+        dweight_hh_({4 * hid_sz, hid_sz}),
+        dbias_ih_({4 * hid_sz}),
+        dbias_hh_({4 * hid_sz}) {
+    weight_ih_.XavierInit(in_sz, 4 * hid_sz);
+    weight_hh_.XavierInit(hid_sz, 4 * hid_sz);
+    bias_ih_.Zeros();
+    bias_hh_.Zeros();
+  }
 
-    Tensor weight_ih; ///< Pesos entrada-oculto para las 4 puertas (forget, input, candidate, output)
-    Tensor weight_hh; ///< Pesos oculto-oculto para las 4 puertas
-    Tensor bias_ih;   ///< Sesgos de entrada
-    Tensor bias_hh;   ///< Sesgos de oculto
+  Tensor Forward(const Tensor& input) override {
+    last_input_ = input;
+    int seq_len = input.Shape()[0];
+    int batch_size = input.Shape()[1];
 
-    Tensor dweight_ih;
-    Tensor dweight_hh;
-    Tensor dbias_ih;
-    Tensor dbias_hh;
+    Tensor output({seq_len, batch_size, hidden_size_});
+    Tensor h({batch_size, hidden_size_}); h.Zeros();
+    Tensor c({batch_size, hidden_size_}); c.Zeros();
 
-    Tensor last_input;
-
-    LSTM(int in_sz, int hid_sz)
-        : input_size(in_sz), hidden_size(hid_sz),
-          weight_ih({4 * hid_sz, in_sz}), weight_hh({4 * hid_sz, hid_sz}),
-          bias_ih({4 * hid_sz}), bias_hh({4 * hid_sz}),
-          dweight_ih({4 * hid_sz, in_sz}), dweight_hh({4 * hid_sz, hid_sz}),
-          dbias_ih({4 * hid_sz}), dbias_hh({4 * hid_sz}) {
-        weight_ih.xavier_init(in_sz, 4 * hid_sz);
-        weight_hh.xavier_init(hid_sz, 4 * hid_sz);
-        bias_ih.zeros();
-        bias_hh.zeros();
-    }
-
-    Tensor forward(const Tensor& input) override {
-        last_input = input;
-        int seq_len = input.shape[0];
-        int batch = input.shape[1];
-
-        Tensor output({seq_len, batch, hidden_size});
-        Tensor h({batch, hidden_size}); h.zeros();
-        Tensor c({batch, hidden_size}); c.zeros();
-
-        for (int t = 0; t < seq_len; ++t) {
-            for (int b = 0; b < batch; ++b) {
-                for (int h_i = 0; h_i < hidden_size; ++h_i) {
-                    size_t in_idx = (t * batch + b) * input_size;
-                    float val = std::tanh(input.data[in_idx] + h.data[b * hidden_size + h_i]);
-                    h.data[b * hidden_size + h_i] = val;
-                    size_t out_idx = (t * batch + b) * hidden_size + h_i;
-                    output.data[out_idx] = val;
-                }
-            }
+    for (int t = 0; t < seq_len; ++t) {
+      for (int b = 0; b < batch_size; ++b) {
+        for (int h_i = 0; h_i < hidden_size_; ++h_i) {
+          size_t in_idx = (t * batch_size + b) * input_size_;
+          float val = std::tanh(input[in_idx] + h[b * hidden_size_ + h_i]);
+          h[b * hidden_size_ + h_i] = val;
+          size_t out_idx = (t * batch_size + b) * hidden_size_ + h_i;
+          output[out_idx] = val;
         }
-        return output;
+      }
     }
+    return output;
+  }
 
-    Tensor backward(const Tensor& dout) override {
-        Tensor dx(last_input.shape);
-        dx.zeros();
-        dweight_ih.zeros();
-        dweight_hh.zeros();
-        dbias_ih.zeros();
-        dbias_hh.zeros();
-        return dx;
-    }
+  Tensor Backward(const Tensor& dout) override {
+    Tensor dx(last_input_.Shape());
+    dx.Zeros();
+    dweight_ih_.Zeros();
+    dweight_hh_.Zeros();
+    dbias_ih_.Zeros();
+    dbias_hh_.Zeros();
+    return dx;
+  }
 
-    std::vector<Tensor*> get_parameters() override { return {&weight_ih, &weight_hh, &bias_ih, &bias_hh}; }
-    std::vector<Tensor*> get_gradients() override { return {&dweight_ih, &dweight_hh, &dbias_ih, &dbias_hh}; }
+  std::vector<Tensor*> GetParameters() override {
+    return {&weight_ih_, &weight_hh_, &bias_ih_, &bias_hh_};
+  }
+
+  std::vector<Tensor*> GetGradients() override {
+    return {&dweight_ih_, &dweight_hh_, &dbias_ih_, &dbias_hh_};
+  }
+
+ private:
+  int input_size_;
+  int hidden_size_;
+
+  Tensor weight_ih_;
+  Tensor weight_hh_;
+  Tensor bias_ih_;
+  Tensor bias_hh_;
+
+  Tensor dweight_ih_;
+  Tensor dweight_hh_;
+  Tensor dbias_ih_;
+  Tensor dbias_hh_;
+
+  Tensor last_input_;
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_LSTM_H
+#endif  // NEURAL_SUITE_INCLUDE_LAYERS_LSTM_H_

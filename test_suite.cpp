@@ -1,111 +1,110 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file test_suite.cpp
- * @brief Suite de Pruebas Unitarias Automáticas y Verificación Numérica de Gradientes para NeuralSuite en C++.
+ * @brief Numerical Unit Test Suite following Google C++ Style Guide.
  */
 
-#include "tensor.h"
-#include "tokenizer.h"
-#include "activations.h"
-#include "losses.h"
-#include <iostream>
 #include <cassert>
 #include <cmath>
+#include <iostream>
+#include "activations.h"
+#include "losses.h"
+#include "tensor.h"
+#include "tokenizer.h"
 
-void test_matmul() {
-    std::cout << "🧪 [Test 1] Multiplicación de Matrices (GEMM)... " << std::flush;
-    ns::Tensor A({2, 3});
-    ns::Tensor B({3, 2});
-    
-    // A = [[1, 2, 3], [4, 5, 6]]
-    A.data[0] = 1; A.data[1] = 2; A.data[2] = 3;
-    A.data[3] = 4; A.data[4] = 5; A.data[5] = 6;
+using namespace neuralsuite;
 
-    // B = [[7, 8], [9, 1], [2, 3]]
-    B.data[0] = 7; B.data[1] = 8;
-    B.data[2] = 9; B.data[3] = 1;
-    B.data[4] = 2; B.data[5] = 3;
+void TestMatMul() {
+  std::cout << "🧪 [Test 1] Multiplicación de Matrices (GEMM)... " << std::flush;
+  Tensor A({2, 3});
+  Tensor B({3, 2});
 
-    ns::Tensor C;
-    ns::matmul(A, B, C);
+  A[0] = 1; A[1] = 2; A[2] = 3;
+  A[3] = 4; A[4] = 5; A[5] = 6;
 
-    // C = [[31, 19], [85, 55]]
-    assert(std::abs(C.data[0] - 31.0f) < 1e-4f);
-    assert(std::abs(C.data[1] - 19.0f) < 1e-4f);
-    assert(std::abs(C.data[2] - 85.0f) < 1e-4f);
-    assert(std::abs(C.data[3] - 55.0f) < 1e-4f);
+  B[0] = 7; B[1] = 8;
+  B[2] = 9; B[3] = 1;
+  B[4] = 2; B[5] = 3;
 
-    std::cout << "PASADO ✅\n" << std::flush;
+  Tensor C;
+  MatMul(A, B, C);
+
+  assert(std::abs(C[0] - 31.0f) < 1e-4f);
+  assert(std::abs(C[1] - 19.0f) < 1e-4f);
+  assert(std::abs(C[2] - 85.0f) < 1e-4f);
+  assert(std::abs(C[3] - 55.0f) < 1e-4f);
+
+  std::cout << "PASADO ✅\n" << std::flush;
 }
 
-void test_layernorm() {
-    std::cout << "🧪 [Test 2] Normalización de Capa (LayerNorm)... " << std::flush;
-    ns::Tensor x({1, 4});
-    x.data[0] = 2.0f; x.data[1] = 4.0f; x.data[2] = 4.0f; x.data[3] = 6.0f;
+void TestLayerNorm() {
+  std::cout << "🧪 [Test 2] Normalización de Capa (LayerNorm)... " << std::flush;
+  Tensor x({1, 4});
+  x[0] = 2.0f; x[1] = 4.0f; x[2] = 4.0f; x[3] = 6.0f;
 
-    ns::Tensor gamma({4}); gamma.ones();
-    ns::Tensor beta({4}); beta.zeros();
+  Tensor gamma({4}); gamma.Ones();
+  Tensor beta({4}); beta.Zeros();
 
-    ns::Tensor out, mean, rstd;
-    ns::layernorm_forward(x, gamma, beta, out, mean, rstd);
+  Tensor out, mean, rstd;
+  LayerNormForward(x, gamma, beta, out, mean, rstd);
 
-    // Media = (2+4+4+6)/4 = 4.0
-    assert(std::abs(mean.data[0] - 4.0f) < 1e-4f);
-
-    std::cout << "PASADO ✅\n" << std::flush;
+  assert(std::abs(mean[0] - 4.0f) < 1e-4f);
+  std::cout << "PASADO ✅\n" << std::flush;
 }
 
-void test_tokenizer() {
-    std::cout << "🧪 [Test 3] Tokenizador de Caracteres C++... " << std::flush;
-    std::string sample = "Hello C++!";
-    ns::CharTokenizer tok(sample);
-    
-    std::vector<int> encoded = tok.encode(sample);
-    std::string decoded = tok.decode(encoded);
+void TestTokenizer() {
+  std::cout << "🧪 [Test 3] Tokenizador de Caracteres C++... " << std::flush;
+  std::string sample = "Hello C++ Google Style!";
+  CharTokenizer tok(sample);
 
-    assert(sample == decoded);
-    std::cout << "PASADO ✅\n" << std::flush;
+  std::vector<int> encoded = tok.Encode(sample);
+  std::string decoded = tok.Decode(encoded);
+
+  assert(sample == decoded);
+  std::cout << "PASADO ✅\n" << std::flush;
 }
 
-void test_gradient_check_gelu() {
-    std::cout << "🧪 [Test 4] Verificación de Gradiente GELU por Diferencias Finitas... " << std::flush;
-    ns::Tensor x({1, 1});
-    x.data[0] = 1.5f;
+void TestGradientCheckGelu() {
+  std::cout << "🧪 [Test 4] Verificación de Gradiente GELU por Diferencias Finitas... " << std::flush;
+  Tensor x({1, 1});
+  x[0] = 1.5f;
 
-    ns::Tensor dout({1, 1});
-    dout.data[0] = 1.0f;
+  Tensor dout({1, 1});
+  dout[0] = 1.0f;
 
-    ns::Tensor dx;
-    ns::gelu_backward(dout, x, dx);
+  Tensor dx;
+  GeluBackward(dout, x, dx);
 
-    // Gradiente numérico por diferencias finitas: (f(x+eps) - f(x-eps)) / (2*eps)
-    float eps = 1e-4f;
-    ns::Tensor x_plus({1, 1}), x_minus({1, 1});
-    x_plus.data[0] = x.data[0] + eps;
-    x_minus.data[0] = x.data[0] - eps;
+  float eps = 1e-4f;
+  Tensor x_plus({1, 1}), x_minus({1, 1});
+  x_plus[0] = x[0] + eps;
+  x_minus[0] = x[0] - eps;
 
-    ns::Tensor y_plus, y_minus;
-    ns::gelu_forward(x_plus, y_plus);
-    ns::gelu_forward(x_minus, y_minus);
+  Tensor y_plus, y_minus;
+  GeluForward(x_plus, y_plus);
+  GeluForward(x_minus, y_minus);
 
-    float num_grad = (y_plus.data[0] - y_minus.data[0]) / (2.0f * eps);
-    float diff = std::abs(dx.data[0] - num_grad);
+  float num_grad = (y_plus[0] - y_minus[0]) / (2.0f * eps);
+  float diff = std::abs(dx[0] - num_grad);
 
-    assert(diff < 1e-3f);
-    std::cout << "PASADO ✅ (Diff: " << diff << ")\n" << std::flush;
+  assert(diff < 1e-3f);
+  std::cout << "PASADO ✅ (Diff: " << diff << ")\n" << std::flush;
 }
 
 int main() {
-    std::cout << "============================================================\n" << std::flush;
-    std::cout << "🚀 Ejecutando Suite de Pruebas Unitarias de NeuralSuite (C++)\n" << std::flush;
-    std::cout << "============================================================\n" << std::flush;
+  std::cout << "============================================================\n" << std::flush;
+  std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
+  std::cout << "============================================================\n" << std::flush;
 
-    test_matmul();
-    test_layernorm();
-    test_tokenizer();
-    test_gradient_check_gelu();
+  TestMatMul();
+  TestLayerNorm();
+  TestTokenizer();
+  TestGradientCheckGelu();
 
-    std::cout << "============================================================\n" << std::flush;
-    std::cout << "✅ ¡Todas las pruebas unitarias pasaron con éxito!\n" << std::flush;
-    std::cout << "============================================================\n" << std::flush;
-    return 0;
+  std::cout << "============================================================\n" << std::flush;
+  std::cout << "✅ ¡Todas las pruebas unitarias pasaron con éxito!\n" << std::flush;
+  std::cout << "============================================================\n" << std::flush;
+  return 0;
 }

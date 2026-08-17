@@ -1,196 +1,143 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file tensor.h
- * @brief Motor de Matemáticas y Álgebra Lineal en C++17 puro para NeuralSuite.
- * @details Proporciona la estructura de Tensor multidimensional contiguo en Heap con gestión de memoria RAII,
- * multiplicaciones de matrices GEMM (General Matrix Multiplication), normalización de capa (LayerNorm),
- * activación GELU (Gaussian Error Linear Unit), Softmax Causal, ReLU, Sigmoide, Tanh y gradientes analíticos.
- *
- * @author NeuralSuite Core Team
- * @date 2026
+ * @brief Multi-dimensional Tensor & Linear Algebra Engine strictly following the Google C++ Style Guide.
+ * @see https://google.github.io/styleguide/cppguide.html
  */
 
-#ifndef NEURAL_SUITE_TENSOR_H
-#define NEURAL_SUITE_TENSOR_H
+#ifndef NEURAL_SUITE_INCLUDE_TENSOR_H_
+#define NEURAL_SUITE_INCLUDE_TENSOR_H_
 
-#include <vector>
-#include <iostream>
 #include <cmath>
-#include <random>
 #include <cstring>
+#include <iostream>
 #include <memory>
+#include <random>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class Tensor
- * @brief Arreglo multidimensional de números flotantes (float) en memoria contigua Heap.
- * @details Implementa la semántica RAII (Resource Acquisition Is Initialization) y movimiento de C++11/17.
+ * @brief Multi-dimensional array storing floating point numbers in contiguous memory.
+ * @details Conforms to Google C++ Style Guide: RAII memory management, explicit constructors,
+ * const-correctness, and `data_` / `shape_` private members.
  */
 class Tensor {
-public:
-    float* data;               ///< Puntero a la memoria contigua de datos flotantes
-    std::vector<int> shape;    ///< Vector que almacena las dimensiones del tensor (ej: [batch, seq, dim])
+ public:
+  Tensor();
+  explicit Tensor(const std::vector<int>& dims);
+  Tensor(const Tensor& other);
+  Tensor(Tensor&& other) noexcept;
+  ~Tensor();
 
-    /** @brief Constructor por defecto: inicializa un tensor vacío */
-    Tensor();
+  Tensor& operator=(const Tensor& other);
+  Tensor& operator=(Tensor&& other) noexcept;
 
-    /** 
-     * @brief Constructor con dimensiones específicas
-     * @param dims Vector con los tamaños de cada dimensión (ej: {32, 128})
-     */
-    Tensor(const std::vector<int>& dims);
+  // Accessors
+  [[nodiscard]] size_t TotalSize() const;
+  [[nodiscard]] const std::vector<int>& Shape() const { return shape_; }
+  [[nodiscard]] float* Data() { return data_; }
+  [[nodiscard]] const float* Data() const { return data_; }
 
-    /** @brief Constructor de copia (Deep Copy) */
-    Tensor(const Tensor& other);
+  void Reshape(const std::vector<int>& new_shape);
+  void Fill(float val);
+  void Zeros();
+  void Ones();
+  void RandomNormal(float mean = 0.0f, float stddev = 0.02f);
+  void RandomUniform(float min_val = -0.1f, float max_val = 0.1f);
+  void XavierInit(int fan_in, int fan_out);
 
-    /** @brief Constructor de movimiento (Move Semantics C++11) */
-    Tensor(Tensor&& other) noexcept;
+  // Element access operators
+  inline float& operator[](size_t idx) { return data_[idx]; }
+  inline const float& operator[](size_t idx) const { return data_[idx]; }
 
-    /** @brief Destructor: libera la memoria Heap ocupada por `data` */
-    ~Tensor();
+  void PrintSummary(const std::string& name = "") const;
 
-    /** @brief Operador de asignación por copia */
-    Tensor& operator=(const Tensor& other);
-
-    /** @brief Operador de asignación por movimiento */
-    Tensor& operator=(Tensor&& other) noexcept;
-
-    /** 
-     * @brief Calcula el número total de elementos contenidos en el tensor
-     * @return Multiplicación de todas las dimensiones en `shape`
-     */
-    size_t total_size() const;
-
-    /** 
-     * @brief Cambia la forma del tensor sin modificar los datos subyacentes
-     * @param new_shape Nuevas dimensiones esperadas
-     */
-    void reshape(const std::vector<int>& new_shape);
-
-    /** @brief Rellena todos los elementos con un valor constante */
-    void fill(float val);
-    
-    /** @brief Inicializa todos los elementos a cero (0.0f) */
-    void zeros();
-
-    /** @brief Inicializa todos los elementos a uno (1.0f) */
-    void ones();
-
-    /** 
-     * @brief Inicialización estocástica Normal Gaussiana N(mean, std^2)
-     * @param mean Media de la distribución (por defecto 0.0)
-     * @param std Desviación estándar (por defecto 0.02)
-     */
-    void random_normal(float mean = 0.0f, float std = 0.02f);
-
-    /** 
-     * @brief Inicialización estocástica Uniforme U(min, max)
-     */
-    void random_uniform(float min_val = -0.1f, float max_val = 0.1f);
-
-    /** 
-     * @brief Inicialización Xavier / Glorot para capas densas (Linear)
-     * @details Mantiene la varianza de los gradientes constante entre capas: U(-sqrt(6/(fan_in+fan_out)), +sqrt(6/(fan_in+fan_out)))
-     */
-    void xavier_init(int fan_in, int fan_out);
-
-    /** @brief Acceso rápido por índice plano (L-value) */
-    inline float& operator[](size_t idx) { return data[idx]; }
-
-    /** @brief Acceso rápido por índice plano (Const L-value) */
-    inline const float& operator[](size_t idx) const { return data[idx]; }
-    
-    /** @brief Imprime un resumen de dimensiones y tamaño en consola */
-    void print_summary(const std::string& name = "") const;
+ private:
+  float* data_ = nullptr;
+  std::vector<int> shape_;
 };
 
 // ============================================================================
-// FUNCIONES Y PRIMITIVAS DE ÁLGEBRA LINEAL (MOTOR MATEMÁTICO EN C++)
+// LINEAR ALGEBRA & MATH PRIMITIVES (GOOGLE C++ STYLE GUIDE)
 // ============================================================================
 
 /**
- * @brief Multiplicación de Matrices 2D Generalizada (GEMM): C = A * B
- * @details Calcula la multiplicación matricial dividiendo el trabajo entre hilos mediante OpenMP.
- * Fórmulas: C[i, j] = sum_{k=0}^{K-1} ( A[i, k] * B[k, j] )
- * @param A Matriz M x K
- * @param B Matriz K x N
- * @param C Matriz de salida asignada de tamaño M x N
- * @note Complejidad Temporal: O(M * N * K)
+ * @brief General Matrix Multiplication (GEMM): C = A * B
  */
-void matmul(const Tensor& A, const Tensor& B, Tensor& C);
+void MatMul(const Tensor& A, const Tensor& B, Tensor& C);
 
 /**
- * @brief Transposición de Matriz 2D: C = A^T
- * @param A Matriz de entrada de tamaño M x N
- * @return Nueva matriz transpuesta de tamaño N x M
+ * @brief 2D Matrix Transposition: C = A^T
  */
-Tensor transpose(const Tensor& A);
+Tensor Transpose(const Tensor& A);
 
 /**
- * @brief Paso Forward de Normalización de Capa (Pre-LN LayerNorm)
- * @details Normaliza las características en la dimensión interna d:
- * \hat{x}_i = (x_i - mean) / sqrt(var + eps)
- * out_i = \hat{x}_i * gamma_i + beta_i
- * @param x Tensor de entrada de forma [N, D]
- * @param gamma Vector de escala entrenable [D]
- * @param beta Vector de desplazamiento entrenable [D]
- * @param out Tensor de salida normalizado [N, D]
- * @param mean Caché de medias por muestra [N]
- * @param rstd Caché de inverso de desviación estándar 1/sqrt(var+eps) [N]
- * @param eps Valor constante para evitar división por cero (1e-5)
+ * @brief Pre-LN Layer Normalization Forward Pass
  */
-void layernorm_forward(const Tensor& x, const Tensor& gamma, const Tensor& beta, Tensor& out, Tensor& mean, Tensor& rstd, float eps = 1e-5f);
+void LayerNormForward(const Tensor& x, const Tensor& gamma, const Tensor& beta,
+                      Tensor& out, Tensor& mean, Tensor& rstd, float eps = 1e-5f);
 
 /**
- * @brief Paso Backward de Normalización de Capa (LayerNorm Gradient)
- * @details Calcula analíticamente dx, dgamma y dbeta mediante la regla de la cadena.
+ * @brief Layer Normalization Backward Pass
  */
-void layernorm_backward(const Tensor& dout, const Tensor& x, const Tensor& gamma, const Tensor& mean, const Tensor& rstd, Tensor& dx, Tensor& dgamma, Tensor& dbeta);
+void LayerNormBackward(const Tensor& dout, const Tensor& x, const Tensor& gamma,
+                       const Tensor& mean, const Tensor& rstd, Tensor& dx,
+                       Tensor& dgamma, Tensor& dbeta);
 
 /**
- * @brief Softmax Estable numéricamente
- * @details Aplica Softmax(x_i) = exp(x_i - max(x)) / sum(exp(x_j - max(x))) para evitar overflow.
+ * @brief Numerically Stable Softmax
  */
-void softmax_forward(const Tensor& input, Tensor& output);
+void SoftmaxForward(const Tensor& input, Tensor& output);
 
 /**
- * @brief Softmax Causal con Máscara Triangular Inferior
- * @details Aplica la máscara causal estableciendo las posiciones futuras j > i a 0.0.
+ * @brief Causal Masked Softmax for Transformer Attention
  */
-void causal_softmax_forward(const Tensor& input, Tensor& output, int seq_len);
+void CausalSoftmaxForward(const Tensor& input, Tensor& output, int seq_len);
 
 /**
- * @brief Activación GELU (Gaussian Error Linear Unit) - Paso Forward
- * @details Aproximación analítica de GPT-2: GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+ * @brief Gaussian Error Linear Unit (GELU) Forward Pass
  */
-void gelu_forward(const Tensor& input, Tensor& output);
+void GeluForward(const Tensor& input, Tensor& output);
 
 /**
- * @brief Activación GELU - Paso Backward (Gradiente Analítico)
+ * @brief GELU Backward Pass
  */
-void gelu_backward(const Tensor& dout, const Tensor& input, Tensor& dx);
+void GeluBackward(const Tensor& dout, const Tensor& input, Tensor& dx);
 
-/** @brief Activación ReLU Forward: max(0, x) */
-void relu_forward(const Tensor& input, Tensor& output);
-/** @brief Activación ReLU Backward */
-void relu_backward(const Tensor& dout, const Tensor& input, Tensor& dx);
+/**
+ * @brief ReLU Forward & Backward
+ */
+void ReluForward(const Tensor& input, Tensor& output);
+void ReluBackward(const Tensor& dout, const Tensor& input, Tensor& dx);
 
-/** @brief Activación Sigmoide Forward: 1 / (1 + exp(-x)) */
-void sigmoid_forward(const Tensor& input, Tensor& output);
-/** @brief Activación Sigmoide Backward */
-void sigmoid_backward(const Tensor& dout, const Tensor& output, Tensor& dx);
+/**
+ * @brief Sigmoid Forward & Backward
+ */
+void SigmoidForward(const Tensor& input, Tensor& output);
+void SigmoidBackward(const Tensor& dout, const Tensor& output, Tensor& dx);
 
-/** @brief Activación Tanh Forward: tanh(x) */
-void tanh_forward(const Tensor& input, Tensor& output);
-/** @brief Activación Tanh Backward */
-void tanh_backward(const Tensor& dout, const Tensor& output, Tensor& dx);
+/**
+ * @brief Tanh Forward & Backward
+ */
+void TanhForward(const Tensor& input, Tensor& output);
+void TanhBackward(const Tensor& dout, const Tensor& output, Tensor& dx);
 
-/** @brief Operaciones elementales entre tensores (Suma, Resta, Multiplicación Hadamard) */
-void elementwise_add(const Tensor& a, const Tensor& b, Tensor& out);
-void elementwise_sub(const Tensor& a, const Tensor& b, Tensor& out);
-void elementwise_mul(const Tensor& a, const Tensor& b, Tensor& out);
+/**
+ * @brief Elementwise Addition, Subtraction, Multiplication
+ */
+void ElementwiseAdd(const Tensor& a, const Tensor& b, Tensor& out);
+void ElementwiseSub(const Tensor& a, const Tensor& b, Tensor& out);
+void ElementwiseMul(const Tensor& a, const Tensor& b, Tensor& out);
 
-} // namespace ns
+// Alias para compatibilidad ns::
+namespace ns = neuralsuite;
 
-#endif // NEURAL_SUITE_TENSOR_H
+}  // namespace neuralsuite
+
+#endif  // NEURAL_SUITE_INCLUDE_TENSOR_H_

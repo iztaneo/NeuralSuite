@@ -1,364 +1,369 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 #include "tensor.h"
 
-namespace ns {
+namespace neuralsuite {
 
-// Generator aleatorio estático global
 static std::mt19937 g_rng(1337);
 
-Tensor::Tensor() : data(nullptr), shape({}) {}
+Tensor::Tensor() : data_(nullptr), shape_({}) {}
 
-Tensor::Tensor(const std::vector<int>& dims) : shape(dims) {
-    size_t sz = total_size();
-    data = (sz > 0) ? new float[sz]() : nullptr;
+Tensor::Tensor(const std::vector<int>& dims) : shape_(dims) {
+  size_t sz = TotalSize();
+  data_ = (sz > 0) ? new float[sz]() : nullptr;
 }
 
-Tensor::Tensor(const Tensor& other) : shape(other.shape) {
-    size_t sz = total_size();
-    if (sz > 0) {
-        data = new float[sz];
-        std::memcpy(data, other.data, sz * sizeof(float));
-    } else {
-        data = nullptr;
-    }
+Tensor::Tensor(const Tensor& other) : shape_(other.shape_) {
+  size_t sz = TotalSize();
+  if (sz > 0) {
+    data_ = new float[sz];
+    std::memcpy(data_, other.data_, sz * sizeof(float));
+  } else {
+    data_ = nullptr;
+  }
 }
 
-Tensor::Tensor(Tensor&& other) noexcept : data(other.data), shape(std::move(other.shape)) {
-    other.data = nullptr;
+Tensor::Tensor(Tensor&& other) noexcept
+    : data_(other.data_), shape_(std::move(other.shape_)) {
+  other.data_ = nullptr;
 }
 
 Tensor::~Tensor() {
-    delete[] data;
+  delete[] data_;
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
-    if (this != &other) {
-        delete[] data;
-        shape = other.shape;
-        size_t sz = total_size();
-        if (sz > 0) {
-            data = new float[sz];
-            std::memcpy(data, other.data, sz * sizeof(float));
-        } else {
-            data = nullptr;
-        }
+  if (this != &other) {
+    delete[] data_;
+    shape_ = other.shape_;
+    size_t sz = TotalSize();
+    if (sz > 0) {
+      data_ = new float[sz];
+      std::memcpy(data_, other.data_, sz * sizeof(float));
+    } else {
+      data_ = nullptr;
     }
-    return *this;
+  }
+  return *this;
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
-    if (this != &other) {
-        delete[] data;
-        data = other.data;
-        shape = std::move(other.shape);
-        other.data = nullptr;
-    }
-    return *this;
+  if (this != &other) {
+    delete[] data_;
+    data_ = other.data_;
+    shape_ = std::move(other.shape_);
+    other.data_ = nullptr;
+  }
+  return *this;
 }
 
-size_t Tensor::total_size() const {
-    if (shape.empty()) return 0;
-    size_t sz = 1;
-    for (int d : shape) sz *= d;
-    return sz;
+size_t Tensor::TotalSize() const {
+  if (shape_.empty()) return 0;
+  size_t sz = 1;
+  for (int d : shape_) sz *= d;
+  return sz;
 }
 
-void Tensor::reshape(const std::vector<int>& new_shape) {
-    size_t old_sz = total_size();
-    shape = new_shape;
-    size_t new_sz = total_size();
+void Tensor::Reshape(const std::vector<int>& new_shape) {
+  size_t old_sz = TotalSize();
+  shape_ = new_shape;
+  size_t new_sz = TotalSize();
 
-    if (new_sz != old_sz) {
-        delete[] data;
-        data = (new_sz > 0) ? new float[new_sz]() : nullptr;
-    }
+  if (new_sz != old_sz) {
+    delete[] data_;
+    data_ = (new_sz > 0) ? new float[new_sz]() : nullptr;
+  }
 }
 
-
-void Tensor::fill(float val) {
-    size_t sz = total_size();
-    for (size_t i = 0; i < sz; ++i) data[i] = val;
+void Tensor::Fill(float val) {
+  size_t sz = TotalSize();
+  for (size_t i = 0; i < sz; ++i) data_[i] = val;
 }
 
-void Tensor::zeros() { fill(0.0f); }
-void Tensor::ones() { fill(1.0f); }
+void Tensor::Zeros() { Fill(0.0f); }
+void Tensor::Ones() { Fill(1.0f); }
 
-void Tensor::random_normal(float mean, float stddev) {
-    std::normal_distribution<float> dist(mean, stddev);
-    size_t sz = total_size();
-    for (size_t i = 0; i < sz; ++i) data[i] = dist(g_rng);
+void Tensor::RandomNormal(float mean, float stddev) {
+  std::normal_distribution<float> dist(mean, stddev);
+  size_t sz = TotalSize();
+  for (size_t i = 0; i < sz; ++i) data_[i] = dist(g_rng);
 }
 
-void Tensor::random_uniform(float min_val, float max_val) {
-    std::uniform_real_distribution<float> dist(min_val, max_val);
-    size_t sz = total_size();
-    for (size_t i = 0; i < sz; ++i) data[i] = dist(g_rng);
+void Tensor::RandomUniform(float min_val, float max_val) {
+  std::uniform_real_distribution<float> dist(min_val, max_val);
+  size_t sz = TotalSize();
+  for (size_t i = 0; i < sz; ++i) data_[i] = dist(g_rng);
 }
 
-void Tensor::xavier_init(int fan_in, int fan_out) {
-    float limit = std::sqrt(6.0f / (fan_in + fan_out));
-    random_uniform(-limit, limit);
+void Tensor::XavierInit(int fan_in, int fan_out) {
+  float limit = std::sqrt(6.0f / (fan_in + fan_out));
+  RandomUniform(-limit, limit);
 }
 
-void Tensor::print_summary(const std::string& name) const {
-    std::cout << "Tensor [" << name << "] Shape: (";
-    for (size_t i = 0; i < shape.size(); ++i) {
-        std::cout << shape[i] << (i + 1 < shape.size() ? ", " : "");
-    }
-    std::cout << ") Total size: " << total_size() << "\n";
+void Tensor::PrintSummary(const std::string& name) const {
+  std::cout << "Tensor [" << name << "] Shape: (";
+  for (size_t i = 0; i < shape_.size(); ++i) {
+    std::cout << shape_[i] << (i + 1 < shape_.size() ? ", " : "");
+  }
+  std::cout << ") Total size: " << TotalSize() << "\n";
 }
 
 // ============================================================================
-// IMPLEMENTACIÓN DE PRIMITIVAS MATEMÁTICAS EN C++
+// LINEAR ALGEBRA & MATH PRIMITIVES IMPLEMENTATION
 // ============================================================================
 
-void matmul(const Tensor& A, const Tensor& B, Tensor& C) {
-    int M = A.shape[0];
-    int K = A.shape[1];
-    int N = B.shape[1];
+void MatMul(const Tensor& A, const Tensor& B, Tensor& C) {
+  int M = A.Shape()[0];
+  int K = A.Shape()[1];
+  int N = B.Shape()[1];
 
-    C.reshape({M, N});
+  C.Reshape({M, N});
 
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < M; ++i) {
-        for (int j = 0; j < N; ++j) {
-            float sum = 0.0f;
-            for (int k = 0; k < K; ++k) {
-                sum += A.data[i * K + k] * B.data[k * N + j];
-            }
-            C.data[i * N + j] = sum;
-        }
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < M; ++i) {
+    for (int j = 0; j < N; ++j) {
+      float sum = 0.0f;
+      for (int k = 0; k < K; ++k) {
+        sum += A[i * K + k] * B[k * N + j];
+      }
+      C[i * N + j] = sum;
     }
+  }
 }
 
-Tensor transpose(const Tensor& A) {
-    int M = A.shape[0];
-    int N = A.shape[1];
-    Tensor C({N, M});
+Tensor Transpose(const Tensor& A) {
+  int M = A.Shape()[0];
+  int N = A.Shape()[1];
+  Tensor C({N, M});
 
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < M; ++i) {
-        for (int j = 0; j < N; ++j) {
-            C.data[j * M + i] = A.data[i * N + j];
-        }
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < M; ++i) {
+    for (int j = 0; j < N; ++j) {
+      C[j * M + i] = A[i * N + j];
     }
-    return C;
+  }
+  return C;
 }
 
-void layernorm_forward(const Tensor& x, const Tensor& gamma, const Tensor& beta, Tensor& out, Tensor& mean, Tensor& rstd, float eps) {
-    int N = x.shape[0]; // Batch / Seq len
-    int D = x.shape[1]; // Embedding dimension
+void LayerNormForward(const Tensor& x, const Tensor& gamma, const Tensor& beta,
+                      Tensor& out, Tensor& mean, Tensor& rstd, float eps) {
+  int N = x.Shape()[0];
+  int D = x.Shape()[1];
 
-    out.reshape({N, D});
-    mean.reshape({N});
-    rstd.reshape({N});
+  out.Reshape({N, D});
+  mean.Reshape({N});
+  rstd.Reshape({N});
 
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < N; ++i) {
-        float m = 0.0f;
-        for (int j = 0; j < D; ++j) m += x.data[i * D + j];
-        m /= D;
-        mean.data[i] = m;
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < N; ++i) {
+    float m = 0.0f;
+    for (int j = 0; j < D; ++j) m += x[i * D + j];
+    m /= D;
+    mean[i] = m;
 
-        float v = 0.0f;
-        for (int j = 0; j < D; ++j) {
-            float diff = x.data[i * D + j] - m;
-            v += diff * diff;
-        }
-        v /= D;
-        float rs = 1.0f / std::sqrt(v + eps);
-        rstd.data[i] = rs;
-
-        for (int j = 0; j < D; ++j) {
-            float x_hat = (x.data[i * D + j] - m) * rs;
-            out.data[i * D + j] = x_hat * gamma.data[j] + beta.data[j];
-        }
+    float v = 0.0f;
+    for (int j = 0; j < D; ++j) {
+      float diff = x[i * D + j] - m;
+      v += diff * diff;
     }
-}
+    v /= D;
+    float rs = 1.0f / std::sqrt(v + eps);
+    rstd[i] = rs;
 
-void layernorm_backward(const Tensor& dout, const Tensor& x, const Tensor& gamma, const Tensor& mean, const Tensor& rstd, Tensor& dx, Tensor& dgamma, Tensor& dbeta) {
-    int N = x.shape[0];
-    int D = x.shape[1];
-
-    dx.reshape({N, D});
-    dgamma.reshape({D}); dgamma.zeros();
-    dbeta.reshape({D}); dbeta.zeros();
-
-    for (int i = 0; i < N; ++i) {
-        float m = mean.data[i];
-        float rs = rstd.data[i];
-
-        float sum_dout = 0.0f;
-        float sum_dout_xhat = 0.0f;
-
-        for (int j = 0; j < D; ++j) {
-            float x_hat = (x.data[i * D + j] - m) * rs;
-            float d = dout.data[i * D + j];
-            dgamma.data[j] += d * x_hat;
-            dbeta.data[j] += d;
-
-            float d_xhat = d * gamma.data[j];
-            sum_dout += d_xhat;
-            sum_dout_xhat += d_xhat * x_hat;
-        }
-
-        for (int j = 0; j < D; ++j) {
-            float x_hat = (x.data[i * D + j] - m) * rs;
-            float d_xhat = dout.data[i * D + j] * gamma.data[j];
-            dx.data[i * D + j] = (rs / D) * (D * d_xhat - sum_dout - x_hat * sum_dout_xhat);
-        }
+    for (int j = 0; j < D; ++j) {
+      float x_hat = (x[i * D + j] - m) * rs;
+      out[i * D + j] = x_hat * gamma[j] + beta[j];
     }
+  }
 }
 
-void softmax_forward(const Tensor& input, Tensor& output) {
-    int N = input.shape[0];
-    int D = input.shape[1];
-    output.reshape({N, D});
+void LayerNormBackward(const Tensor& dout, const Tensor& x, const Tensor& gamma,
+                       const Tensor& mean, const Tensor& rstd, Tensor& dx,
+                       Tensor& dgamma, Tensor& dbeta) {
+  int N = x.Shape()[0];
+  int D = x.Shape()[1];
 
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < N; ++i) {
-        float max_val = input.data[i * D];
-        for (int j = 1; j < D; ++j) {
-            if (input.data[i * D + j] > max_val) max_val = input.data[i * D + j];
-        }
+  dx.Reshape({N, D});
+  dgamma.Reshape({D}); dgamma.Zeros();
+  dbeta.Reshape({D}); dbeta.Zeros();
 
-        float sum = 0.0f;
-        for (int j = 0; j < D; ++j) {
-            float e = std::exp(input.data[i * D + j] - max_val);
-            output.data[i * D + j] = e;
-            sum += e;
-        }
+  for (int i = 0; i < N; ++i) {
+    float m = mean[i];
+    float rs = rstd[i];
 
-        for (int j = 0; j < D; ++j) {
-            output.data[i * D + j] /= sum;
-        }
+    float sum_dout = 0.0f;
+    float sum_dout_xhat = 0.0f;
+
+    for (int j = 0; j < D; ++j) {
+      float x_hat = (x[i * D + j] - m) * rs;
+      float d = dout[i * D + j];
+      dgamma[j] += d * x_hat;
+      dbeta[j] += d;
+
+      float d_xhat = d * gamma[j];
+      sum_dout += d_xhat;
+      sum_dout_xhat += d_xhat * x_hat;
     }
-}
 
-void causal_softmax_forward(const Tensor& input, Tensor& output, int seq_len) {
-    int B = input.shape[0]; // Batch or Head count
-    output.reshape({B, seq_len, seq_len});
-
-    #pragma omp parallel for schedule(static)
-    for (int b = 0; b < B; ++b) {
-        for (int i = 0; i < seq_len; ++i) {
-            int offset = (b * seq_len + i) * seq_len;
-            float max_val = input.data[offset];
-            for (int j = 1; j <= i; ++j) {
-                if (input.data[offset + j] > max_val) max_val = input.data[offset + j];
-            }
-
-            float sum = 0.0f;
-            for (int j = 0; j <= i; ++j) {
-                float e = std::exp(input.data[offset + j] - max_val);
-                output.data[offset + j] = e;
-                sum += e;
-            }
-
-            for (int j = 0; j <= i; ++j) {
-                output.data[offset + j] /= sum;
-            }
-            for (int j = i + 1; j < seq_len; ++j) {
-                output.data[offset + j] = 0.0f; // Máscara Causal (Futuro = 0)
-            }
-        }
+    for (int j = 0; j < D; ++j) {
+      float x_hat = (x[i * D + j] - m) * rs;
+      float d_xhat = dout[i * D + j] * gamma[j];
+      dx[i * D + j] = (rs / D) * (D * d_xhat - sum_dout - x_hat * sum_dout_xhat);
     }
+  }
 }
 
-void gelu_forward(const Tensor& input, Tensor& output) {
-    size_t sz = input.total_size();
-    output.reshape(input.shape);
+void SoftmaxForward(const Tensor& input, Tensor& output) {
+  int N = input.Shape()[0];
+  int D = input.Shape()[1];
+  output.Reshape({N, D});
 
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < sz; ++i) {
-        float x = input.data[i];
-        float cube = 0.044715f * x * x * x;
-        float inner = 0.7978845608f * (x + cube); // sqrt(2 / pi)
-        output.data[i] = 0.5f * x * (1.0f + std::tanh(inner));
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < N; ++i) {
+    float max_val = input[i * D];
+    for (int j = 1; j < D; ++j) {
+      if (input[i * D + j] > max_val) max_val = input[i * D + j];
     }
-}
 
-void gelu_backward(const Tensor& dout, const Tensor& input, Tensor& dx) {
-    size_t sz = input.total_size();
-    dx.reshape(input.shape);
-
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < sz; ++i) {
-        float x = input.data[i];
-        float cube = 0.044715f * x * x * x;
-        float inner = 0.7978845608f * (x + cube);
-        float th = std::tanh(inner);
-        float d_inner = 0.7978845608f * (1.0f + 3.0f * 0.044715f * x * x);
-        float d_gelu = 0.5f * (1.0f + th) + 0.5f * x * (1.0f - th * th) * d_inner;
-        dx.data[i] = dout.data[i] * d_gelu;
+    float sum = 0.0f;
+    for (int j = 0; j < D; ++j) {
+      float e = std::exp(input[i * D + j] - max_val);
+      output[i * D + j] = e;
+      sum += e;
     }
-}
 
-void relu_forward(const Tensor& input, Tensor& output) {
-    size_t sz = input.total_size();
-    output.reshape(input.shape);
-    for (size_t i = 0; i < sz; ++i) {
-        output.data[i] = (input.data[i] > 0.0f) ? input.data[i] : 0.0f;
+    for (int j = 0; j < D; ++j) {
+      output[i * D + j] /= sum;
     }
+  }
 }
 
-void relu_backward(const Tensor& dout, const Tensor& input, Tensor& dx) {
-    size_t sz = input.total_size();
-    dx.reshape(input.shape);
-    for (size_t i = 0; i < sz; ++i) {
-        dx.data[i] = (input.data[i] > 0.0f) ? dout.data[i] : 0.0f;
+void CausalSoftmaxForward(const Tensor& input, Tensor& output, int seq_len) {
+  int B = input.Shape()[0];
+  output.Reshape({B, seq_len, seq_len});
+
+  #pragma omp parallel for schedule(static)
+  for (int b = 0; b < B; ++b) {
+    for (int i = 0; i < seq_len; ++i) {
+      int offset = (b * seq_len + i) * seq_len;
+      float max_val = input[offset];
+      for (int j = 1; j <= i; ++j) {
+        if (input[offset + j] > max_val) max_val = input[offset + j];
+      }
+
+      float sum = 0.0f;
+      for (int j = 0; j <= i; ++j) {
+        float e = std::exp(input[offset + j] - max_val);
+        output[offset + j] = e;
+        sum += e;
+      }
+
+      for (int j = 0; j <= i; ++j) {
+        output[offset + j] /= sum;
+      }
+      for (int j = i + 1; j < seq_len; ++j) {
+        output[offset + j] = 0.0f;
+      }
     }
+  }
 }
 
-void sigmoid_forward(const Tensor& input, Tensor& output) {
-    size_t sz = input.total_size();
-    output.reshape(input.shape);
-    for (size_t i = 0; i < sz; ++i) {
-        output.data[i] = 1.0f / (1.0f + std::exp(-input.data[i]));
-    }
+void GeluForward(const Tensor& input, Tensor& output) {
+  size_t sz = input.TotalSize();
+  output.Reshape(input.Shape());
+
+  #pragma omp parallel for schedule(static)
+  for (size_t i = 0; i < sz; ++i) {
+    float x = input[i];
+    float cube = 0.044715f * x * x * x;
+    float inner = 0.7978845608f * (x + cube);
+    output[i] = 0.5f * x * (1.0f + std::tanh(inner));
+  }
 }
 
-void sigmoid_backward(const Tensor& dout, const Tensor& output, Tensor& dx) {
-    size_t sz = output.total_size();
-    dx.reshape(output.shape);
-    for (size_t i = 0; i < sz; ++i) {
-        float s = output.data[i];
-        dx.data[i] = dout.data[i] * s * (1.0f - s);
-    }
+void GeluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
+  size_t sz = input.TotalSize();
+  dx.Reshape(input.Shape());
+
+  #pragma omp parallel for schedule(static)
+  for (size_t i = 0; i < sz; ++i) {
+    float x = input[i];
+    float cube = 0.044715f * x * x * x;
+    float inner = 0.7978845608f * (x + cube);
+    float th = std::tanh(inner);
+    float d_inner = 0.7978845608f * (1.0f + 3.0f * 0.044715f * x * x);
+    float d_gelu = 0.5f * (1.0f + th) + 0.5f * x * (1.0f - th * th) * d_inner;
+    dx[i] = dout[i] * d_gelu;
+  }
 }
 
-void tanh_forward(const Tensor& input, Tensor& output) {
-    size_t sz = input.total_size();
-    output.reshape(input.shape);
-    for (size_t i = 0; i < sz; ++i) {
-        output.data[i] = std::tanh(input.data[i]);
-    }
+void ReluForward(const Tensor& input, Tensor& output) {
+  size_t sz = input.TotalSize();
+  output.Reshape(input.Shape());
+  for (size_t i = 0; i < sz; ++i) {
+    output[i] = (input[i] > 0.0f) ? input[i] : 0.0f;
+  }
 }
 
-void tanh_backward(const Tensor& dout, const Tensor& output, Tensor& dx) {
-    size_t sz = output.total_size();
-    dx.reshape(output.shape);
-    for (size_t i = 0; i < sz; ++i) {
-        float th = output.data[i];
-        dx.data[i] = dout.data[i] * (1.0f - th * th);
-    }
+void ReluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
+  size_t sz = input.TotalSize();
+  dx.Reshape(input.Shape());
+  for (size_t i = 0; i < sz; ++i) {
+    dx[i] = (input[i] > 0.0f) ? dout[i] : 0.0f;
+  }
 }
 
-void elementwise_add(const Tensor& a, const Tensor& b, Tensor& out) {
-    size_t sz = a.total_size();
-    out.reshape(a.shape);
-    for (size_t i = 0; i < sz; ++i) out.data[i] = a.data[i] + b.data[i];
+void SigmoidForward(const Tensor& input, Tensor& output) {
+  size_t sz = input.TotalSize();
+  output.Reshape(input.Shape());
+  for (size_t i = 0; i < sz; ++i) {
+    output[i] = 1.0f / (1.0f + std::exp(-input[i]));
+  }
 }
 
-void elementwise_sub(const Tensor& a, const Tensor& b, Tensor& out) {
-    size_t sz = a.total_size();
-    out.reshape(a.shape);
-    for (size_t i = 0; i < sz; ++i) out.data[i] = a.data[i] - b.data[i];
+void SigmoidBackward(const Tensor& dout, const Tensor& output, Tensor& dx) {
+  size_t sz = output.TotalSize();
+  dx.Reshape(output.Shape());
+  for (size_t i = 0; i < sz; ++i) {
+    float s = output[i];
+    dx[i] = dout[i] * s * (1.0f - s);
+  }
 }
 
-void elementwise_mul(const Tensor& a, const Tensor& b, Tensor& out) {
-    size_t sz = a.total_size();
-    out.reshape(a.shape);
-    for (size_t i = 0; i < sz; ++i) out.data[i] = a.data[i] * b.data[i];
+void TanhForward(const Tensor& input, Tensor& output) {
+  size_t sz = input.TotalSize();
+  output.Reshape(input.Shape());
+  for (size_t i = 0; i < sz; ++i) {
+    output[i] = std::tanh(input[i]);
+  }
 }
 
-} // namespace ns
+void TanhBackward(const Tensor& dout, const Tensor& output, Tensor& dx) {
+  size_t sz = output.TotalSize();
+  dx.Reshape(output.Shape());
+  for (size_t i = 0; i < sz; ++i) {
+    float th = output[i];
+    dx[i] = dout[i] * (1.0f - th * th);
+  }
+}
+
+void ElementwiseAdd(const Tensor& a, const Tensor& b, Tensor& out) {
+  size_t sz = a.TotalSize();
+  out.Reshape(a.Shape());
+  for (size_t i = 0; i < sz; ++i) out[i] = a[i] + b[i];
+}
+
+void ElementwiseSub(const Tensor& a, const Tensor& b, Tensor& out) {
+  size_t sz = a.TotalSize();
+  out.Reshape(a.Shape());
+  for (size_t i = 0; i < sz; ++i) out[i] = a[i] - b[i];
+}
+
+void ElementwiseMul(const Tensor& a, const Tensor& b, Tensor& out) {
+  size_t sz = a.TotalSize();
+  out.Reshape(a.Shape());
+  for (size_t i = 0; i < sz; ++i) out[i] = a[i] * b[i];
+}
+
+}  // namespace neuralsuite

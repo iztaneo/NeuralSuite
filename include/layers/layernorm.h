@@ -1,57 +1,66 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file layernorm.h
- * @brief Capa de Normalización de Capa (LayerNorm) para Transformers.
+ * @brief Layer Normalization Layer following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_LAYERNORM_H
-#define NEURAL_SUITE_LAYERNORM_H
+#ifndef NEURAL_SUITE_INCLUDE_LAYERS_LAYERNORM_H_
+#define NEURAL_SUITE_INCLUDE_LAYERS_LAYERNORM_H_
 
+#include <vector>
 #include "../layer.h"
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class LayerNormLayer
- * @brief Aplica Pre-LN Normalización en la dimensión interna de los vectores de atención.
+ * @brief Pre-LN Layer Normalization.
  */
 class LayerNormLayer : public Layer {
-public:
-    int normalized_shape;  ///< Dimensión d_model a normalizar
-    float eps;             ///< Epsilon para estabilidad numérica (1e-5)
-    Tensor gamma;          ///< Escala entrenable [normalized_shape]
-    Tensor beta;           ///< Desplazamiento entrenable [normalized_shape]
-    Tensor dgamma;         ///< Gradiente acumulado de gamma
-    Tensor dbeta;          ///< Gradiente acumulado de beta
+ public:
+  explicit LayerNormLayer(int shape, float epsilon = 1e-5f)
+      : normalized_shape_(shape),
+        eps_(epsilon),
+        gamma_({shape}),
+        beta_({shape}),
+        dgamma_({shape}),
+        dbeta_({shape}) {
+    gamma_.Ones();
+    beta_.Zeros();
+  }
 
-    Tensor last_input;
-    Tensor mean_cache;
-    Tensor rstd_cache;
+  Tensor Forward(const Tensor& input) override {
+    last_input_ = input;
+    Tensor output(input.Shape());
+    LayerNormForward(input, gamma_, beta_, output, mean_cache_, rstd_cache_, eps_);
+    return output;
+  }
 
-    LayerNormLayer(int shape, float epsilon = 1e-5f)
-        : normalized_shape(shape), eps(epsilon),
-          gamma({shape}), beta({shape}),
-          dgamma({shape}), dbeta({shape}) {
-        gamma.ones();
-        beta.zeros();
-    }
+  Tensor Backward(const Tensor& dout) override {
+    Tensor dx(last_input_.Shape());
+    LayerNormBackward(dout, last_input_, gamma_, mean_cache_, rstd_cache_, dx, dgamma_, dbeta_);
+    return dx;
+  }
 
-    Tensor forward(const Tensor& input) override {
-        last_input = input;
-        Tensor output(input.shape);
-        layernorm_forward(input, gamma, beta, output, mean_cache, rstd_cache, eps);
-        return output;
-    }
+  std::vector<Tensor*> GetParameters() override { return {&gamma_, &beta_}; }
+  std::vector<Tensor*> GetGradients() override { return {&dgamma_, &dbeta_}; }
 
-    Tensor backward(const Tensor& dout) override {
-        Tensor dx(last_input.shape);
-        layernorm_backward(dout, last_input, gamma, mean_cache, rstd_cache, dx, dgamma, dbeta);
-        return dx;
-    }
+ private:
+  int normalized_shape_;
+  float eps_;
 
-    std::vector<Tensor*> get_parameters() override { return {&gamma, &beta}; }
-    std::vector<Tensor*> get_gradients() override { return {&dgamma, &dbeta}; }
+  Tensor gamma_;
+  Tensor beta_;
+  Tensor dgamma_;
+  Tensor dbeta_;
+
+  Tensor last_input_;
+  Tensor mean_cache_;
+  Tensor rstd_cache_;
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_LAYERNORM_H
+#endif  // NEURAL_SUITE_INCLUDE_LAYERS_LAYERNORM_H_

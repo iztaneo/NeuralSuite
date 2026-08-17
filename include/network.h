@@ -1,69 +1,68 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file network.h
- * @brief Contenedor Secuencial (Sequential Network Container) para apilar capas modularmente.
+ * @brief Sequential Layer Container following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_NETWORK_H
-#define NEURAL_SUITE_NETWORK_H
+#ifndef NEURAL_SUITE_INCLUDE_NETWORK_H_
+#define NEURAL_SUITE_INCLUDE_NETWORK_H_
 
-#include "layer.h"
 #include <memory>
 #include <vector>
+#include "layer.h"
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class Sequential
- * @brief Grafo secuencial de capas orientadas a objetos.
+ * @brief Sequential Container for chaining layers.
  */
 class Sequential {
-public:
-    std::vector<std::shared_ptr<Layer>> layers; ///< Lista ordenada de capas
+ public:
+  void Add(std::shared_ptr<Layer> layer) {
+    layers_.push_back(layer);
+  }
 
-    /** @brief Agrega una nueva capa al final del flujo secuencial */
-    void add(std::shared_ptr<Layer> layer) {
-        layers.push_back(layer);
+  Tensor Forward(const Tensor& input) {
+    Tensor current = input;
+    for (auto& layer : layers_) {
+      current = layer->Forward(current);
     }
+    return current;
+  }
 
-    /** @brief Paso hacia adelante secuencial: pasa la salida de la capa k como entrada de la capa k+1 */
-    Tensor forward(const Tensor& input) {
-        Tensor current = input;
-        for (auto& layer : layers) {
-            current = layer->forward(current);
-        }
-        return current;
+  Tensor Backward(const Tensor& grad_output) {
+    Tensor current_grad = grad_output;
+    for (auto it = layers_.rbegin(); it != layers_.rend(); ++it) {
+      current_grad = (*it)->Backward(current_grad);
     }
+    return current_grad;
+  }
 
-    /** @brief Paso hacia atrás secuencial: propagación del gradiente en orden inverso (de la capa N a la capa 1) */
-    Tensor backward(const Tensor& grad_output) {
-        Tensor current_grad = grad_output;
-        for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
-            current_grad = (*it)->backward(current_grad);
-        }
-        return current_grad;
+  std::vector<Tensor*> GetParameters() {
+    std::vector<Tensor*> all_params;
+    for (auto& layer : layers_) {
+      auto p = layer->GetParameters();
+      all_params.insert(all_params.end(), p.begin(), p.end());
     }
+    return all_params;
+  }
 
-    /** @brief Obtiene la lista completa de parámetros de todas las capas apiladas */
-    std::vector<Tensor*> get_parameters() {
-        std::vector<Tensor*> all_params;
-        for (auto& layer : layers) {
-            auto p = layer->get_parameters();
-            all_params.insert(all_params.end(), p.begin(), p.end());
-        }
-        return all_params;
+  std::vector<Tensor*> GetGradients() {
+    std::vector<Tensor*> all_grads;
+    for (auto& layer : layers_) {
+      auto g = layer->GetGradients();
+      all_grads.insert(all_grads.end(), g.begin(), g.end());
     }
+    return all_grads;
+  }
 
-    /** @brief Obtiene la lista completa de gradientes de todas las capas apiladas */
-    std::vector<Tensor*> get_gradients() {
-        std::vector<Tensor*> all_grads;
-        for (auto& layer : layers) {
-            auto g = layer->get_gradients();
-            all_grads.insert(all_grads.end(), g.begin(), g.end());
-        }
-        return all_grads;
-    }
+ private:
+  std::vector<std::shared_ptr<Layer>> layers_;
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_NETWORK_H
+#endif  // NEURAL_SUITE_INCLUDE_NETWORK_H_

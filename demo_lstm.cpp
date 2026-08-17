@@ -1,65 +1,70 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file demo_lstm.cpp
- * @brief Demostración de Entrenamiento de Red Recurrente (LSTM) en C++ puro.
+ * @brief LSTM Recurrent Network Demo following Google C++ Style Guide.
  */
 
-#include "tensor.h"
-#include "layers/lstm.h"
+#include <iostream>
+#include <vector>
 #include "layers/linear.h"
+#include "layers/lstm.h"
 #include "losses.h"
 #include "optimizers.h"
-#include <iostream>
+#include "tensor.h"
+
+using namespace neuralsuite;
 
 int main() {
-    std::cout << "============================================================\n" << std::flush;
-    std::cout << "🔄 Demostración 3: Red Recurrente (LSTM) en C++\n" << std::flush;
-    std::cout << "============================================================\n" << std::flush;
+  std::cout << "============================================================\n" << std::flush;
+  std::cout << "🔄 Demostración 3: Red Recurrente (LSTM Google Style)\n" << std::flush;
+  std::cout << "============================================================\n" << std::flush;
 
-    // Entrada: Secuencia de 5 pasos temporales, batch=1, input_dim=4
-    ns::Tensor X({5, 1, 4});
-    X.random_normal(0.0f, 1.0f);
+  Tensor X({5, 1, 4});
+  X.RandomNormal(0.0f, 1.0f);
 
-    ns::Tensor Y({5, 1, 2});
-    Y.zeros();
+  Tensor Y({5, 1, 2});
+  Y.Zeros();
 
-    ns::LSTM lstm(4, 8);
-    ns::Linear fc(8, 2);
+  LSTM lstm(4, 8);
+  Linear fc(8, 2);
 
-    ns::MSELoss criterion;
+  MSELoss criterion;
 
-    std::vector<ns::Tensor*> params, grads;
-    for (auto p : lstm.get_parameters()) params.push_back(p);
-    for (auto p : fc.get_parameters()) params.push_back(p);
-    for (auto g : lstm.get_gradients()) grads.push_back(g);
-    for (auto g : fc.get_gradients()) grads.push_back(g);
+  std::vector<Tensor*> params, grads;
+  for (auto p : lstm.GetParameters()) params.push_back(p);
+  for (auto p : fc.GetParameters()) params.push_back(p);
+  for (auto g : lstm.GetGradients()) grads.push_back(g);
+  for (auto g : fc.GetGradients()) grads.push_back(g);
 
-    ns::AdamW optimizer(params, grads, 0.01f);
+  AdamW optimizer(params, grads, 0.01f);
 
-    std::cout << "🏋️ Entrenando LSTM durante 10 iteraciones...\n" << std::flush;
-    for (int epoch = 1; epoch <= 10; ++epoch) {
-        optimizer.zero_grad();
+  std::cout << "🏋️ Entrenando LSTM durante 10 iteraciones...\n" << std::flush;
+  for (int epoch = 1; epoch <= 10; ++epoch) {
+    optimizer.ZeroGrad();
 
-        ns::Tensor h_lstm = lstm.forward(X);
-        
-        ns::Tensor h_2d({5 * 1, 8});
-        std::memcpy(h_2d.data, h_lstm.data, h_lstm.total_size() * sizeof(float));
+    Tensor h_lstm = lstm.Forward(X);
 
-        ns::Tensor logits_2d = fc.forward(h_2d);
+    Tensor h_2d({5 * 1, 8});
+    std::memcpy(h_2d.Data(), h_lstm.Data(), h_lstm.TotalSize() * sizeof(float));
 
-        float loss = criterion.forward(logits_2d, Y);
+    Tensor logits_2d = fc.Forward(h_2d);
 
-        ns::Tensor dlogits = criterion.backward();
-        ns::Tensor dh_2d = fc.backward(dlogits);
+    float loss = criterion.Forward(logits_2d, Y);
 
-        ns::Tensor dh_lstm(h_lstm.shape);
-        std::memcpy(dh_lstm.data, dh_2d.data, dh_2d.total_size() * sizeof(float));
+    Tensor dlogits = criterion.Backward();
+    Tensor dh_2d = fc.Backward(dlogits);
 
-        lstm.backward(dh_lstm);
-        optimizer.step();
+    Tensor dh_lstm(h_lstm.Shape());
+    std::memcpy(dh_lstm.Data(), dh_2d.Data(), dh_2d.TotalSize() * sizeof(float));
 
-        std::cout << "Época " << epoch << " | Loss Recurrente LSTM: " << loss << "\n" << std::flush;
-    }
+    lstm.Backward(dh_lstm);
+    optimizer.Step();
 
-    std::cout << "✅ ¡Entrenamiento LSTM completado exitosamente en C++!\n" << std::flush;
-    return 0;
+    std::cout << "Época " << epoch << " | Loss Recurrente LSTM: " << loss << "\n" << std::flush;
+  }
+
+  std::cout << "✅ ¡Entrenamiento LSTM completado exitosamente en C++!\n" << std::flush;
+  return 0;
 }

@@ -1,52 +1,48 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file tokenizer.h
- * @brief Tokenizador de caracteres nativo en C++ puro para el LLM.
+ * @brief Pure C++ Character Tokenizer following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_TOKENIZER_H
-#define NEURAL_SUITE_TOKENIZER_H
+#ifndef NEURAL_SUITE_INCLUDE_TOKENIZER_H_
+#define NEURAL_SUITE_INCLUDE_TOKENIZER_H_
 
-#include <string>
-#include <vector>
-#include <unordered_map>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
-#include <algorithm>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class CharTokenizer
- * @brief Transforma cadenas de texto en listas de enteros (tokens) y viceversa a nivel de caracteres.
+ * @brief Character-level Tokenizer for LLM Training and Inference.
  */
 class CharTokenizer {
-public:
-    std::vector<char> chars;                     ///< Alfabeto ordenado de caracteres únicos
-    std::unordered_map<char, int> stoi;          ///< Mapeo String to ID (carácter -> entero)
-    std::unordered_map<int, char> itos;          ///< Mapeo ID to String (entero -> carácter)
-    int vocab_size = 0;                          ///< Tamaño del vocabulario V
+ public:
+  CharTokenizer() = default;
+  explicit CharTokenizer(const std::string& text);
 
-    CharTokenizer() = default;
+  void BuildVocab(const std::string& text);
+  [[nodiscard]] std::vector<int> Encode(const std::string& text) const;
+  [[nodiscard]] std::string Decode(const std::vector<int>& tokens) const;
 
-    /** @brief Construye el vocabulario a partir de un texto fuente de entrenamiento */
-    CharTokenizer(const std::string& text);
+  bool Save(const std::string& filepath) const;
+  bool Load(const std::string& filepath);
 
-    /** @brief Extrae todos los caracteres únicos ordenados y crea las tablas stoi e itos */
-    void build_vocab(const std::string& text);
+  [[nodiscard]] int VocabSize() const { return vocab_size_; }
 
-    /** @brief Codifica un string en un vector de enteros (tokens) */
-    std::vector<int> encode(const std::string& text) const;
-
-    /** @brief Decodifica un vector de enteros en la cadena de texto original */
-    std::string decode(const std::vector<int>& tokens) const;
-
-    /** @brief Guarda el vocabulario codificado en un archivo de texto en disco */
-    bool save(const std::string& filepath) const;
-
-    /** @brief Carga un vocabulario persistido previamente desde disco */
-    bool load(const std::string& filepath);
+ private:
+  std::vector<char> chars_;
+  std::unordered_map<char, int> stoi_;
+  std::unordered_map<int, char> itos_;
+  int vocab_size_ = 0;
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_TOKENIZER_H
+#endif  // NEURAL_SUITE_INCLUDE_TOKENIZER_H_

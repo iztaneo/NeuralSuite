@@ -1,49 +1,48 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file layer.h
- * @brief Clase Base Abstracta Layer para la arquitectura modular de NeuralSuite.
- * @details Define el contrato polimórfico C++ que deben cumplir todas las capas (Linear, Conv2D, LSTM, Attention).
+ * @brief Abstract Base Class for Neural Network Layers following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_LAYER_H
-#define NEURAL_SUITE_LAYER_H
+#ifndef NEURAL_SUITE_INCLUDE_LAYER_H_
+#define NEURAL_SUITE_INCLUDE_LAYER_H_
 
+#include <vector>
 #include "tensor.h"
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class Layer
- * @brief Interfaz abstracta orientada a objetos para todas las capas de redes neuronales.
+ * @brief Abstract Interface for Neural Network Layers (Linear, Conv2D, LSTM, Attention).
  */
 class Layer {
-public:
-    virtual ~Layer() = default;
+ public:
+  virtual ~Layer() = default;
 
-    /**
-     * @brief Paso hacia adelante (Forward Pass)
-     * @param input Tensor de entrada a la capa
-     * @return Tensor resultado de la transformación de la capa
-     */
-    virtual Tensor forward(const Tensor& input) = 0;
+  /**
+   * @brief Forward pass transformation
+   */
+  virtual Tensor Forward(const Tensor& input) = 0;
 
-    /**
-     * @brief Paso hacia atrás (Backward Pass) para propagación de gradientes
-     * @param grad_output Derivada parcial dL/dY proveniente de la capa siguiente
-     * @return Derivada parcial dL/dX para propagar a la capa anterior
-     */
-    virtual Tensor backward(const Tensor& grad_output) = 0;
+  /**
+   * @brief Backward pass gradient propagation
+   */
+  virtual Tensor Backward(const Tensor& grad_output) = 0;
 
-    /**
-     * @brief Retorna punteros a los tensores de parámetros entrenables (pesos W, sesgos b)
-     */
-    virtual std::vector<Tensor*> get_parameters() { return {}; }
+  /**
+   * @brief Returns pointers to trainable parameter tensors
+   */
+  virtual std::vector<Tensor*> GetParameters() { return {}; }
 
-    /**
-     * @brief Retorna punteros a los tensores de gradientes asociados (dW, db)
-     */
-    virtual std::vector<Tensor*> get_gradients() { return {}; }
+  /**
+   * @brief Returns pointers to gradient tensors
+   */
+  virtual std::vector<Tensor*> GetGradients() { return {}; }
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_LAYER_H
+#endif  // NEURAL_SUITE_INCLUDE_LAYER_H_

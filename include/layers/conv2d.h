@@ -1,136 +1,137 @@
+// Copyright 2026 NeuralSuite Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
+
 /**
  * @file conv2d.h
- * @brief Capa Convolucional 2D para procesamiento de imágenes y visión por computador.
+ * @brief 2D Convolutional Layer following Google C++ Style Guide.
  */
 
-#ifndef NEURAL_SUITE_CONV2D_H
-#define NEURAL_SUITE_CONV2D_H
+#ifndef NEURAL_SUITE_INCLUDE_LAYERS_CONV2D_H_
+#define NEURAL_SUITE_INCLUDE_LAYERS_CONV2D_H_
 
+#include <vector>
 #include "../layer.h"
 
-namespace ns {
+namespace neuralsuite {
 
 /**
  * @class Conv2D
- * @brief Operación Convolucional bidimensional.
- * @details Desliza filtros de dimensión (out_channels, in_channels, k, k) sobre tensores 4D [Batch, Channels, Height, Width].
+ * @brief 2D Convolution Layer for Image Processing.
  */
 class Conv2D : public Layer {
-public:
-    int in_channels;   ///< Número de canales de entrada
-    int out_channels;  ///< Número de mapas de características de salida (filtros)
-    int kernel_size;   ///< Tamaño del filtro convolucional k x k
-    int stride;        ///< Paso de deslizamiento del filtro
-    int padding;       ///< Relleno de ceros en los bordes de la imagen
+ public:
+  Conv2D(int in_ch, int out_ch, int k_size, int str = 1, int pad = 0)
+      : in_channels_(in_ch),
+        out_channels_(out_ch),
+        kernel_size_(k_size),
+        stride_(str),
+        padding_(pad),
+        weight_({out_ch, in_ch, k_size, k_size}),
+        bias_({out_ch}),
+        dweight_({out_ch, in_ch, k_size, k_size}),
+        dbias_({out_ch}) {
+    weight_.XavierInit(in_ch * k_size * k_size, out_ch * k_size * k_size);
+    bias_.Zeros();
+  }
 
-    Tensor weight;     ///< Pesos de los filtros [out_channels, in_channels, k, k]
-    Tensor bias;       ///< Vector de sesgos [out_channels]
-    Tensor dweight;    ///< Acumulador de gradientes de filtros
-    Tensor dbias;      ///< Acumulador de gradientes de sesgos
-    Tensor last_input; ///< Caché del tensor de entrada
+  Tensor Forward(const Tensor& input) override {
+    last_input_ = input;
+    int batch_size = input.Shape()[0];
+    int height = input.Shape()[2];
+    int width = input.Shape()[3];
 
-    /**
-     * @brief Constructor de la Capa Convolucional 2D.
-     */
-    Conv2D(int in_ch, int out_ch, int k_size, int str = 1, int pad = 0)
-        : in_channels(in_ch), out_channels(out_ch), kernel_size(k_size), stride(str), padding(pad),
-          weight({out_ch, in_ch, k_size, k_size}), bias({out_ch}),
-          dweight({out_ch, in_ch, k_size, k_size}), dbias({out_ch}) {
-        weight.xavier_init(in_ch * k_size * k_size, out_ch * k_size * k_size);
-        bias.zeros();
-    }
+    int out_h = (height + 2 * padding_ - kernel_size_) / stride_ + 1;
+    int out_w = (width + 2 * padding_ - kernel_size_) / stride_ + 1;
 
-    /**
-     * @brief Computa la convolución 2D: Y = X * K + b
-     */
-    Tensor forward(const Tensor& input) override {
-        last_input = input;
-        int B = input.shape[0];
-        int H = input.shape[2];
-        int W = input.shape[3];
+    Tensor output({batch_size, out_channels_, out_h, out_w});
 
-        int out_h = (H + 2 * padding - kernel_size) / stride + 1;
-        int out_w = (W + 2 * padding - kernel_size) / stride + 1;
-
-        Tensor output({B, out_channels, out_h, out_w});
-
-        for (int b = 0; b < B; ++b) {
-            for (int oc = 0; oc < out_channels; ++oc) {
-                for (int oh = 0; oh < out_h; ++oh) {
-                    for (int ow = 0; ow < out_w; ++ow) {
-                        float val = bias.data[oc];
-                        for (int ic = 0; ic < in_channels; ++ic) {
-                            for (int kh = 0; kh < kernel_size; ++kh) {
-                                for (int kw = 0; kw < kernel_size; ++kw) {
-                                    int ih = oh * stride + kh - padding;
-                                    int iw = ow * stride + kw - padding;
-                                    if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
-                                        size_t in_idx = ((b * in_channels + ic) * H + ih) * W + iw;
-                                        size_t w_idx = ((oc * in_channels + ic) * kernel_size + kh) * kernel_size + kw;
-                                        val += input.data[in_idx] * weight.data[w_idx];
-                                    }
-                                }
-                            }
-                        }
-                        size_t out_idx = ((b * out_channels + oc) * out_h + oh) * out_w + ow;
-                        output.data[out_idx] = val;
-                    }
+    for (int b = 0; b < batch_size; ++b) {
+      for (int oc = 0; oc < out_channels_; ++oc) {
+        for (int oh = 0; oh < out_h; ++oh) {
+          for (int ow = 0; ow < out_w; ++ow) {
+            float val = bias_[oc];
+            for (int ic = 0; ic < in_channels_; ++ic) {
+              for (int kh = 0; kh < kernel_size_; ++kh) {
+                for (int kw = 0; kw < kernel_size_; ++kw) {
+                  int ih = oh * stride_ + kh - padding_;
+                  int iw = ow * stride_ + kw - padding_;
+                  if (ih >= 0 && ih < height && iw >= 0 && iw < width) {
+                    size_t in_idx = ((b * in_channels_ + ic) * height + ih) * width + iw;
+                    size_t w_idx = ((oc * in_channels_ + ic) * kernel_size_ + kh) * kernel_size_ + kw;
+                    val += input[in_idx] * weight_[w_idx];
+                  }
                 }
+              }
             }
+            size_t out_idx = ((b * out_channels_ + oc) * out_h + oh) * out_w + ow;
+            output[out_idx] = val;
+          }
         }
-        return output;
+      }
     }
+    return output;
+  }
 
-    /**
-     * @brief Retropropagación de gradientes en Convolución 2D
-     */
-    Tensor backward(const Tensor& dout) override {
-        int B = last_input.shape[0];
-        int H = last_input.shape[2];
-        int W = last_input.shape[3];
+  Tensor Backward(const Tensor& dout) override {
+    int batch_size = last_input_.Shape()[0];
+    int height = last_input_.Shape()[2];
+    int width = last_input_.Shape()[3];
 
-        int out_h = dout.shape[2];
-        int out_w = dout.shape[3];
+    int out_h = dout.Shape()[2];
+    int out_w = dout.Shape()[3];
 
-        Tensor dx({B, in_channels, H, W});
-        dx.zeros();
-        dweight.zeros();
-        dbias.zeros();
+    Tensor dx({batch_size, in_channels_, height, width});
+    dx.Zeros();
+    dweight_.Zeros();
+    dbias_.Zeros();
 
-        for (int b = 0; b < B; ++b) {
-            for (int oc = 0; oc < out_channels; ++oc) {
-                for (int oh = 0; oh < out_h; ++oh) {
-                    for (int ow = 0; ow < out_w; ++ow) {
-                        size_t dout_idx = ((b * out_channels + oc) * out_h + oh) * out_w + ow;
-                        float d = dout.data[dout_idx];
-                        dbias.data[oc] += d;
+    for (int b = 0; b < batch_size; ++b) {
+      for (int oc = 0; oc < out_channels_; ++oc) {
+        for (int oh = 0; oh < out_h; ++oh) {
+          for (int ow = 0; ow < out_w; ++ow) {
+            size_t dout_idx = ((b * out_channels_ + oc) * out_h + oh) * out_w + ow;
+            float d = dout[dout_idx];
+            dbias_[oc] += d;
 
-                        for (int ic = 0; ic < in_channels; ++ic) {
-                            for (int kh = 0; kh < kernel_size; ++kh) {
-                                for (int kw = 0; kw < kernel_size; ++kw) {
-                                    int ih = oh * stride + kh - padding;
-                                    int iw = ow * stride + kw - padding;
-                                    if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
-                                        size_t in_idx = ((b * in_channels + ic) * H + ih) * W + iw;
-                                        size_t w_idx = ((oc * in_channels + ic) * kernel_size + kh) * kernel_size + kw;
-                                        
-                                        dweight.data[w_idx] += d * last_input.data[in_idx];
-                                        dx.data[in_idx] += d * weight.data[w_idx];
-                                    }
-                                }
-                            }
-                        }
-                    }
+            for (int ic = 0; ic < in_channels_; ++ic) {
+              for (int kh = 0; kh < kernel_size_; ++kh) {
+                for (int kw = 0; kw < kernel_size_; ++kw) {
+                  int ih = oh * stride_ + kh - padding_;
+                  int iw = ow * stride_ + kw - padding_;
+                  if (ih >= 0 && ih < height && iw >= 0 && iw < width) {
+                    size_t in_idx = ((b * in_channels_ + ic) * height + ih) * width + iw;
+                    size_t w_idx = ((oc * in_channels_ + ic) * kernel_size_ + kh) * kernel_size_ + kw;
+
+                    dweight_[w_idx] += d * last_input_[in_idx];
+                    dx[in_idx] += d * weight_[w_idx];
+                  }
                 }
+              }
             }
+          }
         }
-        return dx;
+      }
     }
+    return dx;
+  }
 
-    std::vector<Tensor*> get_parameters() override { return {&weight, &bias}; }
-    std::vector<Tensor*> get_gradients() override { return {&dweight, &dbias}; }
+  std::vector<Tensor*> GetParameters() override { return {&weight_, &bias_}; }
+  std::vector<Tensor*> GetGradients() override { return {&dweight_, &dbias_}; }
+
+ private:
+  int in_channels_;
+  int out_channels_;
+  int kernel_size_;
+  int stride_;
+  int padding_;
+
+  Tensor weight_;
+  Tensor bias_;
+  Tensor dweight_;
+  Tensor dbias_;
+  Tensor last_input_;
 };
 
-} // namespace ns
+}  // namespace neuralsuite
 
-#endif // NEURAL_SUITE_CONV2D_H
+#endif  // NEURAL_SUITE_INCLUDE_LAYERS_CONV2D_H_
