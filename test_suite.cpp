@@ -704,6 +704,147 @@ void TestGradientCheckLosses() {
             << "; MSE: " << n_mse << " elementos, " << worst_mse << ")\n" << std::flush;
 }
 
+/**
+ * @brief Gradientes de MaxPool2D, ResidualBlock y GraphConv.
+ *
+ * Estas capas seleccionan: ReLU y el maximo del pooling tienen derivada
+ * discontinua. Eso invierte el criterio para elegir el paso respecto de las
+ * pruebas anteriores. En una perdida suave conviene un paso grande, porque el
+ * error lo domina la cancelacion en float32; aqui conviene uno pequeno, porque
+ * un paso grande hace que la perturbacion cruce el codo y los dos lados de la
+ * diferencia central queden en regimenes distintos.
+ *
+ * Medido sobre GraphConv: eps=1e-3 da 1.8e-06 de error, y eps=5e-3 lo dispara a
+ * 1.0, que es lo que se observa cuando una unidad se enciende en un lado de la
+ * diferencia y no en el otro.
+ */
+void TestGradientCheckRemainingLayers() {
+  std::cout << "🧪 [Test 17] Gradientes de MaxPool2D, Residual y GraphConv... " << std::flush;
+
+  const float eps = 1e-3f;
+
+  // Comprueba dx recorriendo la entrada, para capas cuyo gradiente de entrada
+  // es lo unico o lo primero que hay que validar.
+  auto check_dx = [&](Tensor& x, const Tensor& dx, const std::function<double()>& loss_of,
+                      const char* label) {
+    double worst = 0.0;
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      const float orig = x[i];
+      x[i] = orig + eps; const double lp = loss_of();
+      x[i] = orig - eps; const double lm = loss_of();
+      x[i] = orig;
+      const double numeric = (lp - lm) / (2.0 * eps);
+      if (std::max(std::abs(numeric), std::abs(static_cast<double>(dx[i]))) < kNegligibleGrad) continue;
+      worst = std::max(worst, RelativeError(numeric, dx[i]));
+    }
+    Check(worst < 1e-2, std::string("el peor error relativo de dx de ") + label + " es " +
+                            std::to_string(worst));
+    return worst;
+  };
+
+  double worst_pool = 0.0, worst_res = 0.0, worst_gcn = 0.0;
+
+  // --- MaxPool2D: sin parametros, solo enruta el gradiente al maximo. ---
+  {
+    MaxPool2D pool(2, 2);
+    Tensor x({1, 2, 4, 4});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.7f * std::sin(1.9f * static_cast<float>(i)) + 0.15f;
+    }
+    Tensor probe = pool.Forward(x);
+    Tensor w(probe.Shape());
+    for (size_t i = 0; i < w.TotalSize(); ++i) {
+      w[i] = 0.6f + 0.4f * std::cos(0.7f * static_cast<float>(i));
+    }
+    auto loss_of = [&]() {
+      Tensor y = pool.Forward(x);
+      double s = 0.0;
+      for (size_t i = 0; i < y.TotalSize(); ++i) s += static_cast<double>(y[i]) * w[i];
+      return s;
+    };
+    loss_of();
+    Tensor dx = pool.Backward(w);
+    worst_pool = check_dx(x, dx, loss_of, "MaxPool2D");
+  }
+
+  // --- ResidualBlock: y = ReLU(f(x) + x); el atajo tambien lleva gradiente. ---
+  {
+    auto inner = std::make_shared<Linear>(6, 6);
+    ResidualBlock block(inner);
+    Tensor x({3, 6});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.5f * std::sin(1.3f * static_cast<float>(i)) + 0.6f;
+    }
+    Tensor w({3, 6});
+    for (size_t i = 0; i < w.TotalSize(); ++i) {
+      w[i] = 0.5f + 0.5f * std::cos(0.9f * static_cast<float>(i));
+    }
+    auto loss_of = [&]() {
+      Tensor y = block.Forward(x);
+      double s = 0.0;
+      for (size_t i = 0; i < y.TotalSize(); ++i) s += static_cast<double>(y[i]) * w[i];
+      return s;
+    };
+    loss_of();
+    Tensor dx = block.Backward(w);
+    worst_res = check_dx(x, dx, loss_of, "ResidualBlock");
+
+    int checked = 0, skipped = 0;
+    const double wp = MaxGradError(block.GetParameters(), block.GetGradients(), loss_of,
+                                   eps, 8, &checked, &skipped);
+    Check(wp < 1e-2, "el peor error relativo de los parametros de ResidualBlock es " +
+                         std::to_string(wp));
+    worst_res = std::max(worst_res, wp);
+  }
+
+  // --- GraphConv: H_out = ReLU(A · H · W). ---
+  {
+    GraphConv gcn(4, 3);
+    const int N = 4;
+    Tensor x({N, 4});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.5f * std::sin(1.1f * static_cast<float>(i)) + 0.55f;
+    }
+    // La adyacencia debe cumplir dos cosas. No ser la identidad, porque
+    // entonces la capa degeneraria en una densa y la agregacion no quedaria
+    // comprobada. Y no ser simetrica: el backward multiplica por la transpuesta
+    // de la adyacencia, y con una matriz simetrica omitir esa transposicion no
+    // cambia el resultado, de modo que el error pasaria inadvertido. Aqui el
+    // grafo es dirigido, con pesos distintos hacia delante y hacia atras.
+    Tensor adj({N, N});
+    adj.Zeros();
+    for (int i = 0; i < N; ++i) {
+      adj[i * N + i] = 0.5f;
+      if (i + 1 < N) adj[i * N + (i + 1)] = 0.30f;   // arco i -> i+1
+      if (i > 0) adj[i * N + (i - 1)] = 0.10f;       // arco i -> i-1, con otro peso
+    }
+    Tensor probe = gcn.ForwardWithAdj(x, adj);
+    Tensor w(probe.Shape());
+    for (size_t i = 0; i < w.TotalSize(); ++i) {
+      w[i] = 0.5f + 0.5f * std::cos(1.7f * static_cast<float>(i));
+    }
+    auto loss_of = [&]() {
+      Tensor y = gcn.ForwardWithAdj(x, adj);
+      double s = 0.0;
+      for (size_t i = 0; i < y.TotalSize(); ++i) s += static_cast<double>(y[i]) * w[i];
+      return s;
+    };
+    loss_of();
+    Tensor dx = gcn.Backward(w);
+    worst_gcn = check_dx(x, dx, loss_of, "GraphConv");
+
+    int checked = 0, skipped = 0;
+    const double wp = MaxGradError(gcn.GetParameters(), gcn.GetGradients(), loss_of,
+                                   eps, 8, &checked, &skipped);
+    Check(wp < 1e-2, "el peor error relativo de los parametros de GraphConv es " +
+                         std::to_string(wp));
+    worst_gcn = std::max(worst_gcn, wp);
+  }
+
+  std::cout << "PASADO ✅ (pool: " << worst_pool << ", residual: " << worst_res
+            << ", gcn: " << worst_gcn << ")\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -725,6 +866,7 @@ int main() {
   TestGradientCheckLayerNorm();
   TestGradientCheckLosses();
   TestViewSemantics();
+  TestGradientCheckRemainingLayers();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

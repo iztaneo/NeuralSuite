@@ -38,8 +38,9 @@ Las operaciones diferenciables del núcleo tienen gradient check por diferencias
 finitas: `GELU`, `MultiHeadAttention`, la matriz `wte` compartida por weight
 tying, `LSTM` (parámetros y gradiente de entrada), `Conv2D` (con stride y
 padding activos), `LayerNorm` (respecto de `x`, `gamma` y `beta`),
-`CrossEntropyLoss` y `MSELoss`. Cada comprobación se validó introduciendo
-defectos deliberados para confirmar que efectivamente los detecta.
+`CrossEntropyLoss`, `MSELoss`, `MaxPool2D`, `ResidualBlock` y `GraphConv`. Cada
+comprobación se validó introduciendo defectos deliberados para confirmar que
+efectivamente los detecta.
 
 Además, el `GPTModel` y la capa `LSTM` se comparan contra la implementación de
 referencia en PyTorch ([LLMRasec](https://github.com/iztaneo/LLMRasec)) con los
@@ -61,9 +62,10 @@ compilación en Linux (GCC y Clang), macOS y Windows, en modo `Debug` y
 `Release`; la suite numérica; las demos; un entrenamiento del LLM de extremo a
 extremo; y la comparación contra PyTorch.
 
-**Sigue siendo software 0.x.** Quedan sin cobertura `MaxPool2D`, `GraphConv` y
-`Residual`, y el formato de serialización no tiene cabecera ni versión. El uso
-recomendado es educativo y de lectura del código.
+**Sigue siendo software 0.x.** El formato de serialización no tiene cabecera ni
+versión, de modo que cargar un checkpoint que no corresponde a la arquitectura
+no da error sino datos sin sentido. El uso recomendado es educativo y de lectura
+del código.
 
 ---
 
@@ -165,7 +167,7 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Pruebas**
 
-- `./test_suite`: 16 pruebas numéricas — gradient checks por diferencias finitas
+- `./test_suite`: 17 pruebas numéricas — gradient checks por diferencias finitas
   de las operaciones diferenciables (ver la sección de estado), invariantes de
   alineación entre parámetros y gradientes, semántica de `Tensor`, y validación
   de formas e índices. Devuelve un código de salida distinto de cero si alguna
