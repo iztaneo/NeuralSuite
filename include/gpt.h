@@ -112,8 +112,8 @@ class GPTModel {
     for (int i = 0; i < cfg.n_layer; ++i) {
       blocks_.push_back(std::make_shared<GPTBlock>(cfg));
     }
-    lm_head_.Weight() = wte_.Weight();
   }
+
 
   Tensor Forward(const Tensor& idx) {
     int batch_size = idx.Shape()[0];
@@ -174,6 +174,24 @@ class GPTModel {
     return g;
   }
 
+  bool SaveWeights(const std::string& filepath) {
+    std::ofstream out(filepath, std::ios::binary);
+    if (!out.is_open()) return false;
+    for (auto p : GetParameters()) {
+      out.write(reinterpret_cast<const char*>(p->Data()), p->TotalSize() * sizeof(float));
+    }
+    return true;
+  }
+
+  bool LoadWeights(const std::string& filepath) {
+    std::ifstream in(filepath, std::ios::binary);
+    if (!in.is_open()) return false;
+    for (auto p : GetParameters()) {
+      in.read(reinterpret_cast<char*>(p->Data()), p->TotalSize() * sizeof(float));
+    }
+    return true;
+  }
+
   [[nodiscard]] const GPTConfig& Config() const { return config_; }
 
  private:
@@ -186,5 +204,6 @@ class GPTModel {
 };
 
 }  // namespace neuralsuite
+
 
 #endif  // NEURAL_SUITE_INCLUDE_GPT_H_

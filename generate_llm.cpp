@@ -3,10 +3,12 @@
 
 /**
  * @file generate_llm.cpp
- * @brief Autoregressive Text Generation Demo following Google C++ Style Guide.
+ * @brief Autoregressive Text Generation Demo loading trained checkpoint model_cpp.bin.
  */
 
+#include <cmath>
 #include <iostream>
+#include <random>
 #include <string>
 #include <vector>
 #include "gpt.h"
@@ -15,15 +17,37 @@
 
 using namespace neuralsuite;
 
+int SampleToken(const float* logits, int vocab_size, float temperature = 0.8f) {
+  std::vector<float> probs(vocab_size);
+  float max_val = logits[0] / temperature;
+  for (int v = 1; v < vocab_size; ++v) {
+    if (logits[v] / temperature > max_val) max_val = logits[v] / temperature;
+  }
+
+  float sum = 0.0f;
+  for (int v = 0; v < vocab_size; ++v) {
+    probs[v] = std::exp(logits[v] / temperature - max_val);
+    sum += probs[v];
+  }
+
+  for (int v = 0; v < vocab_size; ++v) probs[v] /= sum;
+
+  static std::mt19937 rng(42);
+  std::discrete_distribution<int> dist(probs.begin(), probs.end());
+  return dist(rng);
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "🤖 Generación Autorregresiva en C++ (Google C++ Style Guide)\n" << std::flush;
+  std::cout << "🤖 GENERACIÓN DE TEXTO AUTORREGRESIVA C++ DESDE CHECKPOINT\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
 
   CharTokenizer tokenizer;
   if (!tokenizer.Load("vocab_cpp.txt")) {
     std::cout << "⚠️ No se encontró 'vocab_cpp.txt'. Usando vocabulario por defecto...\n" << std::flush;
-    tokenizer.BuildVocab("First Citizen: Speak, speak. MENENIUS: What work's, my countrymen?");
+    tokenizer.BuildVocab("First Citizen:\nBefore we proceed any further, hear me speak.");
+  } else {
+    std::cout << "🔤 Vocabulario cargado desde 'vocab_cpp.txt': " << tokenizer.VocabSize() << " caracteres.\n" << std::flush;
   }
 
   GPTConfig config;
@@ -34,12 +58,17 @@ int main() {
   config.n_embd = 32;
 
   GPTModel model(config);
+  if (model.LoadWeights("model_cpp.bin")) {
+    std::cout << "✅ Pesos del modelo C++ cargados desde 'model_cpp.bin'.\n" << std::flush;
+  } else {
+    std::cout << "⚠️ No se encontró 'model_cpp.bin'. Usando pesos no entrenados...\n" << std::flush;
+  }
 
   std::string prompt = "First Citizen:\n";
-  std::cout << "Prompt de entrada: '" << prompt << "'\n\n" << std::flush;
+  std::cout << "\nPrompt de entrada:\n" << prompt << "\n" << std::flush;
 
   std::vector<int> tokens = tokenizer.Encode(prompt);
-  int max_new_tokens = 50;
+  int max_new_tokens = 150;
 
   for (int step = 0; step < max_new_tokens; ++step) {
     int seq_len = static_cast<int>(tokens.size());
@@ -52,24 +81,16 @@ int main() {
     }
 
     Tensor logits = model.Forward(idx);
-
     int last_offset = (curr_len - 1) * config.vocab_size;
-    int best_token = 0;
-    float max_logit = logits[last_offset];
 
-    for (int v = 1; v < config.vocab_size; ++v) {
-      if (logits[last_offset + v] > max_logit) {
-        max_logit = logits[last_offset + v];
-        best_token = v;
-      }
-    }
-
-    tokens.push_back(best_token);
+    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, 0.8f);
+    tokens.push_back(sampled_token);
   }
 
   std::string generated = tokenizer.Decode(tokens);
   std::cout << "------------------------------------------------------------\n" << std::flush;
-  std::cout << "Texto Generado por el LLM C++:\n" << generated << "\n" << std::flush;
+  std::cout << "RESULTADO GENERADO POR EL LLM EN C++:\n" << std::flush;
+  std::cout << generated << "\n" << std::flush;
   std::cout << "------------------------------------------------------------\n" << std::flush;
 
   return 0;

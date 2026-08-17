@@ -3,12 +3,14 @@
 
 /**
  * @file train_llm.cpp
- * @brief Transformer LLM Training Script following Google C++ Style Guide.
+ * @brief Transformer LLM Training Script with text generation and checkpoint persistence.
  */
 
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -19,6 +21,26 @@
 #include "tokenizer.h"
 
 using namespace neuralsuite;
+
+int SampleToken(const float* logits, int vocab_size, float temperature = 0.8f) {
+  std::vector<float> probs(vocab_size);
+  float max_val = logits[0] / temperature;
+  for (int v = 1; v < vocab_size; ++v) {
+    if (logits[v] / temperature > max_val) max_val = logits[v] / temperature;
+  }
+
+  float sum = 0.0f;
+  for (int v = 0; v < vocab_size; ++v) {
+    probs[v] = std::exp(logits[v] / temperature - max_val);
+    sum += probs[v];
+  }
+
+  for (int v = 0; v < vocab_size; ++v) probs[v] /= sum;
+
+  static std::mt19937 rng(42);
+  std::discrete_distribution<int> dist(probs.begin(), probs.end());
+  return dist(rng);
+}
 
 int main(int argc, char** argv) {
   std::string data_path = "sample_data/input.txt";
@@ -63,7 +85,7 @@ int main(int argc, char** argv) {
   AdamW optimizer(params, grads, 0.001f);
   CrossEntropyLoss criterion;
 
-  int max_iters = 50;
+  int max_iters = 100;
   int batch_size = 4;
   int block_size = config.block_size;
 
@@ -91,13 +113,45 @@ int main(int argc, char** argv) {
     float loss = criterion.Forward(logits_2d, Y);
     optimizer.Step();
 
-    if (iter % 10 == 0 || iter == max_iters) {
+    if (iter % 25 == 0 || iter == max_iters) {
       auto current_time = std::chrono::high_resolution_clock::now();
       double elapsed = std::chrono::duration<double>(current_time - start_time).count();
       std::cout << "Step " << iter << "/" << max_iters << " | Loss LLM: " << loss << " | Tiempo: " << elapsed << "s\n" << std::flush;
     }
   }
 
-  std::cout << "✅ ¡Entrenamiento del LLM en C++ completado exitosamente!\n" << std::flush;
+  model.SaveWeights("model_cpp.bin");
+  std::cout << "💾 Modelo guardado exitosamente en 'model_cpp.bin'.\n" << std::flush;
+  std::cout << "✅ ¡Entrenamiento del LLM en C++ completado exitosamente!\n\n" << std::flush;
+
+  std::cout << "============================================================\n" << std::flush;
+  std::cout << "🤖 GENERACIÓN DE TEXTO EN C++ DESPUÉS DEL ENTRENAMIENTO\n" << std::flush;
+  std::cout << "============================================================\n" << std::flush;
+
+  std::string prompt = "First Citizen:\n";
+  std::vector<int> gen_tokens = tokenizer.Encode(prompt);
+  int max_new_tokens = 100;
+
+  for (int step = 0; step < max_new_tokens; ++step) {
+    int seq_len = static_cast<int>(gen_tokens.size());
+    int start_idx = (seq_len > config.block_size) ? (seq_len - config.block_size) : 0;
+    int curr_len = seq_len - start_idx;
+
+    Tensor idx({1, curr_len});
+    for (int i = 0; i < curr_len; ++i) {
+      idx[i] = static_cast<float>(gen_tokens[start_idx + i]);
+    }
+
+    Tensor logits = model.Forward(idx);
+    int last_offset = (curr_len - 1) * config.vocab_size;
+
+    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, 0.8f);
+    gen_tokens.push_back(sampled_token);
+  }
+
+  std::string generated = tokenizer.Decode(gen_tokens);
+  std::cout << generated << "\n" << std::flush;
+  std::cout << "============================================================\n" << std::flush;
+
   return 0;
 }
