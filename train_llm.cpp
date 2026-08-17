@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "artifacts.h"
 #include "gpt.h"
 #include "losses.h"
 #include "optimizers.h"
@@ -24,8 +25,9 @@ using namespace neuralsuite;
 
 struct TrainArgs {
   std::string data_path = "sample_data/input.txt";
-  std::string out_file = "model_cpp.bin";
-  std::string vocab_file = "vocab_cpp.txt";
+  // Los artefactos de entrenamiento viven bajo release/ (ver include/artifacts.h).
+  std::string out_file = ReleasePath("model_cpp.bin");
+  std::string vocab_file = ReleasePath("vocab_cpp.txt");
   int max_iters = 1000;
   int batch_size = 16;
   int block_size = 64;
@@ -47,7 +49,7 @@ void PrintUsage(const char* prog_name) {
             << "  --n_head <int>          Número de cabezas de atención (default: 4)\n"
             << "  --n_embd <int>          Dimensión del embedding (default: 64)\n"
             << "  --learning_rate <float> Tasa de aprendizaje inicial (default: 0.003)\n"
-            << "  --out_file <path>       Ruta de guardado del modelo (default: model_cpp.bin)\n"
+            << "  --out_file <path>       Ruta de guardado del modelo (default: release/model_cpp.bin)\n"
             << "  --help                  Muestra este mensaje de ayuda\n";
 }
 

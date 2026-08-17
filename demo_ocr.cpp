@@ -53,8 +53,12 @@ int main() {
   }
 
   // Guardar pesos del modelo OCR desde la biblioteca
-  ocr_model.Save("ocr_model.ns");
-  std::cout << "💾 Pesos del modelo OCR guardados en 'ocr_model.ns'.\n" << std::flush;
+  const std::string ocr_path = ReleasePath("ocr_model.ns");
+  if (ocr_model.Save(ocr_path)) {
+    std::cout << "💾 Pesos del modelo OCR guardados en '" << ocr_path << "'.\n" << std::flush;
+  } else {
+    std::cerr << "ERROR: no se pudieron guardar los pesos en '" << ocr_path << "'.\n" << std::flush;
+  }
 
   std::cout << "\n🎯 Predicción de Caracteres usando CRNNModel::DecodeWord de Biblioteca:\n" << std::flush;
   Tensor final_logits = ocr_model.Forward(images);

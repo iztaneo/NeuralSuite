@@ -79,8 +79,22 @@ int main() {
     }
   }
 
-  generator.Save("generator_model.ns");
-  discriminator.Save("discriminator_model.ns");
+  {
+    const std::string path = ReleasePath("generator_model.ns");
+    if (generator.Save(path)) {
+      std::cout << "Pesos guardados en '" << path << "'.\n" << std::flush;
+    } else {
+      std::cerr << "ERROR: no se pudieron guardar los pesos en '" << path << "'.\n" << std::flush;
+    }
+  }
+  {
+    const std::string path = ReleasePath("discriminator_model.ns");
+    if (discriminator.Save(path)) {
+      std::cout << "Pesos guardados en '" << path << "'.\n" << std::flush;
+    } else {
+      std::cerr << "ERROR: no se pudieron guardar los pesos en '" << path << "'.\n" << std::flush;
+    }
+  }
 
   std::cout << "============================================================\n" << std::flush;
   std::cout << "✅ ¡Red Generativa Adversaria (GAN) entrenada y verificada exitosamente en C++!\n" << std::flush;

@@ -70,6 +70,27 @@ cmake --build build
 
 ---
 
+## 📦 Artefactos de entrenamiento: `release/`
+
+Todo modelo entrenado (`*.ns`, `*.bin`) y todo vocabulario generado se escribe
+bajo [`release/`](release/README.md), **nunca en la raíz del repositorio**. El
+directorio se crea solo y su contenido está excluido del control de versiones:
+los checkpoints que se quieran distribuir se adjuntan a un
+[GitHub Release](https://github.com/iztaneo/NeuralSuite/releases), que es el
+mecanismo pensado para binarios y no infla el historial de git.
+
+En código la ruta se resuelve con `ReleasePath()` de `include/artifacts.h`:
+
+```cpp
+const std::string path = ReleasePath("mi_modelo.ns");  // -> "release/mi_modelo.ns"
+if (!model.Save(path)) { /* el fallo se reporta, no se ignora */ }
+```
+
+Las rutas son relativas al directorio de trabajo, así que conviene lanzar los
+ejecutables desde la raíz del repositorio.
+
+---
+
 ## 🧪 Ejecutables y Demostraciones
 
 Todos los ejecutables están registrados en `CMakeLists.txt`, que es la única

@@ -51,9 +51,13 @@ int main() {
     }
   }
 
-  // Guardar y cargar pesos desde la biblioteca
-  model.Save("sequential_model.ns");
-  std::cout << "💾 Modelo guardado y verificado en 'sequential_model.ns'.\n" << std::flush;
+  // Guardar pesos desde la biblioteca
+  const std::string model_path = ReleasePath("sequential_model.ns");
+  if (model.Save(model_path)) {
+    std::cout << "💾 Modelo guardado en '" << model_path << "'.\n" << std::flush;
+  } else {
+    std::cerr << "ERROR: no se pudo guardar el modelo en '" << model_path << "'.\n" << std::flush;
+  }
 
   std::cout << "============================================================\n" << std::flush;
   std::cout << "✅ ¡Demostración de la API de biblioteca completada exitosamente!\n" << std::flush;

@@ -19,6 +19,7 @@
 
 // Core Primitives & Base Classes
 #include "activations.h"
+#include "artifacts.h"
 #include "gpt.h"
 #include "layer.h"
 #include "losses.h"

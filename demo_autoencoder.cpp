@@ -68,8 +68,22 @@ int main() {
     }
   }
 
-  encoder.Save("encoder_model.ns");
-  decoder.Save("decoder_model.ns");
+  {
+    const std::string path = ReleasePath("encoder_model.ns");
+    if (encoder.Save(path)) {
+      std::cout << "Pesos guardados en '" << path << "'.\n" << std::flush;
+    } else {
+      std::cerr << "ERROR: no se pudieron guardar los pesos en '" << path << "'.\n" << std::flush;
+    }
+  }
+  {
+    const std::string path = ReleasePath("decoder_model.ns");
+    if (decoder.Save(path)) {
+      std::cout << "Pesos guardados en '" << path << "'.\n" << std::flush;
+    } else {
+      std::cerr << "ERROR: no se pudieron guardar los pesos en '" << path << "'.\n" << std::flush;
+    }
+  }
 
   std::cout << "============================================================\n" << std::flush;
   std::cout << "✅ ¡Autoencoder entrenado y verificado exitosamente en C++!\n" << std::flush;

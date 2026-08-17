@@ -29,10 +29,15 @@ ocr_cli
 *.exe
 
 # Pesos de modelos y vocabularios generados por entrenamiento.
-# Los checkpoints grandes van a Releases, no al historial de git.
+# Viven bajo release/ (ver release/README.md); los checkpoints que se publiquen
+# se adjuntan a un GitHub Release, no al historial de git.
 *.ns
 *.bin
 vocab_cpp.txt
+
+# Contenido de release/, excepto su documentación.
+release/*
+!release/README.md
 
 # Salidas generadas por las demos
 resultado*.txt

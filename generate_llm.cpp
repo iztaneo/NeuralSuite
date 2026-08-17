@@ -11,6 +11,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include "artifacts.h"
 #include "gpt.h"
 #include "tensor.h"
 #include "tokenizer.h"
@@ -19,8 +20,9 @@ using namespace neuralsuite;
 
 struct GenerateArgs {
   std::string prompt = "First Citizen:\n";
-  std::string model_path = "model_cpp.bin";
-  std::string vocab_path = "vocab_cpp.txt";
+  // Los artefactos de entrenamiento viven bajo release/ (ver include/artifacts.h).
+  std::string model_path = ReleasePath("model_cpp.bin");
+  std::string vocab_path = ReleasePath("vocab_cpp.txt");
   int max_new_tokens = 200;
   float temperature = 0.7f;
   int block_size = 64;
@@ -42,8 +44,8 @@ void PrintGenerateUsage(const char* prog_name) {
             << "  --n_head <int>            Número de cabezas de atención (default: 4)\n"
             << "  --n_embd <int>            Dimensión del embedding (default: 128)\n"
             << "  --no_cache                Desactivar aceleración por KV-Cache\n"
-            << "  --model_path <path>       Ruta al archivo binario del modelo (default: model_cpp.bin)\n"
-            << "  --vocab_path <path>       Ruta al archivo de vocabulario (default: vocab_cpp.txt)\n"
+            << "  --model_path <path>       Ruta al archivo binario del modelo (default: release/model_cpp.bin)\n"
+            << "  --vocab_path <path>       Ruta al archivo de vocabulario (default: release/vocab_cpp.txt)\n"
             << "  --help                    Muestra este mensaje de ayuda\n";
 }
 

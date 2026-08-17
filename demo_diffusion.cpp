@@ -66,7 +66,14 @@ int main() {
     }
   }
 
-  denoiser.Save("diffusion_denoiser.ns");
+  {
+    const std::string path = ReleasePath("diffusion_denoiser.ns");
+    if (denoiser.Save(path)) {
+      std::cout << "Pesos guardados en '" << path << "'.\n" << std::flush;
+    } else {
+      std::cerr << "ERROR: no se pudieron guardar los pesos en '" << path << "'.\n" << std::flush;
+    }
+  }
 
   std::cout << "============================================================\n" << std::flush;
   std::cout << "✅ ¡Modelo de Difusión (DDPM) entrenado y verificado exitosamente en C++!\n" << std::flush;

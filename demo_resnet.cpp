@@ -56,7 +56,14 @@ int main() {
     }
   }
 
-  model.Save("resnet_model.ns");
+  {
+    const std::string path = ReleasePath("resnet_model.ns");
+    if (model.Save(path)) {
+      std::cout << "Pesos guardados en '" << path << "'.\n" << std::flush;
+    } else {
+      std::cerr << "ERROR: no se pudieron guardar los pesos en '" << path << "'.\n" << std::flush;
+    }
+  }
 
   std::cout << "============================================================\n" << std::flush;
   std::cout << "✅ ¡Red Residual ResNet entrenada y verificada exitosamente en C++!\n" << std::flush;

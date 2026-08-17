@@ -49,7 +49,11 @@ int main(int argc, char* argv[]) {
   vocab.push_back(' ');
 
   CRNNModel ocr_model(1, 16, vocab.size());
-  ocr_model.Load("ocr_model_mitsubishi_cpp.ns");
+  const std::string weights_path = ReleasePath("ocr_model_mitsubishi_cpp.ns");
+  if (!ocr_model.Load(weights_path)) {
+    std::cout << "AVISO: no se encontraron pesos en '" << weights_path << "';\n"
+              << "       el modelo corre con inicializacion aleatoria.\n" << std::flush;
+  }
 
   // Tensor de entrada de ruido sintetico [1, 1, 8, 8] (ver aviso arriba).
   Tensor input_image_tensor({1, 1, 8, 8});
