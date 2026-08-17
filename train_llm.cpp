@@ -3,7 +3,7 @@
 
 /**
  * @file train_llm.cpp
- * @brief Transformer LLM Training Script matching PyTorch architecture parameters.
+ * @brief Transformer LLM Training Script with CLI flags matching PyTorch options.
  */
 
 #include <chrono>
@@ -21,6 +21,67 @@
 #include "tokenizer.h"
 
 using namespace neuralsuite;
+
+struct TrainArgs {
+  std::string data_path = "sample_data/input.txt";
+  std::string out_file = "model_cpp.bin";
+  std::string vocab_file = "vocab_cpp.txt";
+  int max_iters = 1000;
+  int batch_size = 16;
+  int block_size = 64;
+  int n_layer = 4;
+  int n_head = 4;
+  int n_embd = 64;
+  float learning_rate = 0.003f;
+};
+
+void PrintUsage(const char* prog_name) {
+  std::cout << "Uso: " << prog_name << " [OPCIONES]\n\n"
+            << "Opciones Disponibles (equivalentes a PyTorch train.py):\n"
+            << "  --data_path <path>      Ruta al archivo de entrenamiento (default: sample_data/input.txt)\n"
+            << "  --max_iters <int>       Número máximo de iteraciones (default: 1000)\n"
+            << "  --batch_size <int>      Tamaño del lote (default: 16)\n"
+            << "  --block_size <int>      Longitud del contexto (default: 64)\n"
+            << "  --n_layer <int>         Número de capas de Transformer (default: 4)\n"
+            << "  --n_head <int>          Número de cabezas de atención (default: 4)\n"
+            << "  --n_embd <int>          Dimensión del embedding (default: 64)\n"
+            << "  --learning_rate <float> Tasa de aprendizaje inicial (default: 0.003)\n"
+            << "  --out_file <path>       Ruta de guardado del modelo (default: model_cpp.bin)\n"
+            << "  --help                  Muestra este mensaje de ayuda\n";
+}
+
+TrainArgs ParseTrainArgs(int argc, char** argv) {
+  TrainArgs args;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--help" || arg == "-h") {
+      PrintUsage(argv[0]);
+      std::exit(0);
+    } else if (arg == "--data_path" && i + 1 < argc) {
+      args.data_path = argv[++i];
+    } else if (arg == "--max_iters" && i + 1 < argc) {
+      args.max_iters = std::stoi(argv[++i]);
+    } else if (arg == "--batch_size" && i + 1 < argc) {
+      args.batch_size = std::stoi(argv[++i]);
+    } else if (arg == "--block_size" && i + 1 < argc) {
+      args.block_size = std::stoi(argv[++i]);
+    } else if (arg == "--n_layer" && i + 1 < argc) {
+      args.n_layer = std::stoi(argv[++i]);
+    } else if (arg == "--n_head" && i + 1 < argc) {
+      args.n_head = std::stoi(argv[++i]);
+    } else if (arg == "--n_embd" && i + 1 < argc) {
+      args.n_embd = std::stoi(argv[++i]);
+    } else if (arg == "--learning_rate" && i + 1 < argc) {
+      args.learning_rate = std::stof(argv[++i]);
+    } else if (arg == "--out_file" && i + 1 < argc) {
+      args.out_file = argv[++i];
+    } else if (i == 1 && arg[0] != '-') {
+      // Positional argument fallback
+      args.data_path = arg;
+    }
+  }
+  return args;
+}
 
 int SampleToken(const float* logits, int vocab_size, float temperature = 0.7f, int prev_token = -1, int newline_token = -1) {
   std::vector<float> probs(vocab_size);
@@ -67,20 +128,30 @@ void ClipGradients(const std::vector<Tensor*>& grads, float max_norm = 1.0f) {
 }
 
 int main(int argc, char** argv) {
-  std::string data_path = "sample_data/input.txt";
-  if (argc > 1) {
-    data_path = argv[1];
-  } else if (!std::ifstream(data_path).good() && std::ifstream("../sample_data/input.txt").good()) {
-    data_path = "../sample_data/input.txt";
+  TrainArgs args = ParseTrainArgs(argc, argv);
+
+  if (!std::ifstream(args.data_path).good() && std::ifstream("../" + args.data_path).good()) {
+    args.data_path = "../" + args.data_path;
   }
 
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "🚀 Entrenamiento de LLM en C++ (Google C++ Style Guide)\n" << std::flush;
+  std::cout << "🚀 Entrenamiento de LLM en C++ (Google C++ Style Guide CLI)\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
+  std::cout << "⚙️ Configuración del Modelo C++:\n"
+            << "   - max_iters     : " << args.max_iters << "\n"
+            << "   - batch_size    : " << args.batch_size << "\n"
+            << "   - block_size    : " << args.block_size << "\n"
+            << "   - n_layer       : " << args.n_layer << "\n"
+            << "   - n_head        : " << args.n_head << "\n"
+            << "   - n_embd        : " << args.n_embd << "\n"
+            << "   - learning_rate : " << args.learning_rate << "\n"
+            << "   - data_path     : " << args.data_path << "\n"
+            << "   - out_file      : " << args.out_file << "\n"
+            << "------------------------------------------------------------\n" << std::flush;
 
-  std::ifstream file(data_path);
+  std::ifstream file(args.data_path);
   if (!file.is_open()) {
-    std::cerr << "❌ No se pudo abrir el archivo de datos: " << data_path << "\n" << std::flush;
+    std::cerr << "❌ No se pudo abrir el archivo de datos: " << args.data_path << "\n" << std::flush;
     return 1;
   }
   std::stringstream buffer;
@@ -90,17 +161,16 @@ int main(int argc, char** argv) {
 
   CharTokenizer tokenizer(text);
   std::cout << "🔤 Vocabulario del tokenizador: " << tokenizer.VocabSize() << " caracteres únicos.\n" << std::flush;
-  tokenizer.Save("vocab_cpp.txt");
+  tokenizer.Save(args.vocab_file);
 
   std::vector<int> tokens = tokenizer.Encode(text);
 
-  // Hiperparámetros óptimos para capacidad y velocidad (120,000 parámetros)
   GPTConfig config;
   config.vocab_size = tokenizer.VocabSize();
-  config.block_size = 64;
-  config.n_layer = 4;
-  config.n_head = 4;
-  config.n_embd = 64;
+  config.block_size = args.block_size;
+  config.n_layer = args.n_layer;
+  config.n_head = args.n_head;
+  config.n_embd = args.n_embd;
 
   GPTModel model(config);
   std::cout << "🧠 Modelo GPT C++ Creado exitosamente.\n" << std::flush;
@@ -108,15 +178,14 @@ int main(int argc, char** argv) {
   std::vector<Tensor*> params = model.GetParameters();
   std::vector<Tensor*> grads = model.GetGradients();
 
-  float base_lr = 0.003f;
-  float min_lr = 0.0001f;
+  float base_lr = args.learning_rate;
+  float min_lr = base_lr * 0.033f;
   AdamW optimizer(params, grads, base_lr);
   CrossEntropyLoss criterion;
 
-  int max_iters = 1000;
-  int batch_size = 16;
+  int max_iters = args.max_iters;
+  int batch_size = args.batch_size;
   int block_size = config.block_size;
-
 
   std::cout << "🏋️ Entrenando durante " << max_iters << " iteraciones en C++...\n" << std::flush;
   auto start_time = std::chrono::high_resolution_clock::now();
@@ -144,7 +213,6 @@ int main(int argc, char** argv) {
       }
     }
 
-
     Tensor logits = model.Forward(X);
     Tensor logits_2d({batch_size * block_size, config.vocab_size});
     std::memcpy(logits_2d.Data(), logits.Data(), logits.TotalSize() * sizeof(float));
@@ -160,15 +228,14 @@ int main(int argc, char** argv) {
     optimizer.Step();
 
     if (iter % 25 == 0 || iter == max_iters) {
-
       auto current_time = std::chrono::high_resolution_clock::now();
       double elapsed = std::chrono::duration<double>(current_time - start_time).count();
       std::cout << "Step " << iter << "/" << max_iters << " | Loss LLM: " << loss << " | LR: " << lr << " | Tiempo: " << elapsed << "s\n" << std::flush;
     }
   }
 
-  model.SaveWeights("model_cpp.bin");
-  std::cout << "💾 Modelo guardado exitosamente en 'model_cpp.bin'.\n" << std::flush;
+  model.SaveWeights(args.out_file);
+  std::cout << "💾 Modelo guardado exitosamente en '" << args.out_file << "'.\n" << std::flush;
   std::cout << "✅ ¡Entrenamiento del LLM en C++ completado exitosamente!\n\n" << std::flush;
 
   std::cout << "============================================================\n" << std::flush;

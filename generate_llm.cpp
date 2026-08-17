@@ -3,7 +3,7 @@
 
 /**
  * @file generate_llm.cpp
- * @brief Autoregressive Text Generation Demo matching PyTorch architecture (800K params).
+ * @brief Autoregressive Text Generation Demo with CLI flags matching PyTorch options.
  */
 
 #include <cmath>
@@ -16,6 +16,66 @@
 #include "tokenizer.h"
 
 using namespace neuralsuite;
+
+struct GenerateArgs {
+  std::string prompt = "First Citizen:\n";
+  std::string model_path = "model_cpp.bin";
+  std::string vocab_path = "vocab_cpp.txt";
+  int max_new_tokens = 200;
+  float temperature = 0.7f;
+  int block_size = 64;
+  int n_layer = 4;
+  int n_head = 4;
+  int n_embd = 64;
+};
+
+void PrintGenerateUsage(const char* prog_name) {
+  std::cout << "Uso: " << prog_name << " [OPCIONES] [\"Prompt Opcional\"]\n\n"
+            << "Opciones Disponibles (equivalentes a PyTorch generate.py):\n"
+            << "  --prompt <string>         Texto inicial para la generación (default: \"First Citizen:\\n\")\n"
+            << "  --max_new_tokens <int>    Número de caracteres a generar (default: 200)\n"
+            << "  --temperature <float>    Temperatura de muestreo (default: 0.7)\n"
+            << "  --block_size <int>        Longitud del contexto (default: 64)\n"
+            << "  --n_layer <int>           Número de capas del modelo (default: 4)\n"
+            << "  --n_head <int>            Número de cabezas de atención (default: 4)\n"
+            << "  --n_embd <int>            Dimensión del embedding (default: 64)\n"
+            << "  --model_path <path>       Ruta al archivo binario del modelo (default: model_cpp.bin)\n"
+            << "  --vocab_path <path>       Ruta al archivo de vocabulario (default: vocab_cpp.txt)\n"
+            << "  --help                    Muestra este mensaje de ayuda\n";
+}
+
+GenerateArgs ParseGenerateArgs(int argc, char** argv) {
+  GenerateArgs args;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--help" || arg == "-h") {
+      PrintGenerateUsage(argv[0]);
+      std::exit(0);
+    } else if (arg == "--prompt" && i + 1 < argc) {
+      args.prompt = argv[++i];
+    } else if (arg == "--max_new_tokens" && i + 1 < argc) {
+      args.max_new_tokens = std::stoi(argv[++i]);
+    } else if (arg == "--temperature" && i + 1 < argc) {
+      args.temperature = std::stof(argv[++i]);
+    } else if (arg == "--block_size" && i + 1 < argc) {
+      args.block_size = std::stoi(argv[++i]);
+    } else if (arg == "--n_layer" && i + 1 < argc) {
+      args.n_layer = std::stoi(argv[++i]);
+    } else if (arg == "--n_head" && i + 1 < argc) {
+      args.n_head = std::stoi(argv[++i]);
+    } else if (arg == "--n_embd" && i + 1 < argc) {
+      args.n_embd = std::stoi(argv[++i]);
+    } else if (arg == "--model_path" && i + 1 < argc) {
+      args.model_path = argv[++i];
+    } else if (arg == "--vocab_path" && i + 1 < argc) {
+      args.vocab_path = argv[++i];
+    } else if (i == 1 && arg[0] != '-') {
+      // Positional argument fallback for prompt string
+      args.prompt = arg;
+    }
+  }
+  return args;
+}
 
 int SampleToken(const float* logits, int vocab_size, float temperature = 0.7f, int prev_token = -1, int newline_token = -1) {
   std::vector<float> probs(vocab_size);
@@ -41,45 +101,40 @@ int SampleToken(const float* logits, int vocab_size, float temperature = 0.7f, i
 }
 
 int main(int argc, char** argv) {
+  GenerateArgs args = ParseGenerateArgs(argc, argv);
+
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "🤖 GENERACIÓN DE TEXTO AUTORREGRESIVA C++ (NeuralSuite 800K)\n" << std::flush;
+  std::cout << "🤖 GENERACIÓN DE TEXTO AUTORREGRESIVA C++ (NeuralSuite CLI)\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
 
   CharTokenizer tokenizer;
-  if (!tokenizer.Load("vocab_cpp.txt")) {
-    std::cout << "⚠️ No se encontró 'vocab_cpp.txt'. Usando vocabulario por defecto...\n" << std::flush;
+  if (!tokenizer.Load(args.vocab_path)) {
+    std::cout << "⚠️ No se encontró '" << args.vocab_path << "'. Usando vocabulario por defecto...\n" << std::flush;
     tokenizer.BuildVocab("First Citizen:\nBefore we proceed any further, hear me speak.");
   } else {
-    std::cout << "🔤 Vocabulario cargado desde 'vocab_cpp.txt': " << tokenizer.VocabSize() << " caracteres.\n" << std::flush;
+    std::cout << "🔤 Vocabulario cargado desde '" << args.vocab_path << "': " << tokenizer.VocabSize() << " caracteres.\n" << std::flush;
   }
 
   GPTConfig config;
   config.vocab_size = tokenizer.VocabSize();
-  config.block_size = 64;
-  config.n_layer = 4;
-  config.n_head = 4;
-  config.n_embd = 64;
-
+  config.block_size = args.block_size;
+  config.n_layer = args.n_layer;
+  config.n_head = args.n_head;
+  config.n_embd = args.n_embd;
 
   GPTModel model(config);
-  if (model.LoadWeights("model_cpp.bin")) {
-    std::cout << "✅ Pesos del modelo C++ (800K params) cargados desde 'model_cpp.bin'.\n" << std::flush;
+  if (model.LoadWeights(args.model_path)) {
+    std::cout << "✅ Pesos del modelo C++ cargados desde '" << args.model_path << "'.\n" << std::flush;
   } else {
-    std::cout << "⚠️ No se encontró 'model_cpp.bin'. Usando pesos aleatorios...\n" << std::flush;
+    std::cout << "⚠️ No se encontró '" << args.model_path << "'. Usando pesos aleatorios...\n" << std::flush;
   }
 
-  std::string prompt = "First Citizen:\n";
-  if (argc > 1) {
-    prompt = argv[1];
-  }
+  std::cout << "\nPrompt de entrada: '" << args.prompt << "'\n" << std::flush;
 
-  std::cout << "\nPrompt de entrada: '" << prompt << "'\n" << std::flush;
-
-  std::vector<int> tokens = tokenizer.Encode(prompt);
-  int max_new_tokens = 200;
+  std::vector<int> tokens = tokenizer.Encode(args.prompt);
   int newline_token = tokenizer.Encode("\n")[0];
 
-  for (int step = 0; step < max_new_tokens; ++step) {
+  for (int step = 0; step < args.max_new_tokens; ++step) {
     int seq_len = static_cast<int>(tokens.size());
     int start_idx = (seq_len > config.block_size) ? (seq_len - config.block_size) : 0;
     int curr_len = seq_len - start_idx;
@@ -93,7 +148,7 @@ int main(int argc, char** argv) {
     int last_offset = (curr_len - 1) * config.vocab_size;
 
     int prev_token = tokens.empty() ? -1 : tokens.back();
-    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, 0.7f, prev_token, newline_token);
+    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, args.temperature, prev_token, newline_token);
     tokens.push_back(sampled_token);
   }
 
