@@ -59,7 +59,7 @@ class MultiHeadAttention : public Layer {
     attn_out.Zeros();
 
     float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
-    attn_probs_cache_.Reshape({batch_size, n_head_, seq_len, seq_len});
+    attn_probs_cache_.Resize({batch_size, n_head_, seq_len, seq_len});
 
     for (int b = 0; b < batch_size; ++b) {
       for (int h = 0; h < n_head_; ++h) {

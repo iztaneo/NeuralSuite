@@ -10,8 +10,8 @@ static std::mt19937 g_rng(1337);
 namespace {
 
 // Un Tensor nunca debe poder existir en un estado internamente inválido, así
-// que la forma se valida en los dos únicos puntos donde se asigna: el
-// constructor y Reshape(). Con eso TotalSize() puede seguir siendo una simple
+// que la forma se valida en los únicos puntos donde se asigna: el constructor,
+// Reshape() y Resize(). Con eso TotalSize() puede seguir siendo una simple
 // multiplicación sin comprobaciones en el camino caliente.
 void ValidateShape(const std::vector<int>& dims) {
   size_t total = 1;
@@ -64,15 +64,17 @@ Tensor::~Tensor() {
 
 Tensor& Tensor::operator=(const Tensor& other) {
   if (this != &other) {
-    delete[] data_;
-    shape_ = other.shape_;
-    size_t sz = TotalSize();
+    // Se reserva antes de liberar: si new[] lanza, el objeto conserva intactos
+    // su buffer y su forma en lugar de quedarse con un puntero colgante.
+    const size_t sz = other.TotalSize();
+    float* new_data = nullptr;
     if (sz > 0) {
-      data_ = new float[sz];
-      std::memcpy(data_, other.data_, sz * sizeof(float));
-    } else {
-      data_ = nullptr;
+      new_data = new float[sz];
+      std::memcpy(new_data, other.data_, sz * sizeof(float));
     }
+    delete[] data_;
+    data_ = new_data;
+    shape_ = other.shape_;
   }
   return *this;
 }
@@ -96,13 +98,33 @@ size_t Tensor::TotalSize() const {
 
 void Tensor::Reshape(const std::vector<int>& new_shape) {
   ValidateShape(new_shape);
-  size_t old_sz = TotalSize();
+
+  const size_t current = TotalSize();
+  size_t requested = 1;
+  for (int d : new_shape) requested *= static_cast<size_t>(d);
+  if (new_shape.empty()) requested = 0;
+
+  // Reshape reinterpreta; nunca reasigna ni descarta datos. Cambiar el número
+  // de elementos es una operación distinta y tiene su propio nombre.
+  if (requested != current) {
+    throw std::invalid_argument(
+        "Reshape: la nueva forma tiene " + std::to_string(requested) +
+        " elementos y el tensor tiene " + std::to_string(current) +
+        ". Usa Resize() si la intencion es reasignar memoria.");
+  }
   shape_ = new_shape;
-  size_t new_sz = TotalSize();
+}
+
+void Tensor::Resize(const std::vector<int>& new_shape) {
+  ValidateShape(new_shape);
+  const size_t old_sz = TotalSize();
+  shape_ = new_shape;
+  const size_t new_sz = TotalSize();
 
   if (new_sz != old_sz) {
+    float* new_data = (new_sz > 0) ? new float[new_sz]() : nullptr;
     delete[] data_;
-    data_ = (new_sz > 0) ? new float[new_sz]() : nullptr;
+    data_ = new_data;
   }
 }
 
@@ -160,7 +182,7 @@ void MatMul(const Tensor& A, const Tensor& B, Tensor& C) {
   int K = A.Shape()[1];
   int N = B.Shape()[1];
 
-  C.Reshape({M, N});
+  C.Resize({M, N});
   C.Zeros();
 
   #pragma omp parallel for schedule(static) if(M >= 16)
@@ -199,9 +221,9 @@ void LayerNormForward(const Tensor& x, const Tensor& gamma, const Tensor& beta,
   int D = x.Shape()[num_dims - 1];
   int N = x.TotalSize() / D;
 
-  out.Reshape(x.Shape());
-  mean.Reshape({N});
-  rstd.Reshape({N});
+  out.Resize(x.Shape());
+  mean.Resize({N});
+  rstd.Resize({N});
 
   #pragma omp parallel for schedule(static)
   for (int i = 0; i < N; ++i) {
@@ -233,9 +255,9 @@ void LayerNormBackward(const Tensor& dout, const Tensor& x, const Tensor& gamma,
   int D = x.Shape()[num_dims - 1];
   int N = x.TotalSize() / D;
 
-  dx.Reshape(x.Shape());
-  dgamma.Reshape({D}); dgamma.Zeros();
-  dbeta.Reshape({D}); dbeta.Zeros();
+  dx.Resize(x.Shape());
+  dgamma.Resize({D}); dgamma.Zeros();
+  dbeta.Resize({D}); dbeta.Zeros();
 
   for (int i = 0; i < N; ++i) {
     float m = mean[i];
@@ -267,7 +289,7 @@ void LayerNormBackward(const Tensor& dout, const Tensor& x, const Tensor& gamma,
 void SoftmaxForward(const Tensor& input, Tensor& output) {
   int N = input.Shape()[0];
   int D = input.Shape()[1];
-  output.Reshape({N, D});
+  output.Resize({N, D});
 
   #pragma omp parallel for schedule(static)
   for (int i = 0; i < N; ++i) {
@@ -293,7 +315,7 @@ void CausalSoftmaxForward(const Tensor& input, Tensor& output, int seq_len) {
   int num_dims = input.Shape().size();
   int B = (num_dims == 3) ? input.Shape()[0] : 1;
 
-  output.Reshape(input.Shape());
+  output.Resize(input.Shape());
 
   #pragma omp parallel for schedule(static)
   for (int b = 0; b < B; ++b) {
@@ -324,7 +346,7 @@ void CausalSoftmaxForward(const Tensor& input, Tensor& output, int seq_len) {
 
 void GeluForward(const Tensor& input, Tensor& output) {
   size_t sz = input.TotalSize();
-  output.Reshape(input.Shape());
+  output.Resize(input.Shape());
 
   #pragma omp parallel for schedule(static)
   for (size_t i = 0; i < sz; ++i) {
@@ -337,7 +359,7 @@ void GeluForward(const Tensor& input, Tensor& output) {
 
 void GeluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
   size_t sz = input.TotalSize();
-  dx.Reshape(input.Shape());
+  dx.Resize(input.Shape());
 
   #pragma omp parallel for schedule(static)
   for (size_t i = 0; i < sz; ++i) {
@@ -353,7 +375,7 @@ void GeluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
 
 void ReluForward(const Tensor& input, Tensor& output) {
   size_t sz = input.TotalSize();
-  output.Reshape(input.Shape());
+  output.Resize(input.Shape());
   for (size_t i = 0; i < sz; ++i) {
     output[i] = (input[i] > 0.0f) ? input[i] : 0.0f;
   }
@@ -361,7 +383,7 @@ void ReluForward(const Tensor& input, Tensor& output) {
 
 void ReluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
   size_t sz = input.TotalSize();
-  dx.Reshape(input.Shape());
+  dx.Resize(input.Shape());
   for (size_t i = 0; i < sz; ++i) {
     dx[i] = (input[i] > 0.0f) ? dout[i] : 0.0f;
   }
@@ -369,7 +391,7 @@ void ReluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
 
 void SigmoidForward(const Tensor& input, Tensor& output) {
   size_t sz = input.TotalSize();
-  output.Reshape(input.Shape());
+  output.Resize(input.Shape());
   for (size_t i = 0; i < sz; ++i) {
     output[i] = 1.0f / (1.0f + std::exp(-input[i]));
   }
@@ -377,7 +399,7 @@ void SigmoidForward(const Tensor& input, Tensor& output) {
 
 void SigmoidBackward(const Tensor& dout, const Tensor& output, Tensor& dx) {
   size_t sz = output.TotalSize();
-  dx.Reshape(output.Shape());
+  dx.Resize(output.Shape());
   for (size_t i = 0; i < sz; ++i) {
     float s = output[i];
     dx[i] = dout[i] * s * (1.0f - s);
@@ -386,7 +408,7 @@ void SigmoidBackward(const Tensor& dout, const Tensor& output, Tensor& dx) {
 
 void TanhForward(const Tensor& input, Tensor& output) {
   size_t sz = input.TotalSize();
-  output.Reshape(input.Shape());
+  output.Resize(input.Shape());
   for (size_t i = 0; i < sz; ++i) {
     output[i] = std::tanh(input[i]);
   }
@@ -394,7 +416,7 @@ void TanhForward(const Tensor& input, Tensor& output) {
 
 void TanhBackward(const Tensor& dout, const Tensor& output, Tensor& dx) {
   size_t sz = output.TotalSize();
-  dx.Reshape(output.Shape());
+  dx.Resize(output.Shape());
   for (size_t i = 0; i < sz; ++i) {
     float th = output[i];
     dx[i] = dout[i] * (1.0f - th * th);
@@ -403,19 +425,19 @@ void TanhBackward(const Tensor& dout, const Tensor& output, Tensor& dx) {
 
 void ElementwiseAdd(const Tensor& a, const Tensor& b, Tensor& out) {
   size_t sz = a.TotalSize();
-  out.Reshape(a.Shape());
+  out.Resize(a.Shape());
   for (size_t i = 0; i < sz; ++i) out[i] = a[i] + b[i];
 }
 
 void ElementwiseSub(const Tensor& a, const Tensor& b, Tensor& out) {
   size_t sz = a.TotalSize();
-  out.Reshape(a.Shape());
+  out.Resize(a.Shape());
   for (size_t i = 0; i < sz; ++i) out[i] = a[i] - b[i];
 }
 
 void ElementwiseMul(const Tensor& a, const Tensor& b, Tensor& out) {
   size_t sz = a.TotalSize();
-  out.Reshape(a.Shape());
+  out.Resize(a.Shape());
   for (size_t i = 0; i < sz; ++i) out[i] = a[i] * b[i];
 }
 

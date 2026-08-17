@@ -4,11 +4,20 @@ project(NeuralSuite VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Sin un tipo de build explícito, CMake no define NDEBUG y la comprobación de
+# límites de Tensor::operator[] queda activa dentro de un binario optimizado.
+# Release es el comportamiento esperado por defecto; para obtener el build con
+# comprobaciones: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Tipo de build" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
 # Banderas de optimización y OpenMP
 if(MSVC)
-    add_compile_options(/O2 /W4)
+    add_compile_options(/W4)
 else()
-    add_compile_options(-O3 -Wall -Wextra -march=native -ffast-math)
+    add_compile_options(-Wall -Wextra -march=native -ffast-math)
     find_package(OpenMP REQUIRED)
 endif()
 

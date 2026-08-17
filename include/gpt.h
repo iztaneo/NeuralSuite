@@ -196,7 +196,7 @@ class GPTModel {
     int batch_size = idx.Shape()[0];
     int seq_len = idx.Shape()[1];
 
-    last_x_2d_.Reshape({batch_size * seq_len, config_.n_embd});
+    last_x_2d_.Resize({batch_size * seq_len, config_.n_embd});
 
     Tensor tok_emb = wte_.Forward(idx);
 

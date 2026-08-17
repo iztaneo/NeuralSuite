@@ -60,7 +60,24 @@ class LSTM : public Layer {
     return output;
   }
 
+  /**
+   * @brief SIN IMPLEMENTAR: no calcula gradientes.
+   *
+   * @warning Este método es un marcador de posición, no un backward real. No
+   * usa `dout`, deja los cuatro gradientes en cero y devuelve un dx nulo. En
+   * consecuencia **la capa LSTM no aprende**: sus pesos nunca se actualizan, y
+   * además corta la propagación hacia cualquier capa anterior.
+   *
+   * Un modelo que combine LSTM con otras capas seguirá reduciendo la pérdida
+   * gracias a esas otras capas, lo que puede dar la falsa impresión de que el
+   * LSTM está entrenando.
+   *
+   * Implementarlo requiere retropropagación a través del tiempo (BPTT) sobre
+   * las cuatro puertas, con su correspondiente verificación por diferencias
+   * finitas antes de considerarse correcto.
+   */
   Tensor Backward(const Tensor& dout) override {
+    (void)dout;  // sin usar: ver la advertencia de arriba
     Tensor dx(last_input_.Shape());
     dx.Zeros();
     dweight_ih_.Zeros();

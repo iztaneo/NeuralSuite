@@ -45,22 +45,56 @@ class Tensor {
   [[nodiscard]] float* Data() { return data_; }
   [[nodiscard]] const float* Data() const { return data_; }
 
+  /**
+   * @brief Reinterpreta las dimensiones conservando la memoria y los datos.
+   *
+   * El número total de elementos debe coincidir con el actual; en caso
+   * contrario lanza std::invalid_argument. Ésta es la semántica habitual de
+   * reshape: misma memoria, distinta lectura de sus ejes. Para cambiar el
+   * tamaño del almacenamiento, usar Resize().
+   */
   void Reshape(const std::vector<int>& new_shape);
+
+  /**
+   * @brief Ajusta la forma reasignando memoria cuando el tamaño cambia.
+   *
+   * Si el número de elementos difiere del actual, el contenido anterior se
+   * descarta y el nuevo buffer queda a cero. Es lo que necesitan los tensores
+   * de salida antes de escribirlos.
+   */
+  void Resize(const std::vector<int>& new_shape);
+
   void Fill(float val);
   void Zeros();
   void Ones();
-  void NormalInit(float mean = 0.0f, float std = 0.02f);
   void RandomNormal(float mean = 0.0f, float stddev = 0.02f);
   void RandomUniform(float min_val = -0.1f, float max_val = 0.1f);
   void XavierInit(int fan_in, int fan_out);
 
-  // Element access operators
+  // Element access operators. La comprobación de límites solo se compila en
+  // builds de depuración: en Release el acceso debe seguir siendo un simple
+  // desplazamiento sobre el puntero.
+#ifdef NDEBUG
   inline float& operator[](size_t idx) { return data_[idx]; }
   inline const float& operator[](size_t idx) const { return data_[idx]; }
+#else
+  inline float& operator[](size_t idx) { CheckIndex(idx); return data_[idx]; }
+  inline const float& operator[](size_t idx) const { CheckIndex(idx); return data_[idx]; }
+#endif
 
   void PrintSummary(const std::string& name = "") const;
 
  private:
+#ifndef NDEBUG
+  void CheckIndex(size_t idx) const {
+    if (idx >= TotalSize()) {
+      throw std::out_of_range("Tensor: indice " + std::to_string(idx) +
+                              " fuera de rango para un tensor de " +
+                              std::to_string(TotalSize()) + " elementos.");
+    }
+  }
+#endif
+
   float* data_ = nullptr;
   std::vector<int> shape_;
 };

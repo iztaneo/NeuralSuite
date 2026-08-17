@@ -356,6 +356,103 @@ void TestInputValidation() {
   std::cout << "PASADO ✅\n" << std::flush;
 }
 
+/**
+ * @brief Reshape reinterpreta sin perder datos; Resize reasigna.
+ *
+ * Cubre el comportamiento anterior, en el que Reshape() descartaba el buffer en
+ * silencio cuando el número de elementos cambiaba.
+ */
+void TestReshapeSemantics() {
+  std::cout << "🧪 [Test 10] Semántica de Reshape y Resize... " << std::flush;
+
+  Tensor t({2, 6});
+  for (size_t i = 0; i < t.TotalSize(); ++i) t[i] = static_cast<float>(i);
+
+  // Reinterpretar conservando los 12 elementos no debe tocar los datos.
+  t.Reshape({3, 4});
+  Check(t.Shape() == std::vector<int>({3, 4}), "Reshape no aplico la nueva forma");
+  Check(t.TotalSize() == 12, "Reshape cambio el numero de elementos");
+  bool data_intact = true;
+  for (size_t i = 0; i < t.TotalSize(); ++i) {
+    if (std::abs(t[i] - static_cast<float>(i)) > 1e-6f) data_intact = false;
+  }
+  Check(data_intact, "Reshape altero los datos que debia conservar");
+
+  // Cambiar el numero de elementos con Reshape debe ser un error explicito.
+  bool threw = false;
+  try { t.Reshape({5, 5}); } catch (const std::invalid_argument&) { threw = true; }
+  Check(threw, "Reshape acepto un cambio en el numero de elementos");
+  Check(t.Shape() == std::vector<int>({3, 4}), "el Reshape fallido dejo el tensor modificado");
+
+  // Resize si puede cambiar el tamano del almacenamiento.
+  t.Resize({5, 5});
+  Check(t.TotalSize() == 25, "Resize no reasigno al nuevo tamano");
+
+  std::cout << "PASADO ✅\n" << std::flush;
+}
+
+/** @brief Una asignación fallida no debe dejar el destino inutilizable. */
+void TestAssignmentKeepsSource() {
+  std::cout << "🧪 [Test 11] Asignación de Tensor... " << std::flush;
+
+  Tensor a({2, 3});
+  for (size_t i = 0; i < a.TotalSize(); ++i) a[i] = static_cast<float>(i) + 1.0f;
+
+  Tensor b;
+  b = a;
+  Check(b.Shape() == a.Shape(), "la asignacion no copio la forma");
+  bool same = true;
+  for (size_t i = 0; i < a.TotalSize(); ++i) {
+    if (std::abs(a[i] - b[i]) > 1e-6f) same = false;
+  }
+  Check(same, "la asignacion no copio los datos");
+
+  // Modificar la copia no debe afectar al original.
+  b[0] = 99.0f;
+  Check(std::abs(a[0] - 1.0f) < 1e-6f, "la copia comparte memoria con el original");
+
+  // Autoasignacion.
+  a = a;
+  Check(a.TotalSize() == 6 && std::abs(a[0] - 1.0f) < 1e-6f, "la autoasignacion corrompio el tensor");
+
+  std::cout << "PASADO ✅\n" << std::flush;
+}
+
+/**
+ * @brief Deja constancia de que LSTM::Backward() sigue sin implementarse.
+ *
+ * No es una prueba de corrección sino un recordatorio ejecutable: mientras la
+ * capa devuelva gradientes nulos avisa por pantalla, y en cuanto alguien
+ * implemente el BPTT esta prueba lo detectará para que se sustituya por un
+ * gradient check de verdad.
+ */
+void TestLstmBackwardIsStub() {
+  std::cout << "🧪 [Test 12] Estado de LSTM::Backward()... " << std::flush;
+
+  LSTM lstm(4, 6);
+  Tensor x({3, 2, 4});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.1f * static_cast<float>((i * 7) % 13) - 0.4f;
+  }
+  Tensor y = lstm.Forward(x);
+
+  Tensor dout(y.Shape());
+  dout.Ones();
+  lstm.Backward(dout);
+
+  double total = 0.0;
+  for (auto* g : lstm.GetGradients()) {
+    for (size_t i = 0; i < g->TotalSize(); ++i) total += std::abs((*g)[i]);
+  }
+
+  if (total == 0.0) {
+    std::cout << "PENDIENTE ⚠️  (gradientes nulos: la capa no aprende)\n" << std::flush;
+  } else {
+    std::cout << "\n   ℹ️  LSTM::Backward ya produce gradientes: sustituye esta prueba"
+                 " por un gradient check por diferencias finitas.\n" << std::flush;
+  }
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -370,6 +467,9 @@ int main() {
   TestParamGradAlignment();
   TestOptimizerRejectsMismatch();
   TestInputValidation();
+  TestReshapeSemantics();
+  TestAssignmentKeepsSource();
+  TestLstmBackwardIsStub();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
