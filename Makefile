@@ -45,6 +45,12 @@ demo_mlp: demo_mlp.cpp $(LIB_STATIC)
 demo_sequential: demo_sequential.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
+demo_autoencoder: demo_autoencoder.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
+demo_resnet: demo_resnet.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
 demo_cnn: demo_cnn.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 

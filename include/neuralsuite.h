@@ -33,6 +33,8 @@
 #include "layers/linear.h"
 #include "layers/lstm.h"
 #include "layers/maxpool2d.h"
+#include "layers/residual.h"
+
 
 namespace neuralsuite {
 
