@@ -39,6 +39,14 @@ padding activos), `LayerNorm` (respecto de `x`, `gamma` y `beta`),
 `CrossEntropyLoss` y `MSELoss`. Cada comprobación se validó introduciendo
 defectos deliberados para confirmar que efectivamente los detecta.
 
+Además, el `GPTModel` y la capa `LSTM` se comparan contra la implementación de
+referencia en PyTorch ([LLMRasec](https://github.com/iztaneo/LLMRasec)) con los
+mismos pesos y las mismas entradas: coinciden en pérdida, salidas y gradientes
+dentro del redondeo de float32. Ver [`tools/parity/`](tools/parity/README.md).
+Esta comprobación detecta errores que el gradient checking no puede ver, porque
+éste solo confirma que el `Backward` deriva el `Forward` escrito, no que ese
+`Forward` sea lo que dice ser.
+
 **Sigue siendo software 0.x.** Quedan sin cobertura `MaxPool2D`, `GraphConv` y
 `Residual`; el formato de serialización no tiene cabecera ni versión; y no hay
 integración continua. El uso recomendado es educativo y de lectura del código.
