@@ -72,18 +72,37 @@ bool CharTokenizer::Save(const std::string& filepath) const {
 bool CharTokenizer::Load(const std::string& filepath) {
   std::ifstream in(filepath);
   if (!in.is_open()) return false;
-  in >> vocab_size_;
+
+  int declared_size = 0;
+  if (!(in >> declared_size)) return false;
+
+  // El tamaño lo dicta el archivo y se usaba directamente como límite de bucle:
+  // un valor corrupto o adversarial dejaba el proceso colgado. Un vocabulario
+  // de bytes no puede exceder 256 símbolos distintos.
+  constexpr int kMaxVocabSize = 256;
+  if (declared_size < 0 || declared_size > kMaxVocabSize) return false;
+
   chars_.clear();
   stoi_.clear();
   itos_.clear();
-  for (int i = 0; i < vocab_size_; ++i) {
+
+  for (int i = 0; i < declared_size; ++i) {
     int code;
-    in >> code;
+    // Un archivo truncado dejaba el resto del vocabulario sin inicializar.
+    if (!(in >> code)) {
+      chars_.clear();
+      stoi_.clear();
+      itos_.clear();
+      vocab_size_ = 0;
+      return false;
+    }
     char c = static_cast<char>(code);
     chars_.push_back(c);
     stoi_[c] = i;
     itos_[i] = c;
   }
+
+  vocab_size_ = declared_size;
   return true;
 }
 

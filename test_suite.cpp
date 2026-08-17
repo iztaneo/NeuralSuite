@@ -4,17 +4,90 @@
 /**
  * @file test_suite.cpp
  * @brief Numerical Unit Test Suite following Google C++ Style Guide.
+ *
+ * Las comprobaciones usan Check() y no assert(): assert() se compila a nada
+ * cuando se define NDEBUG, que es justo lo que hace una compilación Release,
+ * de modo que la suite pasaría sin verificar nada.
  */
 
-#include <cassert>
+#include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <functional>
 #include <iostream>
-#include "activations.h"
-#include "losses.h"
-#include "tensor.h"
-#include "tokenizer.h"
+#include <string>
+#include <vector>
+#include "neuralsuite.h"
 
 using namespace neuralsuite;
+
+namespace {
+
+int g_failures = 0;
+
+void Check(bool condition, const std::string& what) {
+  if (!condition) {
+    std::cout << "\n   ❌ FALLO: " << what << "\n" << std::flush;
+    ++g_failures;
+  }
+}
+
+/**
+ * @brief Error relativo entre el gradiente analítico y el numérico.
+ *
+ * Se normaliza por la magnitud de ambos para que valores cercanos a cero no
+ * produzcan errores relativos artificialmente enormes.
+ */
+double RelativeError(double numeric, double analytic) {
+  const double denom = std::max(1e-6, std::abs(numeric) + std::abs(analytic));
+  return std::abs(numeric - analytic) / denom;
+}
+
+// Por debajo de esta magnitud el gradiente no se puede medir de forma fiable
+// por diferencias finitas en float32: el error relativo pasa a ser ruido.
+constexpr double kNegligibleGrad = 1e-3;
+
+/**
+ * @brief Compara por diferencias finitas centradas los gradientes de `params`.
+ *
+ * El paso `eps` no es universal. Es un compromiso entre dos errores opuestos:
+ * con eps pequeño, `loss(w+eps) - loss(w-eps)` sufre cancelación catastrófica
+ * en float32; con eps grande domina el error de truncamiento O(eps²), que
+ * crece con la no linealidad de la pérdida. Por eso cada prueba mide el suyo:
+ * una pérdida casi lineal admite pasos grandes, y una cross-entropy no.
+ *
+ * @return el peor error relativo observado entre los elementos medibles.
+ */
+double MaxGradError(const std::vector<Tensor*>& params, const std::vector<Tensor*>& grads,
+                    const std::function<double()>& loss_of, float eps, size_t samples_per_tensor,
+                    int* checked, int* skipped) {
+  double worst = 0.0;
+  for (size_t p = 0; p < params.size(); ++p) {
+    Tensor* w = params[p];
+    Tensor* g = grads[p];
+    const size_t stride = std::max<size_t>(1, w->TotalSize() / samples_per_tensor);
+
+    for (size_t i = 0; i < w->TotalSize(); i += stride) {
+      const float orig = (*w)[i];
+      (*w)[i] = orig + eps; const double loss_plus = loss_of();
+      (*w)[i] = orig - eps; const double loss_minus = loss_of();
+      (*w)[i] = orig;
+
+      const double numeric = (loss_plus - loss_minus) / (2.0 * eps);
+      const double analytic = (*g)[i];
+
+      if (std::max(std::abs(numeric), std::abs(analytic)) < kNegligibleGrad) {
+        ++(*skipped);
+        continue;
+      }
+      worst = std::max(worst, RelativeError(numeric, analytic));
+      ++(*checked);
+    }
+  }
+  return worst;
+}
+
+}  // namespace
 
 void TestMatMul() {
   std::cout << "🧪 [Test 1] Multiplicación de Matrices (GEMM)... " << std::flush;
@@ -31,10 +104,10 @@ void TestMatMul() {
   Tensor C;
   MatMul(A, B, C);
 
-  assert(std::abs(C[0] - 31.0f) < 1e-4f);
-  assert(std::abs(C[1] - 19.0f) < 1e-4f);
-  assert(std::abs(C[2] - 85.0f) < 1e-4f);
-  assert(std::abs(C[3] - 55.0f) < 1e-4f);
+  Check(std::abs(C[0] - 31.0f) < 1e-4f, "C[0] deberia ser 31");
+  Check(std::abs(C[1] - 19.0f) < 1e-4f, "C[1] deberia ser 19");
+  Check(std::abs(C[2] - 85.0f) < 1e-4f, "C[2] deberia ser 85");
+  Check(std::abs(C[3] - 55.0f) < 1e-4f, "C[3] deberia ser 55");
 
   std::cout << "PASADO ✅\n" << std::flush;
 }
@@ -50,7 +123,7 @@ void TestLayerNorm() {
   Tensor out, mean, rstd;
   LayerNormForward(x, gamma, beta, out, mean, rstd);
 
-  assert(std::abs(mean[0] - 4.0f) < 1e-4f);
+  Check(std::abs(mean[0] - 4.0f) < 1e-4f, "la media deberia ser 4");
   std::cout << "PASADO ✅\n" << std::flush;
 }
 
@@ -62,12 +135,12 @@ void TestTokenizer() {
   std::vector<int> encoded = tok.Encode(sample);
   std::string decoded = tok.Decode(encoded);
 
-  assert(sample == decoded);
+  Check(sample == decoded, "el roundtrip encode/decode no conserva el texto");
   std::cout << "PASADO ✅\n" << std::flush;
 }
 
 void TestGradientCheckGelu() {
-  std::cout << "🧪 [Test 4] Verificación de Gradiente GELU por Diferencias Finitas... " << std::flush;
+  std::cout << "🧪 [Test 4] Gradiente GELU por Diferencias Finitas... " << std::flush;
   Tensor x({1, 1});
   x[0] = 1.5f;
 
@@ -89,8 +162,198 @@ void TestGradientCheckGelu() {
   float num_grad = (y_plus[0] - y_minus[0]) / (2.0f * eps);
   float diff = std::abs(dx[0] - num_grad);
 
-  assert(diff < 1e-3f);
+  Check(diff < 1e-3f, "el gradiente GELU no coincide con las diferencias finitas");
   std::cout << "PASADO ✅ (Diff: " << diff << ")\n" << std::flush;
+}
+
+/**
+ * @brief Todos los parámetros de MultiHeadAttention reciben gradiente correcto.
+ *
+ * Cubre el defecto por el que la clase no sobrescribía GetGradients(): sin ese
+ * override, esta prueba ni siquiera puede construir las listas emparejadas.
+ */
+void TestGradientCheckAttention() {
+  std::cout << "🧪 [Test 5] Gradientes de MultiHeadAttention... " << std::flush;
+
+  const int B = 1, T = 4, C = 8, H = 2;
+  MultiHeadAttention attn(C, H);
+
+  auto params = attn.GetParameters();
+  auto grads = attn.GetGradients();
+  Check(params.size() == grads.size(),
+        "MultiHeadAttention expone " + std::to_string(params.size()) +
+            " parametros pero " + std::to_string(grads.size()) + " gradientes");
+  if (params.size() != grads.size()) return;
+
+  Tensor x({B, T, C});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.1f * static_cast<float>((i * 7) % 11) - 0.5f;
+  }
+
+  // Pérdida escalar: suma de la salida, de modo que dout es todo unos.
+  auto loss_of = [&]() {
+    Tensor y = attn.Forward(x);
+    double s = 0.0;
+    for (size_t i = 0; i < y.TotalSize(); ++i) s += y[i];
+    return s;
+  };
+
+  loss_of();
+  Tensor dout({B, T, C});
+  dout.Ones();
+  attn.Backward(dout);
+
+  // La pérdida es la suma de las salidas, casi lineal en los pesos, así que
+  // tolera un paso grande: medido, eps=5e-2 da ~3e-4 de error, mientras que
+  // eps=1e-4 da ~0.48 por cancelación en float32.
+  int checked = 0, skipped = 0;
+  const double worst =
+      MaxGradError(params, grads, loss_of, 5e-2f, 4, &checked, &skipped);
+
+  Check(worst < 1e-2, "el peor error relativo de attention es " + std::to_string(worst));
+  std::cout << "PASADO ✅ (" << checked << " elementos, peor error rel: " << worst << ")\n"
+            << std::flush;
+}
+
+/**
+ * @brief La matriz wte_, compartida por weight tying, acumula ambos gradientes.
+ *
+ * Cubre el defecto por el que Embedding::Backward() ponía a cero el acumulador
+ * después de que GPTModel ya hubiera sumado la contribución de la cabeza de
+ * salida: dW total debe ser dW_embedding + dW_output.
+ */
+void TestGradientCheckWeightTying() {
+  std::cout << "🧪 [Test 6] Weight tying del GPT (matriz wte compartida)... " << std::flush;
+
+  GPTConfig cfg;
+  cfg.vocab_size = 11; cfg.block_size = 6;
+  cfg.n_layer = 2; cfg.n_head = 2; cfg.n_embd = 8;
+  GPTModel model(cfg);
+
+  const int B = 2, T = 5;
+  Tensor idx({B, T});
+  for (int i = 0; i < B * T; ++i) idx[i] = static_cast<float>(i % cfg.vocab_size);
+  Tensor targets({B * T});
+  for (int i = 0; i < B * T; ++i) targets[i] = static_cast<float>((i * 3 + 1) % cfg.vocab_size);
+
+  CrossEntropyLoss crit;
+  auto loss_of = [&]() {
+    Tensor logits = model.Forward(idx);
+    Tensor logits_2d({B * T, cfg.vocab_size});
+    std::memcpy(logits_2d.Data(), logits.Data(), logits.TotalSize() * sizeof(float));
+    return static_cast<double>(crit.Forward(logits_2d, targets));
+  };
+
+  loss_of();
+  Tensor dl2d = crit.Backward();
+  Tensor dlogits({B, T, cfg.vocab_size});
+  std::memcpy(dlogits.Data(), dl2d.Data(), dl2d.TotalSize() * sizeof(float));
+  model.Backward(dlogits);
+
+  std::vector<Tensor*> wte_w = {model.GetParameters()[0]};
+  std::vector<Tensor*> wte_g = {model.GetGradients()[0]};
+
+  // Aquí la pérdida es una cross-entropy, mucho más no lineal, y el error de
+  // truncamiento crece rápido: medido, eps=1e-3 da ~5e-3 de error mientras que
+  // eps=1e-2 lo degrada a ~6e-2. El umbral deja margen para la varianza que
+  // introduce el RNG global compartido entre pruebas.
+  int checked = 0, skipped = 0;
+  const double worst =
+      MaxGradError(wte_w, wte_g, loss_of, 1e-3f, 30, &checked, &skipped);
+
+  Check(worst < 5e-2, "el peor error relativo de wte es " + std::to_string(worst) +
+                          "; la contribucion de la cabeza de salida se esta perdiendo");
+  std::cout << "PASADO ✅ (" << checked << " elementos, peor error rel: " << worst << ")\n"
+            << std::flush;
+}
+
+/** @brief Parámetros y gradientes del GPT deben emparejarse uno a uno. */
+void TestParamGradAlignment() {
+  std::cout << "🧪 [Test 7] Alineación de parámetros y gradientes del GPT... " << std::flush;
+
+  GPTConfig cfg;
+  cfg.vocab_size = 16; cfg.block_size = 8;
+  cfg.n_layer = 4; cfg.n_head = 4; cfg.n_embd = 16;
+  GPTModel model(cfg);
+
+  auto p = model.GetParameters();
+  auto g = model.GetGradients();
+
+  Check(p.size() == g.size(), "el GPT expone " + std::to_string(p.size()) +
+                                  " parametros y " + std::to_string(g.size()) + " gradientes");
+  if (p.size() == g.size()) {
+    for (size_t i = 0; i < p.size(); ++i) {
+      Check(p[i]->Shape() == g[i]->Shape(),
+            "forma distinta entre parametro y gradiente en el indice " + std::to_string(i));
+    }
+  }
+
+  std::cout << "PASADO ✅ (" << p.size() << " pares)\n" << std::flush;
+}
+
+/** @brief El optimizador rechaza listas desemparejadas en vez de corromper pesos. */
+void TestOptimizerRejectsMismatch() {
+  std::cout << "🧪 [Test 8] El optimizador rechaza pares invalidos... " << std::flush;
+
+  Linear layer(4, 3);
+
+  bool threw_on_valid = false;
+  try {
+    AdamW opt(layer.GetParameters(), layer.GetGradients(), 0.01f);
+  } catch (const std::exception&) {
+    threw_on_valid = true;
+  }
+  Check(!threw_on_valid, "el optimizador rechazo un par valido");
+
+  bool threw_on_missing = false;
+  try {
+    AdamW opt(layer.GetParameters(), {}, 0.01f);
+  } catch (const std::invalid_argument&) {
+    threw_on_missing = true;
+  }
+  Check(threw_on_missing, "el optimizador acepto parametros sin gradientes");
+
+  Linear other(9, 7);
+  bool threw_on_shape = false;
+  try {
+    SGD opt(layer.GetParameters(), other.GetGradients(), 0.01f);
+  } catch (const std::invalid_argument&) {
+    threw_on_shape = true;
+  }
+  Check(threw_on_shape, "el optimizador acepto gradientes con forma distinta");
+
+  std::cout << "PASADO ✅\n" << std::flush;
+}
+
+/** @brief Tensor y las operaciones rechazan entradas invalidas. */
+void TestInputValidation() {
+  std::cout << "🧪 [Test 9] Validación de formas e índices... " << std::flush;
+
+  bool threw = false;
+  try { Tensor bad({-1, 4}); } catch (const std::invalid_argument&) { threw = true; }
+  Check(threw, "Tensor acepto una dimension negativa");
+
+  threw = false;
+  try {
+    Tensor A({2, 3}), B({4, 5}), C;
+    MatMul(A, B, C);
+  } catch (const std::invalid_argument&) { threw = true; }
+  Check(threw, "MatMul acepto dimensiones incompatibles");
+
+  threw = false;
+  try {
+    Embedding emb(10, 4);
+    Tensor idx({1, 2});
+    idx[0] = 0.0f; idx[1] = 999.0f;  // fuera del vocabulario
+    emb.Forward(idx);
+  } catch (const std::out_of_range&) { threw = true; }
+  Check(threw, "Embedding acepto un token fuera de rango");
+
+  threw = false;
+  try { MultiHeadAttention attn(130, 4); } catch (const std::invalid_argument&) { threw = true; }
+  Check(threw, "MultiHeadAttention acepto n_embd no divisible entre n_head");
+
+  std::cout << "PASADO ✅\n" << std::flush;
 }
 
 int main() {
@@ -102,9 +365,18 @@ int main() {
   TestLayerNorm();
   TestTokenizer();
   TestGradientCheckGelu();
+  TestGradientCheckAttention();
+  TestGradientCheckWeightTying();
+  TestParamGradAlignment();
+  TestOptimizerRejectsMismatch();
+  TestInputValidation();
 
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "✅ ¡Todas las pruebas unitarias pasaron con éxito!\n" << std::flush;
+  if (g_failures == 0) {
+    std::cout << "✅ ¡Todas las pruebas unitarias pasaron con éxito!\n" << std::flush;
+  } else {
+    std::cout << "❌ " << g_failures << " comprobacion(es) fallaron.\n" << std::flush;
+  }
   std::cout << "============================================================\n" << std::flush;
-  return 0;
+  return g_failures == 0 ? 0 : 1;
 }

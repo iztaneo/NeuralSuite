@@ -9,6 +9,8 @@
 #ifndef NEURAL_SUITE_INCLUDE_LAYERS_EMBEDDING_H_
 #define NEURAL_SUITE_INCLUDE_LAYERS_EMBEDDING_H_
 
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include "../layer.h"
 
@@ -38,6 +40,12 @@ class Embedding : public Layer {
     for (int b = 0; b < batch_size; ++b) {
       for (int t = 0; t < seq_len; ++t) {
         int tok = static_cast<int>(input[b * seq_len + t]);
+        // Un token fuera de rango indexaría weight_ fuera de su memoria.
+        if (tok < 0 || tok >= num_embeddings_) {
+          throw std::out_of_range(
+              "Embedding: token " + std::to_string(tok) + " fuera del rango [0, " +
+              std::to_string(num_embeddings_) + ").");
+        }
         last_tokens_[b * seq_len + t] = tok;
 
         for (int d = 0; d < embedding_dim_; ++d) {

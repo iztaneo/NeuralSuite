@@ -7,9 +7,38 @@ namespace neuralsuite {
 
 static std::mt19937 g_rng(1337);
 
+namespace {
+
+// Un Tensor nunca debe poder existir en un estado internamente inválido, así
+// que la forma se valida en los dos únicos puntos donde se asigna: el
+// constructor y Reshape(). Con eso TotalSize() puede seguir siendo una simple
+// multiplicación sin comprobaciones en el camino caliente.
+void ValidateShape(const std::vector<int>& dims) {
+  size_t total = 1;
+  for (size_t i = 0; i < dims.size(); ++i) {
+    const int d = dims[i];
+    if (d < 0) {
+      throw std::invalid_argument(
+          "Tensor: dimension negativa (" + std::to_string(d) + ") en el eje " +
+          std::to_string(i) + ".");
+    }
+    if (d == 0) {
+      total = 0;
+      continue;
+    }
+    if (total != 0 && total > std::numeric_limits<size_t>::max() / static_cast<size_t>(d)) {
+      throw std::length_error("Tensor: el numero total de elementos desborda size_t.");
+    }
+    total *= static_cast<size_t>(d);
+  }
+}
+
+}  // namespace
+
 Tensor::Tensor() : data_(nullptr), shape_({}) {}
 
 Tensor::Tensor(const std::vector<int>& dims) : shape_(dims) {
+  ValidateShape(shape_);
   size_t sz = TotalSize();
   data_ = (sz > 0) ? new float[sz]() : nullptr;
 }
@@ -66,6 +95,7 @@ size_t Tensor::TotalSize() const {
 }
 
 void Tensor::Reshape(const std::vector<int>& new_shape) {
+  ValidateShape(new_shape);
   size_t old_sz = TotalSize();
   shape_ = new_shape;
   size_t new_sz = TotalSize();
@@ -114,6 +144,18 @@ void Tensor::PrintSummary(const std::string& name) const {
 // ============================================================================
 
 void MatMul(const Tensor& A, const Tensor& B, Tensor& C) {
+  // Sin estas comprobaciones, un tensor con el rango equivocado accede a
+  // Shape()[1] fuera del vector y luego recorre memoria ajena al leer A y B.
+  if (A.Shape().size() != 2 || B.Shape().size() != 2) {
+    throw std::invalid_argument("MatMul: ambos operandos deben ser de rango 2.");
+  }
+  if (A.Shape()[1] != B.Shape()[0]) {
+    throw std::invalid_argument(
+        "MatMul: dimensiones incompatibles, A es [" + std::to_string(A.Shape()[0]) + ", " +
+        std::to_string(A.Shape()[1]) + "] y B es [" + std::to_string(B.Shape()[0]) + ", " +
+        std::to_string(B.Shape()[1]) + "]; A.cols debe igualar B.rows.");
+  }
+
   int M = A.Shape()[0];
   int K = A.Shape()[1];
   int N = B.Shape()[1];

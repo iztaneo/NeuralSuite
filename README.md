@@ -8,20 +8,25 @@ Es totalmente **multiplataforma (Linux, macOS y Windows)** y cuenta con soporte 
 
 ## ⚠️ Estado del proyecto: fase experimental 0.x
 
-NeuralSuite está en desarrollo activo y **no debe considerarse todavía
-matemáticamente confiable para entrenamiento general**. Hay defectos abiertos
-conocidos en el sistema de gradientes del Transformer:
+Los dos defectos que invalidaban el entrenamiento del Transformer **están
+corregidos y cubiertos por pruebas de regresión** (`./test_suite`):
 
-- `MultiHeadAttention` expone sus parámetros pero no sus gradientes, por lo que
-  parámetros y gradientes se desalinean dentro de `GPTBlock` y el optimizador
-  puede aplicar el gradiente equivocado a un peso.
-- El *weight tying* del `GPTModel` pierde la contribución de la cabeza de salida,
-  porque `Embedding::Backward()` reinicia el acumulador de gradiente.
+- `MultiHeadAttention` no sobrescribía `GetGradients()`, así que heredaba una
+  lista vacía: cada `GPTBlock` exponía 12 parámetros frente a 8 gradientes y el
+  optimizador aplicaba el gradiente de una capa a los pesos de otra, leyendo
+  fuera de rango al agotarse la lista más corta.
+- El *weight tying* del `GPTModel` perdía la contribución de la cabeza de
+  salida, porque `Embedding::Backward()` reinicia el acumulador de gradiente
+  después de que el modelo ya la hubiera sumado.
 
-Hasta que estos puntos se cierren, **los resultados de entrenamiento del GPT no
-son válidos**. La cobertura de tests tampoco alcanza aún a `MultiHeadAttention`,
-`Conv2D`, `LayerNorm` ni `CrossEntropyLoss`. El uso recomendado por ahora es
-educativo y de lectura del código.
+Los optimizadores ahora rechazan listas de parámetros y gradientes que no
+casen, en lugar de continuar en silencio, y `Tensor`, `MatMul`, `Embedding` y
+`MultiHeadAttention` validan formas e índices.
+
+**Sigue siendo software 0.x.** La cobertura de gradient checking aún no alcanza
+a `Conv2D`, `LayerNorm`, `LSTM` ni `CrossEntropyLoss`; el formato de
+serialización no tiene cabecera ni versión; y no hay integración continua. El
+uso recomendado es educativo y de lectura del código.
 
 ---
 
@@ -98,7 +103,10 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Pruebas**
 
-- `./test_suite`: Pruebas unitarias numéricas y verificación de gradientes por diferencias finitas.
+- `./test_suite`: Pruebas unitarias numéricas y verificación de gradientes por
+  diferencias finitas (GELU, `MultiHeadAttention` completa y la matriz `wte`
+  compartida por weight tying), más las invariantes de alineación entre
+  parámetros y gradientes y la validación de formas e índices.
 
 **Redes densas, convolucionales y recurrentes**
 
@@ -119,7 +127,6 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 **LLM / Transformer**
 
 - `./train_llm`: Entrenamiento del LLM Transformer sobre dataset de texto.
-  Ver la advertencia de estado: los gradientes del Transformer tienen defectos abiertos.
 - `./generate_llm`: Inferencia y generación de texto autorregresivo desde la consola C++.
 
 **OCR**

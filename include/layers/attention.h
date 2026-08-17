@@ -11,6 +11,8 @@
 
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include "../layer.h"
 #include "linear.h"
@@ -28,7 +30,18 @@ class MultiHeadAttention : public Layer {
         n_head_(heads),
         head_dim_(embd / heads),
         c_attn_(embd, 3 * embd),
-        c_proj_(embd, embd) {}
+        c_proj_(embd, embd) {
+    // Si embd no es múltiplo de heads, head_dim_ trunca y las dimensiones
+    // sobrantes quedan sin asignar a ninguna cabeza, en silencio.
+    if (embd <= 0 || heads <= 0) {
+      throw std::invalid_argument("MultiHeadAttention: embd y heads deben ser positivos.");
+    }
+    if (embd % heads != 0) {
+      throw std::invalid_argument(
+          "MultiHeadAttention: n_embd (" + std::to_string(embd) +
+          ") debe ser multiplo de n_head (" + std::to_string(heads) + ").");
+    }
+  }
 
   Tensor Forward(const Tensor& input) override {
     last_input_ = input;
@@ -175,6 +188,17 @@ class MultiHeadAttention : public Layer {
     auto p2 = c_proj_.GetParameters();
     p.insert(p.end(), p2.begin(), p2.end());
     return p;
+  }
+
+  // Debe devolver los gradientes en el mismo orden que GetParameters(): el
+  // optimizador empareja ambas listas por índice. Omitir este override hacía
+  // que la clase heredara el vector vacío de Layer, desalineando parámetros y
+  // gradientes en cada GPTBlock (12 params frente a 8 grads).
+  std::vector<Tensor*> GetGradients() override {
+    std::vector<Tensor*> g = c_attn_.GetGradients();
+    auto g2 = c_proj_.GetGradients();
+    g.insert(g.end(), g2.begin(), g2.end());
+    return g;
   }
 
   static void ApplyRoPE(float* vec, int head_dim, int pos) {

@@ -246,16 +246,14 @@ class GPTModel {
     Tensor dx_2d;
     MatMul(dlogits_2d, wte_.Weight(), dx_2d);
 
-    // dW_wte += dlogits_2d^T * x_2d
+    // Contribución de la cabeza de salida: dW_output = dlogits_2d^T * x_2d.
+    // Se calcula aquí (necesita last_x_2d_) pero se acumula al final: la matriz
+    // wte_ está compartida entre el embedding de entrada y la cabeza de salida,
+    // y Embedding::Backward() reinicia su gradiente a cero. Acumular antes de
+    // esa llamada haría que la contribución se perdiera por completo.
     Tensor dlogits_2d_T = Transpose(dlogits_2d);
-    Tensor dwte;
-    MatMul(dlogits_2d_T, last_x_2d_, dwte);
-
-    Tensor* wte_grad = wte_.GetGradients()[0];
-    for (size_t i = 0; i < wte_grad->TotalSize(); ++i) {
-      (*wte_grad)[i] += dwte[i];
-    }
-
+    Tensor dwte_output;
+    MatMul(dlogits_2d_T, last_x_2d_, dwte_output);
 
     Tensor dx({batch_size, seq_len, config_.n_embd});
     std::memcpy(dx.Data(), dx_2d.Data(), dx_2d.TotalSize() * sizeof(float));
@@ -266,8 +264,15 @@ class GPTModel {
       dx = (*it)->Backward(dx);
     }
 
+    // Escribe la contribución del embedding de entrada en dweight_.
     wte_.Backward(dx);
     wpe_.Backward(dx);
+
+    // dW_total = dW_embedding + dW_output.
+    Tensor* wte_grad = wte_.GetGradients()[0];
+    for (size_t i = 0; i < wte_grad->TotalSize(); ++i) {
+      (*wte_grad)[i] += dwte_output[i];
+    }
 
     return dx;
   }
