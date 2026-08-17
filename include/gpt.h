@@ -124,8 +124,7 @@ class GPTModel {
       : config_(cfg),
         wte_(cfg.vocab_size, cfg.n_embd),
         wpe_(cfg.block_size, cfg.n_embd),
-        ln_f_(cfg.n_embd),
-        lm_head_(cfg.n_embd, cfg.vocab_size) {
+        ln_f_(cfg.n_embd) {
     for (int i = 0; i < cfg.n_layer; ++i) {
       blocks_.push_back(std::make_shared<GPTBlock>(cfg));
     }
@@ -135,6 +134,8 @@ class GPTModel {
   Tensor Forward(const Tensor& idx) {
     int batch_size = idx.Shape()[0];
     int seq_len = idx.Shape()[1];
+
+    last_x_2d_.Reshape({batch_size * seq_len, config_.n_embd});
 
     Tensor tok_emb = wte_.Forward(idx);
 
@@ -159,10 +160,13 @@ class GPTModel {
 
     x = ln_f_.Forward(x);
 
-    Tensor x_2d({batch_size * seq_len, config_.n_embd});
-    std::memcpy(x_2d.Data(), x.Data(), x.TotalSize() * sizeof(float));
+    std::memcpy(last_x_2d_.Data(), x.Data(), x.TotalSize() * sizeof(float));
 
-    Tensor logits_2d = lm_head_.Forward(x_2d);
+    // Weight Tying: logits = x_2d * W_wte^T
+    Tensor wte_T = Transpose(wte_.Weight());
+    Tensor logits_2d;
+    MatMul(last_x_2d_, wte_T, logits_2d);
+
     Tensor logits({batch_size, seq_len, config_.vocab_size});
     std::memcpy(logits.Data(), logits_2d.Data(), logits_2d.TotalSize() * sizeof(float));
 
@@ -176,7 +180,22 @@ class GPTModel {
     Tensor dlogits_2d({batch_size * seq_len, config_.vocab_size});
     std::memcpy(dlogits_2d.Data(), dlogits.Data(), dlogits.TotalSize() * sizeof(float));
 
-    Tensor dx_2d = lm_head_.Backward(dlogits_2d);
+    // Weight Tying Backward:
+    // dx_2d = dlogits_2d * W_wte
+    Tensor dx_2d;
+    MatMul(dlogits_2d, wte_.Weight(), dx_2d);
+
+    // dW_wte += dlogits_2d^T * x_2d
+    Tensor dlogits_2d_T = Transpose(dlogits_2d);
+    Tensor dwte;
+    MatMul(dlogits_2d_T, last_x_2d_, dwte);
+
+    Tensor* wte_grad = wte_.GetGradients()[0];
+    for (size_t i = 0; i < wte_grad->TotalSize(); ++i) {
+      (*wte_grad)[i] += dwte[i];
+    }
+
+
     Tensor dx({batch_size, seq_len, config_.n_embd});
     std::memcpy(dx.Data(), dx_2d.Data(), dx_2d.TotalSize() * sizeof(float));
 
@@ -241,8 +260,9 @@ class GPTModel {
   Embedding wpe_;
   std::vector<std::shared_ptr<GPTBlock>> blocks_;
   LayerNormLayer ln_f_;
-  Linear lm_head_;
+  Tensor last_x_2d_;
 };
+
 
 }  // namespace neuralsuite
 

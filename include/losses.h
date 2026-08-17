@@ -47,14 +47,17 @@ class CrossEntropyLoss : public Loss {
         if (predictions[i * num_classes + c] > max_val) max_val = predictions[i * num_classes + c];
       }
 
-      float sum = 0.0f;
-      for (int c = 0; c < num_classes; ++c) sum += std::exp(predictions[i * num_classes + c] - max_val);
-      float prob = std::exp(predictions[i * num_classes + target_cls] - max_val) / sum;
+      float sum_exp = 0.0f;
+      for (int c = 0; c < num_classes; ++c) {
+        sum_exp += std::exp(predictions[i * num_classes + c] - max_val);
+      }
 
-      total_loss -= std::log(prob + 1e-7f);
+      float log_prob = (predictions[i * num_classes + target_cls] - max_val) - std::log(sum_exp);
+      total_loss -= log_prob;
     }
     return total_loss / num_samples;
   }
+
 
   Tensor Backward() override {
     int num_samples = last_preds_.Shape()[0];
