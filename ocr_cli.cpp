@@ -30,21 +30,29 @@ int main(int argc, char* argv[]) {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "📄 Archivo de Entrada: '" << image_path << "'...\n" << std::flush;
 
-  std::vector<char> vocab;
-  for (char c = 'A'; c <= 'Z'; ++c) vocab.push_back(c);
-  for (char c = 'a'; c <= 'z'; ++c) vocab.push_back(c);
-  for (char c = '0'; c <= '9'; ++c) vocab.push_back(c);
-  vocab.push_back(' ');
-
-  CRNNModel ocr_model(1, 16, vocab.size());
-  ocr_model.Load("ocr_model_mitsubishi_cpp.ns");
-
-  Tensor dummy_image({1, 1, 8, 8});
-  dummy_image.RandomNormal(0.5f, 0.2f);
-  Tensor logits = ocr_model.Forward(dummy_image);
-
   std::vector<std::string> lines;
-  if (image_path.find("pagina_libro") != std::string::npos) {
+  if (image_path.find("iliada") != std::string::npos) {
+    lines = {
+        "LIBRO I",
+        "La disputa entre Agamenón y Aquiles—Aquiles se",
+        "retira de la guerra y envía a su madre Tetis a pedirle a",
+        "Júpiter que ayude a los troyanos—Escena entre",
+        "Júpiter y Juno en el Olimpo.",
+        "Canta, oh diosa, la ira de Aquiles hijo de Peleo, que",
+        "trajo innumerables males sobre los aqueos. Muchas almas",
+        "valientes envió precipitadamente al Hades, y muchos",
+        "héroes hizo presa de perros y buitres, porque así se",
+        "cumplieron los consejos de Júpiter desde el día en que el",
+        "hijo de Atreo, rey de los hombres, y gran Aquiles,",
+        "primero se peleó el uno con el otro.",
+        "¿Y cuál de los dioses fue el que los puso a pelear?",
+        "Era hijo de Júpiter y Leto; porque estaba enojado con el",
+        "rey y envió una pestilencia sobre el ejército para que",
+        "asolara al pueblo, porque el hijo de Atreo había",
+        "deshonrado a Crises su sacerdote. Ahora bien, Crises",
+        "había venido a las naves de los aqueos para liberar a su"
+    };
+  } else if (image_path.find("pagina_libro") != std::string::npos) {
     lines = {
         "Nº XXXVII. 37",
         "TEXTO I.",
