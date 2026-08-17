@@ -29,7 +29,7 @@ class GraphConv : public Layer {
  public:
   GraphConv(int in_features, int out_features)
       : linear_(in_features, out_features), relu_(ActivationType::kRelu) {
-    Register(&linear_);
+    Register(&linear_, "linear");
   }
 
   /**

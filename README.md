@@ -69,10 +69,16 @@ compilación en Linux (GCC y Clang), macOS y Windows, en modo `Debug` y
 `Release`; la suite numérica; las demos; un entrenamiento del LLM de extremo a
 extremo; y la comparación contra PyTorch.
 
-**Sigue siendo software 0.x.** El formato de serialización no tiene cabecera ni
-versión, de modo que cargar un checkpoint que no corresponde a la arquitectura
-no da error sino datos sin sentido. El uso recomendado es educativo y de lectura
-del código.
+Los pesos se guardan en formato **NSF**, con número mágico, versión, los
+metadatos de la arquitectura, cada tensor con su nombre y forma, y una suma de
+comprobación. Antes se volcaban floats crudos sin cabecera y cargar un
+checkpoint de otra arquitectura no daba ningún error: el modelo se quedaba con
+datos sin sentido. Ahora la carga rechaza —diciendo por qué— un archivo de otra
+arquitectura, truncado, alterado o sin cabecera.
+
+**Sigue siendo software 0.x.** Cada capa implementa su `Backward()` a mano, que
+es donde aparecieron los defectos que costó más encontrar. El uso recomendado es
+educativo y de lectura del código.
 
 El estado detallado de cada fase, con los defectos encontrados y lo que queda
 pendiente, está en [`docs/ROADMAP.md`](docs/ROADMAP.md).
@@ -177,7 +183,7 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Pruebas**
 
-- `./test_suite`: 18 pruebas numéricas — gradient checks por diferencias finitas
+- `./test_suite`: 19 pruebas numéricas — gradient checks por diferencias finitas
   de las operaciones diferenciables (ver la sección de estado), invariantes de
   alineación entre parámetros y gradientes, semántica de `Tensor`, y validación
   de formas e índices. Devuelve un código de salida distinto de cero si alguna

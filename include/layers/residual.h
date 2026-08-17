@@ -24,7 +24,7 @@ class ResidualBlock : public Layer {
  public:
   explicit ResidualBlock(std::shared_ptr<Layer> inner_layer)
       : inner_layer_(inner_layer), relu_(ActivationType::kRelu) {
-    Register(inner_layer_.get());
+    Register(inner_layer_.get(), "inner");
   }
 
   Tensor Forward(const Tensor& input) override {

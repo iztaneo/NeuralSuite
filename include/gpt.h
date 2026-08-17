@@ -9,7 +9,10 @@
 #ifndef NEURAL_SUITE_INCLUDE_GPT_H_
 #define NEURAL_SUITE_INCLUDE_GPT_H_
 
+#include <iostream>
+#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 #include "activations.h"
 #include "layers/attention.h"
@@ -17,6 +20,7 @@
 #include "layers/layernorm.h"
 #include "layers/linear.h"
 #include "losses.h"
+#include "serialization.h"
 #include "tensor.h"
 #include "tokenizer.h"
 
@@ -49,11 +53,11 @@ class GPTBlock : public Layer {
         mlp_proj_(4 * config.n_embd, config.n_embd) {
     // El orden de registro fija el orden de los parametros. Antes esta misma
     // secuencia se repetia a mano en dos metodos que debian coincidir entre si.
-    Register(&ln_1_);
-    Register(&attn_);
-    Register(&ln_2_);
-    Register(&mlp_fc_);
-    Register(&mlp_proj_);
+    Register(&ln_1_, "ln_1");
+    Register(&attn_, "attn");
+    Register(&ln_2_, "ln_2");
+    Register(&mlp_fc_, "mlp_fc");
+    Register(&mlp_proj_, "mlp_proj");
   }
 
   Tensor Forward(const Tensor& input) override {
@@ -133,13 +137,13 @@ class GPTModel : public Module {
         wte_(cfg.vocab_size, cfg.n_embd),
         wpe_(cfg.block_size, cfg.n_embd),
         ln_f_(cfg.n_embd) {
-    Register(&wte_);
-    Register(&wpe_);
+    Register(&wte_, "wte");
+    Register(&wpe_, "wpe");
     for (int i = 0; i < cfg.n_layer; ++i) {
       blocks_.push_back(std::make_shared<GPTBlock>(cfg));
-      Register(blocks_.back().get());
+      Register(blocks_.back().get(), "blocks." + std::to_string(i));
     }
-    Register(&ln_f_);
+    Register(&ln_f_, "ln_f");
   }
 
 
@@ -277,22 +281,35 @@ class GPTModel : public Module {
     return out;
   }
 
+  /**
+   * @brief Guarda los pesos en formato NSF, con la arquitectura declarada.
+   *
+   * Los metadatos permiten que la carga rechace un archivo que no corresponda a
+   * esta configuracion en vez de aceptar cualquier secuencia de floats.
+   */
   bool SaveWeights(const std::string& filepath) {
-    std::ofstream out(filepath, std::ios::binary);
-    if (!out.is_open()) return false;
-    for (auto p : GetParameters()) {
-      out.write(reinterpret_cast<const char*>(p->Data()), p->TotalSize() * sizeof(float));
-    }
-    return true;
+    const auto result = nsf::Save(filepath, nsf::FromNamedParameters(NamedParameters()),
+                                 ArchitectureMetadata());
+    if (!result) std::cerr << "Error al guardar: " << result.error << "\n";
+    return result.ok;
   }
 
+  /** @brief Carga pesos NSF, comprobando que correspondan a esta arquitectura. */
   bool LoadWeights(const std::string& filepath) {
-    std::ifstream in(filepath, std::ios::binary);
-    if (!in.is_open()) return false;
-    for (auto p : GetParameters()) {
-      in.read(reinterpret_cast<char*>(p->Data()), p->TotalSize() * sizeof(float));
-    }
-    return true;
+    const auto result = nsf::Load(filepath, nsf::FromNamedParameters(NamedParameters()),
+                                 ArchitectureMetadata());
+    if (!result) std::cerr << "Error al cargar: " << result.error << "\n";
+    return result.ok;
+  }
+
+  /** @brief Descripcion de la arquitectura que viaja dentro del archivo. */
+  [[nodiscard]] std::map<std::string, std::string> ArchitectureMetadata() const {
+    return {{"arch", "gpt"},
+            {"vocab_size", std::to_string(config_.vocab_size)},
+            {"block_size", std::to_string(config_.block_size)},
+            {"n_layer", std::to_string(config_.n_layer)},
+            {"n_head", std::to_string(config_.n_head)},
+            {"n_embd", std::to_string(config_.n_embd)}};
   }
 
   [[nodiscard]] const GPTConfig& Config() const { return config_; }

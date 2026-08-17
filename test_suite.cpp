@@ -13,7 +13,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -899,6 +901,90 @@ void TestParameterAndModule() {
             << std::flush;
 }
 
+/**
+ * @brief El formato NSF conserva los pesos y rechaza lo que no corresponde.
+ *
+ * Lo que importa aqui no es que el viaje de ida y vuelta funcione, sino que
+ * cargar algo incompatible falle. El formato anterior no tenia cabecera: un
+ * archivo de otra arquitectura, o truncado, se cargaba sin dar ningun error y
+ * el modelo se quedaba con datos sin sentido.
+ */
+void TestSerialization() {
+  std::cout << "🧪 [Test 19] Formato de pesos NSF... " << std::flush;
+
+  const std::string path = "/tmp/ns_test_weights.nsf";
+
+  GPTConfig cfg;
+  cfg.vocab_size = 12; cfg.block_size = 8;
+  cfg.n_layer = 2; cfg.n_head = 2; cfg.n_embd = 8;
+
+  // Ida y vuelta: los pesos guardados deben volver identicos.
+  GPTModel saver(cfg);
+  Check(saver.SaveWeights(path), "no se pudo guardar el modelo");
+
+  GPTModel loader(cfg);
+  Check(loader.LoadWeights(path), "no se pudo cargar un archivo que deberia encajar");
+
+  bool identical = true;
+  auto a = saver.GetParameters();
+  auto b = loader.GetParameters();
+  for (size_t i = 0; i < a.size() && i < b.size(); ++i) {
+    for (size_t k = 0; k < a[i]->TotalSize(); ++k) {
+      if (std::abs((*a[i])[k] - (*b[i])[k]) > 0.0f) identical = false;
+    }
+  }
+  Check(a.size() == b.size() && identical, "los pesos cargados no son identicos a los guardados");
+
+  // Una arquitectura distinta debe rechazarse, no cargarse a medias.
+  GPTConfig other = cfg;
+  other.n_layer = 3;
+  GPTModel wrong_layers(other);
+  Check(!wrong_layers.LoadWeights(path),
+        "se acepto un archivo de 2 capas en un modelo de 3");
+
+  GPTConfig other_vocab = cfg;
+  other_vocab.vocab_size = 20;
+  GPTModel wrong_vocab(other_vocab);
+  Check(!wrong_vocab.LoadWeights(path),
+        "se acepto un archivo con otro tamano de vocabulario");
+
+  // Un archivo truncado debe detectarse.
+  {
+    std::ifstream src(path, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
+    std::ofstream dst("/tmp/ns_test_truncated.nsf", std::ios::binary);
+    dst.write(bytes.data(), static_cast<std::streamsize>(bytes.size() / 2));
+  }
+  GPTModel truncated_target(cfg);
+  Check(!truncated_target.LoadWeights("/tmp/ns_test_truncated.nsf"),
+        "se acepto un archivo truncado");
+
+  // Un byte cambiado debe hacer fallar la suma de comprobacion.
+  {
+    std::ifstream src(path, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
+    if (bytes.size() > 200) bytes[bytes.size() - 40] ^= 0x7F;
+    std::ofstream dst("/tmp/ns_test_corrupt.nsf", std::ios::binary);
+    dst.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  }
+  GPTModel corrupt_target(cfg);
+  Check(!corrupt_target.LoadWeights("/tmp/ns_test_corrupt.nsf"),
+        "se acepto un archivo con un byte alterado");
+
+  // Un archivo que no es NSF (el volcado crudo de antes) debe rechazarse.
+  {
+    std::ofstream raw("/tmp/ns_test_legacy.bin", std::ios::binary);
+    std::vector<float> junk(1000, 0.5f);
+    raw.write(reinterpret_cast<const char*>(junk.data()),
+              static_cast<std::streamsize>(junk.size() * sizeof(float)));
+  }
+  GPTModel legacy_target(cfg);
+  Check(!legacy_target.LoadWeights("/tmp/ns_test_legacy.bin"),
+        "se acepto un volcado sin cabecera");
+
+  std::cout << "PASADO ✅\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -922,6 +1008,7 @@ int main() {
   TestViewSemantics();
   TestGradientCheckRemainingLayers();
   TestParameterAndModule();
+  TestSerialization();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

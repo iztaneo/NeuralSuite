@@ -49,10 +49,10 @@ class LSTM : public Layer {
         weight_hh_({4 * hid_sz, hid_sz}),
         bias_ih_({4 * hid_sz}),
         bias_hh_({4 * hid_sz}) {
-    Register(&weight_ih_);
-    Register(&weight_hh_);
-    Register(&bias_ih_);
-    Register(&bias_hh_);
+    Register(&weight_ih_, "weight_ih");
+    Register(&weight_hh_, "weight_hh");
+    Register(&bias_ih_, "bias_ih");
+    Register(&bias_hh_, "bias_hh");
     if (in_sz <= 0 || hid_sz <= 0) {
       throw std::invalid_argument("LSTM: input_size y hidden_size deben ser positivos.");
     }

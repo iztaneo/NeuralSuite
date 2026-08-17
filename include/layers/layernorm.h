@@ -26,8 +26,8 @@ class LayerNormLayer : public Layer {
         eps_(epsilon),
         gamma_({shape}),
         beta_({shape}) {
-    Register(&gamma_);
-    Register(&beta_);
+    Register(&gamma_, "gamma");
+    Register(&beta_, "beta");
     gamma_.Value().Ones();
     beta_.Value().Zeros();
   }

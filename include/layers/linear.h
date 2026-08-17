@@ -27,8 +27,8 @@ class Linear : public Layer {
         out_features_(out_features),
         weight_({in_features, out_features}),
         bias_({out_features}) {
-    Register(&weight_);
-    Register(&bias_);
+    Register(&weight_, "weight");
+    Register(&bias_, "bias");
     weight_.Value().RandomNormal(0.0f, 0.02f);
     bias_.Value().Zeros();
   }

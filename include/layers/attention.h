@@ -31,8 +31,8 @@ class MultiHeadAttention : public Layer {
         head_dim_(embd / heads),
         c_attn_(embd, 3 * embd),
         c_proj_(embd, embd) {
-    Register(&c_attn_);
-    Register(&c_proj_);
+    Register(&c_attn_, "c_attn");
+    Register(&c_proj_, "c_proj");
     // Si embd no es múltiplo de heads, head_dim_ trunca y las dimensiones
     // sobrantes quedan sin asignar a ninguna cabeza, en silencio.
     if (embd <= 0 || heads <= 0) {

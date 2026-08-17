@@ -27,7 +27,7 @@ class Embedding : public Layer {
       : num_embeddings_(num_embeddings),
         embedding_dim_(embedding_dim),
         weight_({num_embeddings, embedding_dim}) {
-    Register(&weight_);
+    Register(&weight_, "weight");
     weight_.Value().RandomNormal(0.0f, 0.02f);
   }
 

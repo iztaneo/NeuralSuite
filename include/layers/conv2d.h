@@ -29,8 +29,8 @@ class Conv2D : public Layer {
         padding_(pad),
         weight_({out_ch, in_ch, k_size, k_size}),
         bias_({out_ch}) {
-    Register(&weight_);
-    Register(&bias_);
+    Register(&weight_, "weight");
+    Register(&bias_, "bias");
     weight_.Value().XavierInit(in_ch * k_size * k_size, out_ch * k_size * k_size);
     bias_.Value().Zeros();
   }

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -24,6 +25,7 @@
 #include "../layers/conv2d.h"
 #include "../layers/linear.h"
 #include "../layers/maxpool2d.h"
+#include "../serialization.h"
 #include "../tensor.h"
 #include "../tokenizer.h"
 
@@ -59,9 +61,9 @@ class CRNNModel : public Layer {
         fc1_(4 * 3 * 3, hidden_dim),
         fc2_(hidden_dim, num_classes),
         num_classes_(num_classes) {
-    Register(&conv_);
-    Register(&fc1_);
-    Register(&fc2_);
+    Register(&conv_, "conv");
+    Register(&fc1_, "fc1");
+    Register(&fc2_, "fc2");
   }
 
   Tensor Forward(const Tensor& input_images) override {
@@ -142,21 +144,17 @@ class CRNNModel : public Layer {
 
 
   bool Save(const std::string& path) {
-    std::ofstream out(path, std::ios::binary);
-    if (!out.is_open()) return false;
-    for (auto p : GetParameters()) {
-      out.write(reinterpret_cast<const char*>(p->Data()), p->TotalSize() * sizeof(float));
-    }
-    return true;
+    const auto result = nsf::Save(path, nsf::FromNamedParameters(NamedParameters()),
+                                 {{"arch", "crnn"}, {"num_classes", std::to_string(num_classes_)}});
+    if (!result) std::cerr << "Error al guardar: " << result.error << "\n";
+    return result.ok;
   }
 
   bool Load(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in.is_open()) return false;
-    for (auto p : GetParameters()) {
-      in.read(reinterpret_cast<char*>(p->Data()), p->TotalSize() * sizeof(float));
-    }
-    return true;
+    const auto result = nsf::Load(path, nsf::FromNamedParameters(NamedParameters()),
+                                 {{"arch", "crnn"}, {"num_classes", std::to_string(num_classes_)}});
+    if (!result) std::cerr << "Error al cargar: " << result.error << "\n";
+    return result.ok;
   }
 
  private:

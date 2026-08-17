@@ -15,9 +15,9 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | --------------------------------- | ------------------------------------------------------------- |
 | Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
 | Robustez de `Tensor`              | ✅ formas validadas, sin estados inválidos, vistas sin copia    |
-| Testing                           | ✅ 18 pruebas, validadas por mutación, con código de salida     |
+| Testing                           | ✅ 19 pruebas, validadas por mutación, con código de salida     |
 | Portabilidad                      | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release    |
-| Serialización                     | ❌ sin cabecera ni versión: un checkpoint incompatible da basura |
+| Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
 | Autograd                          | ❌ cada capa implementa su backward a mano                      |
 | Rendimiento                       | ⚠️ correcto pero sin optimizar; el cómputo domina               |
@@ -127,7 +127,7 @@ Medido en este repositorio: en `MultiHeadAttention` el error baja de 0,48 a
 3e-4 al **agrandar** el paso; en `GraphConv` sube de 1,8e-6 a 1,0 al agrandarlo.
 Cada prueba lleva su calibración documentada en el código.
 
-## Fase 05 — Autograd ⬜
+## Fase 05 — Autograd ⬜ ← siguiente
 
 - [ ] Primitivas con derivada automática (add, mul, matmul, sum, mean, exp, log,
       tanh, reshape, transpose), y después softmax, LayerNorm, gather y
@@ -136,16 +136,20 @@ Cada prueba lleva su calibración documentada en el código.
 Reduce la superficie de error: hoy cada capa implementa su backward a mano, que
 es exactamente donde aparecieron los dos defectos P0.
 
-## Fase 06 — Serialización ⬜ ← siguiente
+## Fase 06 — Serialización ✅
 
-- [ ] Formato con número mágico, versión, configuración de la arquitectura y
-      tensores con nombre.
+- [x] **Formato NSF**: número mágico, versión, metadatos de la arquitectura,
+      tensores con nombre y forma, y suma de comprobación.
+- [x] `Module::NamedParameters()` da a cada peso su ruta en el árbol
+      (`blocks.0.attn.c_attn.weight`), de modo que el archivo es
+      autodescriptivo en lugar de una secuencia numerada.
+- [x] `GPTModel`, `CRNNModel` y `Sequential` lo usan.
 
-Hoy `SaveWeights`/`LoadWeights` vuelcan y leen floats crudos sin cabecera: un
-checkpoint que no corresponde a la arquitectura configurada **se carga sin dar
-error**, con datos truncados o basura. Es la última vía de fallo silencioso
-abierta. El contenedor `NSPARITY` de [`tools/parity/`](../tools/parity/README.md)
-ya funciona y sirve de base.
+Antes se volcaban floats crudos sin cabecera: un checkpoint de otra
+arquitectura se cargaba sin dar error y el modelo se quedaba con datos sin
+sentido. Ahora la carga rechaza, indicando el motivo, un archivo de otra
+arquitectura, truncado, con un byte alterado, o sin cabecera. Los pesos
+guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 
 ## Fase 07 — Runtime y build portable ✅
 

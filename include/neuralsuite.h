@@ -19,6 +19,7 @@
 
 // Core Primitives & Base Classes
 #include "activations.h"
+#include "serialization.h"
 #include "artifacts.h"
 #include "gpt.h"
 #include "layer.h"
@@ -84,23 +85,32 @@ class Sequential {
   }
 
   bool Save(const std::string& filepath) {
-    std::ofstream out(filepath, std::ios::binary);
-    if (!out.is_open()) return false;
-    for (Parameter* p : params_) {
-      out.write(reinterpret_cast<const char*>(p->Value().Data()),
-                p->TotalSize() * sizeof(float));
-    }
-    return true;
+    const auto result = nsf::Save(filepath, NamedTensors(),
+                                 {{"arch", "sequential"},
+                                  {"n_params", std::to_string(params_.size())}});
+    if (!result) std::cerr << "Error al guardar: " << result.error << "\n";
+    return result.ok;
   }
 
   bool Load(const std::string& filepath) {
-    std::ifstream in(filepath, std::ios::binary);
-    if (!in.is_open()) return false;
-    for (Parameter* p : params_) {
-      in.read(reinterpret_cast<char*>(p->Value().Data()), p->TotalSize() * sizeof(float));
-    }
-    return true;
+    const auto result = nsf::Load(filepath, NamedTensors(),
+                                 {{"arch", "sequential"},
+                                  {"n_params", std::to_string(params_.size())}});
+    if (!result) std::cerr << "Error al cargar: " << result.error << "\n";
+    return result.ok;
   }
+
+ private:
+  /** @brief Nombra los parametros por su posicion en la secuencia de capas. */
+  [[nodiscard]] std::vector<nsf::NamedTensor> NamedTensors() {
+    std::vector<nsf::NamedTensor> out;
+    for (size_t i = 0; i < params_.size(); ++i) {
+      out.push_back({"param." + std::to_string(i), &params_[i]->Value()});
+    }
+    return out;
+  }
+
+ public:
 
  private:
   std::vector<std::shared_ptr<Layer>> layers_;
