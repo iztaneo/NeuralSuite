@@ -11,6 +11,17 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
+**35 puntos cerrados, 12 pendientes.** Lo siguiente es el autograd (Fase 05).
+
+| Fase                       | Estado           | Fase              | Estado       |
+| -------------------------- | ---------------- | ----------------- | ------------ |
+| 00 Confianza y limpieza    | ✅               | 06 Serialización  | ✅           |
+| 01 Corrección crítica      | ✅               | 07 Runtime y build| ✅           |
+| 02 Tensor Core             | ✅ parcial       | 08 Tokenizador    | ⬜           |
+| 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ⬜           |
+| 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅ parcial   |
+| **05 Autograd**            | **⬜ siguiente** | OCR (aparte)      | ⬜           |
+
 | Área                              | Estado                                                        |
 | --------------------------------- | ------------------------------------------------------------- |
 | Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
@@ -83,6 +94,8 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Fase 03 — `Parameter` y `Module` ✅
 
+`dc015ed`
+
 - [x] **`Parameter` reúne valor y gradiente en un solo objeto**, creados juntos
       y con la misma forma. `GetParameters()` y `GetGradients()` dejan de ser
       dos métodos virtuales independientes y pasan a derivarse de la misma
@@ -137,6 +150,8 @@ Reduce la superficie de error: hoy cada capa implementa su backward a mano, que
 es exactamente donde aparecieron los dos defectos P0.
 
 ## Fase 06 — Serialización ✅
+
+`051b952`, `0775e18`
 
 - [x] **Formato NSF**: número mágico, versión, metadatos de la arquitectura,
       tensores con nombre y forma, y suma de comprobación.
@@ -208,14 +223,27 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 Vale la pena registrarlo, porque justifica el orden del plan: cada capa
 detectó defectos que la anterior no podía ver.
 
-| Capa                       | Encontró                                                        |
-| -------------------------- | --------------------------------------------------------------- |
-| Lectura del código         | Los dos P0 de gradientes; que `LSTM` no era una LSTM             |
-| Gradient checks            | Nada nuevo — pero fijan las correcciones como regresión          |
-| Mutación de las pruebas    | Que la prueba de `GraphConv` no comprobaba lo que decía          |
-| Paridad contra PyTorch     | Detecta errores de semántica que el gradient check no puede ver  |
-| Integración continua       | Que Windows nunca compiló; una ruta absoluta en un script        |
+| Capa                       | Encontró                                                          |
+| -------------------------- | ----------------------------------------------------------------- |
+| Lectura del código         | Los dos P0 de gradientes; que `LSTM` no era una LSTM               |
+| Gradient checks            | Nada nuevo — pero fijan las correcciones como regresión            |
+| Mutación de las pruebas    | Que la prueba de `GraphConv` no comprobaba lo que decía            |
+| Prueba de ida y vuelta     | Que el número mágico entraba en el checksum al escribir y no al leer |
+| Paridad contra PyTorch     | Detecta errores de semántica que el gradient check no puede ver    |
+| Integración continua       | Que Windows nunca compiló; dos rutas que solo existían en una máquina |
 
 El gradient checking compara el código consigo mismo: confirma que el
 `Backward` deriva el `Forward` escrito, no que ese `Forward` sea lo que dice
 ser. Por eso un gradient check sobre la `LSTM` original **habría pasado**.
+
+Dos lecciones que se repitieron lo bastante como para anotarlas:
+
+**Probar que lo correcto pasa importa tanto como probar que lo incorrecto
+falla.** El formato NSF rechazaba bien las seis situaciones inválidas, pero
+tampoco aceptaba las válidas: el número mágico se sumaba al checksum al
+escribir y no al leer. Solo la prueba de ida y vuelta lo vio.
+
+**El código que funciona en una sola máquina no da síntoma hasta que sale de
+ella.** Aparecieron una ruta absoluta del directorio del autor en el arnés de
+paridad y rutas `/tmp` en la prueba de serialización, que no existen en
+Windows. Ninguna verificación local podía detectarlo.
