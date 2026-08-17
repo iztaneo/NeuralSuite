@@ -119,18 +119,19 @@ void MatMul(const Tensor& A, const Tensor& B, Tensor& C) {
   int N = B.Shape()[1];
 
   C.Reshape({M, N});
+  C.Zeros();
 
-  #pragma omp parallel for schedule(static)
+  #pragma omp parallel for schedule(static) if(M >= 64)
   for (int i = 0; i < M; ++i) {
-    for (int j = 0; j < N; ++j) {
-      float sum = 0.0f;
-      for (int k = 0; k < K; ++k) {
-        sum += A[i * K + k] * B[k * N + j];
+    for (int k = 0; k < K; ++k) {
+      float a = A[i * K + k];
+      for (int j = 0; j < N; ++j) {
+        C[i * N + j] += a * B[k * N + j];
       }
-      C[i * N + j] = sum;
     }
   }
 }
+
 
 Tensor Transpose(const Tensor& A) {
   int M = A.Shape()[0];

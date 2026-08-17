@@ -50,6 +50,8 @@ class MultiHeadAttention : public Layer {
 
     for (int b = 0; b < batch_size; ++b) {
       for (int h = 0; h < n_head_; ++h) {
+
+
         Tensor scores({seq_len, seq_len});
         scores.Zeros();
 
@@ -120,6 +122,8 @@ class MultiHeadAttention : public Layer {
 
     for (int b = 0; b < batch_size; ++b) {
       for (int h = 0; h < n_head_; ++h) {
+
+
         for (int i = 0; i < seq_len; ++i) {
           std::vector<float> dP(i + 1, 0.0f);
           for (int j = 0; j <= i; ++j) {

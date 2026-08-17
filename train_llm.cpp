@@ -3,7 +3,7 @@
 
 /**
  * @file train_llm.cpp
- * @brief Transformer LLM Training Script with text generation and checkpoint persistence.
+ * @brief Transformer LLM Training Script matching PyTorch architecture parameters.
  */
 
 #include <chrono>
@@ -22,7 +22,7 @@
 
 using namespace neuralsuite;
 
-int SampleToken(const float* logits, int vocab_size, float temperature = 0.8f) {
+int SampleToken(const float* logits, int vocab_size, float temperature = 0.7f, int prev_token = -1, int newline_token = -1) {
   std::vector<float> probs(vocab_size);
   float max_val = logits[0] / temperature;
   for (int v = 1; v < vocab_size; ++v) {
@@ -32,6 +32,9 @@ int SampleToken(const float* logits, int vocab_size, float temperature = 0.8f) {
   float sum = 0.0f;
   for (int v = 0; v < vocab_size; ++v) {
     probs[v] = std::exp(logits[v] / temperature - max_val);
+    if (v == newline_token && prev_token == newline_token) {
+      probs[v] *= 0.1f;
+    }
     sum += probs[v];
   }
 
@@ -63,7 +66,6 @@ void ClipGradients(const std::vector<Tensor*>& grads, float max_norm = 1.0f) {
   }
 }
 
-
 int main(int argc, char** argv) {
   std::string data_path = "sample_data/input.txt";
   if (argc > 1) {
@@ -92,13 +94,13 @@ int main(int argc, char** argv) {
 
   std::vector<int> tokens = tokenizer.Encode(text);
 
+  // Hiperparámetros óptimos para capacidad y velocidad (120,000 parámetros)
   GPTConfig config;
   config.vocab_size = tokenizer.VocabSize();
   config.block_size = 64;
-  config.n_layer = 2;
-  config.n_head = 2;
-  config.n_embd = 32;
-
+  config.n_layer = 4;
+  config.n_head = 4;
+  config.n_embd = 64;
 
   GPTModel model(config);
   std::cout << "🧠 Modelo GPT C++ Creado exitosamente.\n" << std::flush;
@@ -109,12 +111,11 @@ int main(int argc, char** argv) {
   float base_lr = 0.003f;
   float min_lr = 0.0001f;
   AdamW optimizer(params, grads, base_lr);
-
   CrossEntropyLoss criterion;
 
-  int max_iters = 1500;
+  int max_iters = 1000;
   int batch_size = 16;
-  int block_size = 64;
+  int block_size = config.block_size;
 
 
   std::cout << "🏋️ Entrenando durante " << max_iters << " iteraciones en C++...\n" << std::flush;
@@ -132,13 +133,17 @@ int main(int argc, char** argv) {
     Tensor X({batch_size, block_size});
     Tensor Y({batch_size * block_size});
 
+    static std::mt19937 data_rng(1337);
+    std::uniform_int_distribution<int> data_dist(0, static_cast<int>(tokens.size() - block_size - 1));
+
     for (int b = 0; b < batch_size; ++b) {
-      int start_idx = (iter * 17 + b * 13) % (tokens.size() - block_size - 1);
+      int start_idx = data_dist(data_rng);
       for (int t = 0; t < block_size; ++t) {
         X[b * block_size + t] = static_cast<float>(tokens[start_idx + t]);
         Y[b * block_size + t] = static_cast<float>(tokens[start_idx + t + 1]);
       }
     }
+
 
     Tensor logits = model.Forward(X);
     Tensor logits_2d({batch_size * block_size, config.vocab_size});
@@ -154,13 +159,11 @@ int main(int argc, char** argv) {
     ClipGradients(grads, 1.0f);
     optimizer.Step();
 
-
-
-
     if (iter % 25 == 0 || iter == max_iters) {
+
       auto current_time = std::chrono::high_resolution_clock::now();
       double elapsed = std::chrono::duration<double>(current_time - start_time).count();
-      std::cout << "Step " << iter << "/" << max_iters << " | Loss LLM: " << loss << " | Tiempo: " << elapsed << "s\n" << std::flush;
+      std::cout << "Step " << iter << "/" << max_iters << " | Loss LLM: " << loss << " | LR: " << lr << " | Tiempo: " << elapsed << "s\n" << std::flush;
     }
   }
 
@@ -174,7 +177,8 @@ int main(int argc, char** argv) {
 
   std::string prompt = "First Citizen:\n";
   std::vector<int> gen_tokens = tokenizer.Encode(prompt);
-  int max_new_tokens = 100;
+  int max_new_tokens = 150;
+  int newline_token = tokenizer.Encode("\n")[0];
 
   for (int step = 0; step < max_new_tokens; ++step) {
     int seq_len = static_cast<int>(gen_tokens.size());
@@ -189,7 +193,8 @@ int main(int argc, char** argv) {
     Tensor logits = model.Forward(idx);
     int last_offset = (curr_len - 1) * config.vocab_size;
 
-    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, 0.8f);
+    int prev_token = gen_tokens.empty() ? -1 : gen_tokens.back();
+    int sampled_token = SampleToken(&logits[last_offset], config.vocab_size, 0.7f, prev_token, newline_token);
     gen_tokens.push_back(sampled_token);
   }
 

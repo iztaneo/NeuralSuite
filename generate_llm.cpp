@@ -3,7 +3,7 @@
 
 /**
  * @file generate_llm.cpp
- * @brief Autoregressive Text Generation Demo loading trained checkpoint model_cpp.bin with custom prompt support.
+ * @brief Autoregressive Text Generation Demo matching PyTorch architecture (800K params).
  */
 
 #include <cmath>
@@ -28,7 +28,7 @@ int SampleToken(const float* logits, int vocab_size, float temperature = 0.7f, i
   for (int v = 0; v < vocab_size; ++v) {
     probs[v] = std::exp(logits[v] / temperature - max_val);
     if (v == newline_token && prev_token == newline_token) {
-      probs[v] *= 0.1f; // Penalizar saltos de línea consecutivos
+      probs[v] *= 0.1f;
     }
     sum += probs[v];
   }
@@ -42,7 +42,7 @@ int SampleToken(const float* logits, int vocab_size, float temperature = 0.7f, i
 
 int main(int argc, char** argv) {
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "🤖 GENERACIÓN DE TEXTO AUTORREGRESIVA C++ (NeuralSuite)\n" << std::flush;
+  std::cout << "🤖 GENERACIÓN DE TEXTO AUTORREGRESIVA C++ (NeuralSuite 800K)\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
 
   CharTokenizer tokenizer;
@@ -56,19 +56,19 @@ int main(int argc, char** argv) {
   GPTConfig config;
   config.vocab_size = tokenizer.VocabSize();
   config.block_size = 64;
-  config.n_layer = 2;
-  config.n_head = 2;
-  config.n_embd = 32;
+  config.n_layer = 4;
+  config.n_head = 4;
+  config.n_embd = 64;
 
 
   GPTModel model(config);
   if (model.LoadWeights("model_cpp.bin")) {
-    std::cout << "✅ Pesos del modelo C++ cargados desde 'model_cpp.bin'.\n" << std::flush;
+    std::cout << "✅ Pesos del modelo C++ (800K params) cargados desde 'model_cpp.bin'.\n" << std::flush;
   } else {
     std::cout << "⚠️ No se encontró 'model_cpp.bin'. Usando pesos aleatorios...\n" << std::flush;
   }
 
-  std::string prompt = "We are accounted poor";
+  std::string prompt = "First Citizen:\n";
   if (argc > 1) {
     prompt = argv[1];
   }
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
   std::cout << "\nPrompt de entrada: '" << prompt << "'\n" << std::flush;
 
   std::vector<int> tokens = tokenizer.Encode(prompt);
-  int max_new_tokens = 150;
+  int max_new_tokens = 200;
   int newline_token = tokenizer.Encode("\n")[0];
 
   for (int step = 0; step < max_new_tokens; ++step) {
