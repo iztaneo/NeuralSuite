@@ -38,8 +38,9 @@ class Linear : public Layer {
     int in_dim = input.Shape()[num_dims - 1];
     int N = input.TotalSize() / in_dim;
 
-    Tensor input_2d({N, in_dim});
-    std::memcpy(input_2d.Data(), input.Data(), input.TotalSize() * sizeof(float));
+    // Aplanar a 2D es solo una relectura de los ejes: la vista comparte la
+    // memoria del original en vez de reservar un tensor y copiarlo entero.
+    const Tensor input_2d = input.View({N, in_dim});
 
     Tensor output_2d({N, out_features_});
     MatMul(input_2d, weight_, output_2d);
@@ -50,11 +51,12 @@ class Linear : public Layer {
       }
     }
 
+    // La salida ya tiene los datos correctos; solo hay que devolverla con el
+    // rango del tensor de entrada.
     std::vector<int> out_shape = input.Shape();
     out_shape[num_dims - 1] = out_features_;
-    Tensor output(out_shape);
-    std::memcpy(output.Data(), output_2d.Data(), output_2d.TotalSize() * sizeof(float));
-    return output;
+    output_2d.Reshape(out_shape);
+    return output_2d;
   }
 
   Tensor Backward(const Tensor& dout) override {
@@ -62,11 +64,9 @@ class Linear : public Layer {
     int in_dim = last_input_.Shape()[num_dims - 1];
     int N = last_input_.TotalSize() / in_dim;
 
-    Tensor dout_2d({N, out_features_});
-    std::memcpy(dout_2d.Data(), dout.Data(), dout.TotalSize() * sizeof(float));
-
-    Tensor input_2d({N, in_dim});
-    std::memcpy(input_2d.Data(), last_input_.Data(), last_input_.TotalSize() * sizeof(float));
+    // Ambas reinterpretaciones son vistas: no se copia nada.
+    const Tensor dout_2d = dout.View({N, out_features_});
+    const Tensor input_2d = last_input_.View({N, in_dim});
 
     // dx_2d = dout_2d * weight_^T  ([N, out] * [out, in] -> [N, in])
     Tensor dx_2d({N, in_dim});
@@ -85,9 +85,9 @@ class Linear : public Layer {
       }
     }
 
-    Tensor dx(last_input_.Shape());
-    std::memcpy(dx.Data(), dx_2d.Data(), dx_2d.TotalSize() * sizeof(float));
-    return dx;
+    // dx_2d ya contiene el resultado; basta devolverlo con el rango original.
+    dx_2d.Reshape(last_input_.Shape());
+    return dx_2d;
   }
 
   std::vector<Tensor*> GetParameters() override { return {&weight_, &bias_}; }

@@ -47,6 +47,13 @@ Esta comprobación detecta errores que el gradient checking no puede ver, porque
 éste solo confirma que el `Backward` deriva el `Forward` escrito, no que ese
 `Forward` sea lo que dice ser.
 
+`Tensor` usa almacenamiento compartido, de modo que `View()` reinterpreta los
+ejes sin copiar. Aplanar `[B, T, C]` a `[B*T, C]` era hasta ahora una reserva
+más un `memcpy` completo en cada capa densa; ahora es gratis. Medido sobre un
+paso de entrenamiento del GPT (B=8, T=64, 4 capas, n_embd=128): la memoria
+reservada baja de 118 MB a 72,6 MB. El tiempo por paso no cambia de forma
+apreciable — el cuello de botella es el cómputo, no las reservas.
+
 **Sigue siendo software 0.x.** Quedan sin cobertura `MaxPool2D`, `GraphConv` y
 `Residual`; el formato de serialización no tiene cabecera ni versión; y no hay
 integración continua. El uso recomendado es educativo y de lectura del código.
@@ -133,10 +140,11 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Pruebas**
 
-- `./test_suite`: 15 pruebas numéricas — gradient checks por diferencias finitas
+- `./test_suite`: 16 pruebas numéricas — gradient checks por diferencias finitas
   de las operaciones diferenciables (ver la sección de estado), invariantes de
-  alineación entre parámetros y gradientes, y validación de formas e índices.
-  Devuelve un código de salida distinto de cero si alguna falla.
+  alineación entre parámetros y gradientes, semántica de `Tensor`, y validación
+  de formas e índices. Devuelve un código de salida distinto de cero si alguna
+  falla.
 
 **Redes densas, convolucionales y recurrentes**
 

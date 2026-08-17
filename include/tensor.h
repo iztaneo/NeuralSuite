@@ -26,7 +26,7 @@ namespace neuralsuite {
  * @class Tensor
  * @brief Multi-dimensional array storing floating point numbers in contiguous memory.
  * @details Conforms to Google C++ Style Guide: RAII memory management, explicit constructors,
- * const-correctness, and `data_` / `shape_` private members.
+ * const-correctness, y almacenamiento compartido que permite vistas sin copia.
  */
 class Tensor {
  public:
@@ -34,7 +34,7 @@ class Tensor {
   explicit Tensor(const std::vector<int>& dims);
   Tensor(const Tensor& other);
   Tensor(Tensor&& other) noexcept;
-  ~Tensor();
+  ~Tensor() = default;
 
   Tensor& operator=(const Tensor& other);
   Tensor& operator=(Tensor&& other) noexcept;
@@ -42,8 +42,30 @@ class Tensor {
   // Accessors
   [[nodiscard]] size_t TotalSize() const;
   [[nodiscard]] const std::vector<int>& Shape() const { return shape_; }
-  [[nodiscard]] float* Data() { return data_; }
-  [[nodiscard]] const float* Data() const { return data_; }
+  [[nodiscard]] float* Data() { return storage_ ? storage_->data() + offset_ : nullptr; }
+  [[nodiscard]] const float* Data() const {
+    return storage_ ? storage_->data() + offset_ : nullptr;
+  }
+
+  /**
+   * @brief Devuelve una vista con otra forma que comparte la misma memoria.
+   *
+   * No copia nada: escribir en la vista modifica el tensor original. El número
+   * de elementos debe coincidir. Sirve para las reinterpretaciones frecuentes
+   * entre `[B, T, C]` y `[B*T, C]`, que antes obligaban a reservar un tensor
+   * nuevo y hacer un `memcpy` completo en cada capa densa.
+   *
+   * La memoria vive mientras exista cualquiera de los dos tensores. Copiar la
+   * vista con el constructor de copia o `operator=` sí produce un tensor
+   * independiente, de modo que el código que guarda instantáneas
+   * (`last_input_ = input`) conserva su comportamiento.
+   */
+  [[nodiscard]] Tensor View(const std::vector<int>& new_shape) const;
+
+  /** @brief Indica si esta instancia comparte memoria con otra. */
+  [[nodiscard]] bool SharesStorageWith(const Tensor& other) const {
+    return storage_ && storage_ == other.storage_;
+  }
 
   /**
    * @brief Reinterpreta las dimensiones conservando la memoria y los datos.
@@ -75,16 +97,27 @@ class Tensor {
   // builds de depuración: en Release el acceso debe seguir siendo un simple
   // desplazamiento sobre el puntero.
 #ifdef NDEBUG
-  inline float& operator[](size_t idx) { return data_[idx]; }
-  inline const float& operator[](size_t idx) const { return data_[idx]; }
+  inline float& operator[](size_t idx) { return storage_->data()[offset_ + idx]; }
+  inline const float& operator[](size_t idx) const { return storage_->data()[offset_ + idx]; }
 #else
-  inline float& operator[](size_t idx) { CheckIndex(idx); return data_[idx]; }
-  inline const float& operator[](size_t idx) const { CheckIndex(idx); return data_[idx]; }
+  inline float& operator[](size_t idx) {
+    CheckIndex(idx);
+    return storage_->data()[offset_ + idx];
+  }
+  inline const float& operator[](size_t idx) const {
+    CheckIndex(idx);
+    return storage_->data()[offset_ + idx];
+  }
 #endif
 
   void PrintSummary(const std::string& name = "") const;
 
  private:
+  // Almacenamiento contiguo compartido entre un tensor y sus vistas. Se usa
+  // std::vector como bloque de memoria: da liberación automática y evita el
+  // new[]/delete[] manual que obligaba a escribir a mano las cuatro
+  // operaciones de copia y movimiento.
+  using Storage = std::vector<float>;
 #ifndef NDEBUG
   void CheckIndex(size_t idx) const {
     if (idx >= TotalSize()) {
@@ -95,7 +128,8 @@ class Tensor {
   }
 #endif
 
-  float* data_ = nullptr;
+  std::shared_ptr<Storage> storage_;
+  size_t offset_ = 0;
   std::vector<int> shape_;
 };
 

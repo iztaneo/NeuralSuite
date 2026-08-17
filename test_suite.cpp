@@ -485,6 +485,46 @@ void TestGradientCheckLstm() {
             << std::flush;
 }
 
+/**
+ * @brief Semántica de View(): comparte memoria, pero copiarla desvincula.
+ *
+ * Es la propiedad de la que depende que `last_input_ = input` siga siendo una
+ * instantánea y no un alias que cambie bajo los pies del backward.
+ */
+void TestViewSemantics() {
+  std::cout << "🧪 [Test 16] Semántica de las vistas de Tensor... " << std::flush;
+
+  Tensor base({2, 6});
+  for (size_t i = 0; i < base.TotalSize(); ++i) base[i] = static_cast<float>(i);
+
+  Tensor view = base.View({3, 4});
+  Check(view.Shape() == std::vector<int>({3, 4}), "la vista no adopto la forma pedida");
+  Check(view.SharesStorageWith(base), "la vista no comparte memoria con el original");
+
+  // Escribir en la vista tiene que verse en el original.
+  view[0] = 99.0f;
+  Check(std::abs(base[0] - 99.0f) < 1e-6f, "la vista no escribe sobre la memoria compartida");
+
+  // Copiar la vista produce un tensor independiente.
+  Tensor copy = view;
+  Check(!copy.SharesStorageWith(base), "copiar una vista siguio compartiendo memoria");
+  copy[1] = -5.0f;
+  Check(std::abs(base[1] - 1.0f) < 1e-6f, "escribir en la copia altero el original");
+
+  // Un Resize sobre la vista debe desvincularla, no pisar al original.
+  Tensor detach = base.View({3, 4});
+  detach.Resize({5, 5});
+  Check(!detach.SharesStorageWith(base), "Resize dejo la vista compartiendo memoria");
+  Check(std::abs(base[0] - 99.0f) < 1e-6f, "Resize sobre la vista modifico el original");
+
+  // Una vista con otro numero de elementos no tiene sentido.
+  bool threw = false;
+  try { (void)base.View({5, 5}); } catch (const std::invalid_argument&) { threw = true; }
+  Check(threw, "View acepto un numero de elementos distinto");
+
+  std::cout << "PASADO ✅\n" << std::flush;
+}
+
 /** @brief Gradientes de Conv2D: peso, sesgo y dx, con stride y padding activos. */
 void TestGradientCheckConv2D() {
   std::cout << "🧪 [Test 13] Gradientes de Conv2D... " << std::flush;
@@ -684,6 +724,7 @@ int main() {
   TestGradientCheckConv2D();
   TestGradientCheckLayerNorm();
   TestGradientCheckLosses();
+  TestViewSemantics();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

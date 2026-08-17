@@ -48,8 +48,8 @@ class MultiHeadAttention : public Layer {
     int batch_size = input.Shape()[0];
     int seq_len = input.Shape()[1];
 
-    Tensor input_2d({batch_size * seq_len, n_embd_});
-    std::memcpy(input_2d.Data(), input.Data(), input.TotalSize() * sizeof(float));
+    // Vista: aplanar [B, T, C] a [B*T, C] no requiere copiar nada.
+    const Tensor input_2d = input.View({batch_size * seq_len, n_embd_});
 
     // 1. Proyección Q, K, V combinada
     qkv_cache_ = c_attn_.Forward(input_2d);
@@ -105,14 +105,11 @@ class MultiHeadAttention : public Layer {
     }
 
     // 3. Proyección de salida c_proj_
-    Tensor attn_out_2d({batch_size * seq_len, n_embd_});
-    std::memcpy(attn_out_2d.Data(), attn_out.Data(), attn_out.TotalSize() * sizeof(float));
+    const Tensor attn_out_2d = attn_out.View({batch_size * seq_len, n_embd_});
 
     Tensor final_2d = c_proj_.Forward(attn_out_2d);
-    Tensor final_output({batch_size, seq_len, n_embd_});
-    std::memcpy(final_output.Data(), final_2d.Data(), final_2d.TotalSize() * sizeof(float));
-
-    return final_output;
+    final_2d.Reshape({batch_size, seq_len, n_embd_});
+    return final_2d;
   }
 
   Tensor Backward(const Tensor& dout) override {
@@ -120,12 +117,10 @@ class MultiHeadAttention : public Layer {
     int seq_len = last_input_.Shape()[1];
 
     // 1. Backward a través de c_proj_
-    Tensor dout_2d({batch_size * seq_len, n_embd_});
-    std::memcpy(dout_2d.Data(), dout.Data(), dout.TotalSize() * sizeof(float));
+    const Tensor dout_2d = dout.View({batch_size * seq_len, n_embd_});
 
-    Tensor dattn_head_2d = c_proj_.Backward(dout_2d);
-    Tensor dattn_head({batch_size, seq_len, n_embd_});
-    std::memcpy(dattn_head.Data(), dattn_head_2d.Data(), dattn_head_2d.TotalSize() * sizeof(float));
+    Tensor dattn_head = c_proj_.Backward(dout_2d);
+    dattn_head.Reshape({batch_size, seq_len, n_embd_});
 
     // 2. Backward a través de las cabezas de atención
     Tensor dqkv({batch_size * seq_len, 3 * n_embd_});
@@ -177,10 +172,8 @@ class MultiHeadAttention : public Layer {
 
     // 3. Backward a través de c_attn_
     Tensor dx_2d = c_attn_.Backward(dqkv);
-    Tensor dx({batch_size, seq_len, n_embd_});
-    std::memcpy(dx.Data(), dx_2d.Data(), dx.TotalSize() * sizeof(float));
-
-    return dx;
+    dx_2d.Reshape({batch_size, seq_len, n_embd_});
+    return dx_2d;
   }
 
   std::vector<Tensor*> GetParameters() override {

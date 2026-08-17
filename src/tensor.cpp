@@ -35,45 +35,45 @@ void ValidateShape(const std::vector<int>& dims) {
 
 }  // namespace
 
-Tensor::Tensor() : data_(nullptr), shape_({}) {}
+Tensor::Tensor() : shape_({}) {}
 
 Tensor::Tensor(const std::vector<int>& dims) : shape_(dims) {
   ValidateShape(shape_);
-  size_t sz = TotalSize();
-  data_ = (sz > 0) ? new float[sz]() : nullptr;
+  const size_t sz = TotalSize();
+  if (sz > 0) storage_ = std::make_shared<Storage>(sz, 0.0f);
 }
 
+// La copia es profunda aunque el original sea una vista: el codigo que guarda
+// instantaneas (last_input_ = input) necesita quedarse con datos propios, no
+// con un alias que cambie bajo sus pies.
 Tensor::Tensor(const Tensor& other) : shape_(other.shape_) {
-  size_t sz = TotalSize();
+  const size_t sz = other.TotalSize();
   if (sz > 0) {
-    data_ = new float[sz];
-    std::memcpy(data_, other.data_, sz * sizeof(float));
-  } else {
-    data_ = nullptr;
+    storage_ = std::make_shared<Storage>(sz);
+    std::memcpy(storage_->data(), other.Data(), sz * sizeof(float));
   }
 }
 
 Tensor::Tensor(Tensor&& other) noexcept
-    : data_(other.data_), shape_(std::move(other.shape_)) {
-  other.data_ = nullptr;
-}
-
-Tensor::~Tensor() {
-  delete[] data_;
+    : storage_(std::move(other.storage_)),
+      offset_(other.offset_),
+      shape_(std::move(other.shape_)) {
+  other.offset_ = 0;
+  other.shape_.clear();
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
   if (this != &other) {
-    // Se reserva antes de liberar: si new[] lanza, el objeto conserva intactos
-    // su buffer y su forma en lugar de quedarse con un puntero colgante.
+    // Se construye el nuevo almacenamiento antes de soltar el anterior: si la
+    // reserva falla, el objeto conserva intactos sus datos y su forma.
     const size_t sz = other.TotalSize();
-    float* new_data = nullptr;
+    std::shared_ptr<Storage> new_storage;
     if (sz > 0) {
-      new_data = new float[sz];
-      std::memcpy(new_data, other.data_, sz * sizeof(float));
+      new_storage = std::make_shared<Storage>(sz);
+      std::memcpy(new_storage->data(), other.Data(), sz * sizeof(float));
     }
-    delete[] data_;
-    data_ = new_data;
+    storage_ = std::move(new_storage);
+    offset_ = 0;
     shape_ = other.shape_;
   }
   return *this;
@@ -81,12 +81,33 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
   if (this != &other) {
-    delete[] data_;
-    data_ = other.data_;
+    storage_ = std::move(other.storage_);
+    offset_ = other.offset_;
     shape_ = std::move(other.shape_);
-    other.data_ = nullptr;
+    other.offset_ = 0;
+    other.shape_.clear();
   }
   return *this;
+}
+
+Tensor Tensor::View(const std::vector<int>& new_shape) const {
+  ValidateShape(new_shape);
+
+  size_t requested = new_shape.empty() ? 0 : 1;
+  for (int d : new_shape) requested *= static_cast<size_t>(d);
+
+  const size_t current = TotalSize();
+  if (requested != current) {
+    throw std::invalid_argument(
+        "View: la forma pedida tiene " + std::to_string(requested) +
+        " elementos y el tensor tiene " + std::to_string(current) + ".");
+  }
+
+  Tensor v;
+  v.storage_ = storage_;   // se comparte, no se copia
+  v.offset_ = offset_;
+  v.shape_ = new_shape;
+  return v;
 }
 
 size_t Tensor::TotalSize() const {
@@ -122,15 +143,19 @@ void Tensor::Resize(const std::vector<int>& new_shape) {
   const size_t new_sz = TotalSize();
 
   if (new_sz != old_sz) {
-    float* new_data = (new_sz > 0) ? new float[new_sz]() : nullptr;
-    delete[] data_;
-    data_ = new_data;
+    // Se reserva antes de soltar el bloque anterior, y siempre uno propio: un
+    // Resize sobre una vista debe dejar de compartir memoria, no reescribir la
+    // del tensor del que salio.
+    auto new_storage = (new_sz > 0) ? std::make_shared<Storage>(new_sz, 0.0f) : nullptr;
+    storage_ = std::move(new_storage);
+    offset_ = 0;
   }
 }
 
 void Tensor::Fill(float val) {
   size_t sz = TotalSize();
-  for (size_t i = 0; i < sz; ++i) data_[i] = val;
+  float* d = Data();
+  for (size_t i = 0; i < sz; ++i) d[i] = val;
 }
 
 void Tensor::Zeros() { Fill(0.0f); }
@@ -139,13 +164,15 @@ void Tensor::Ones() { Fill(1.0f); }
 void Tensor::RandomNormal(float mean, float stddev) {
   std::normal_distribution<float> dist(mean, stddev);
   size_t sz = TotalSize();
-  for (size_t i = 0; i < sz; ++i) data_[i] = dist(g_rng);
+  float* d = Data();
+  for (size_t i = 0; i < sz; ++i) d[i] = dist(g_rng);
 }
 
 void Tensor::RandomUniform(float min_val, float max_val) {
   std::uniform_real_distribution<float> dist(min_val, max_val);
   size_t sz = TotalSize();
-  for (size_t i = 0; i < sz; ++i) data_[i] = dist(g_rng);
+  float* d = Data();
+  for (size_t i = 0; i < sz; ++i) d[i] = dist(g_rng);
 }
 
 void Tensor::XavierInit(int fan_in, int fan_out) {

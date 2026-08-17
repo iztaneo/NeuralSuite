@@ -196,8 +196,6 @@ class GPTModel {
     int batch_size = idx.Shape()[0];
     int seq_len = idx.Shape()[1];
 
-    last_x_2d_.Resize({batch_size * seq_len, config_.n_embd});
-
     Tensor tok_emb = wte_.Forward(idx);
 
     Tensor pos_idx({1, seq_len});
@@ -221,25 +219,25 @@ class GPTModel {
 
     x = ln_f_.Forward(x);
 
-    std::memcpy(last_x_2d_.Data(), x.Data(), x.TotalSize() * sizeof(float));
+    // last_x_2d_ es una instantanea: el backward la necesita despues de que
+    // x haya sido reemplazado, asi que aqui si corresponde copiar.
+    last_x_2d_ = x;
+    last_x_2d_.Reshape({batch_size * seq_len, config_.n_embd});
 
     // Weight Tying: logits = x_2d * W_wte^T
     Tensor wte_T = Transpose(wte_.Weight());
     Tensor logits_2d;
     MatMul(last_x_2d_, wte_T, logits_2d);
 
-    Tensor logits({batch_size, seq_len, config_.vocab_size});
-    std::memcpy(logits.Data(), logits_2d.Data(), logits_2d.TotalSize() * sizeof(float));
-
-    return logits;
+    logits_2d.Reshape({batch_size, seq_len, config_.vocab_size});
+    return logits_2d;
   }
 
   Tensor Backward(const Tensor& dlogits) {
     int batch_size = dlogits.Shape()[0];
     int seq_len = dlogits.Shape()[1];
 
-    Tensor dlogits_2d({batch_size * seq_len, config_.vocab_size});
-    std::memcpy(dlogits_2d.Data(), dlogits.Data(), dlogits.TotalSize() * sizeof(float));
+    const Tensor dlogits_2d = dlogits.View({batch_size * seq_len, config_.vocab_size});
 
     // Weight Tying Backward:
     // dx_2d = dlogits_2d * W_wte
@@ -255,10 +253,8 @@ class GPTModel {
     Tensor dwte_output;
     MatMul(dlogits_2d_T, last_x_2d_, dwte_output);
 
-    Tensor dx({batch_size, seq_len, config_.n_embd});
-    std::memcpy(dx.Data(), dx_2d.Data(), dx_2d.TotalSize() * sizeof(float));
-
-    dx = ln_f_.Backward(dx);
+    dx_2d.Reshape({batch_size, seq_len, config_.n_embd});
+    Tensor dx = ln_f_.Backward(dx_2d);
 
     for (auto it = blocks_.rbegin(); it != blocks_.rend(); ++it) {
       dx = (*it)->Backward(dx);
