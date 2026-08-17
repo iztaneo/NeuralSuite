@@ -13,15 +13,19 @@ ifeq ($(UNAME_S),Darwin)
 endif
 
 SRCS = src/tensor.cpp src/tokenizer.cpp
-TARGETS = test_suite demo_mlp demo_cnn demo_lstm train_llm generate_llm
+TARGETS = test_suite demo_adaline demo_mlp demo_cnn demo_lstm train_llm generate_llm
 
 all: $(TARGETS)
 
 test_suite: test_suite.cpp $(SRCS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+demo_adaline: demo_adaline.cpp $(SRCS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 demo_mlp: demo_mlp.cpp $(SRCS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
+
 
 demo_cnn: demo_cnn.cpp $(SRCS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
