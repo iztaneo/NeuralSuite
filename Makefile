@@ -1,43 +1,58 @@
 CXX ?= g++
-CXXFLAGS ?= -O3 -std=c++17 -Wall -march=native -ffast-math -Iinclude
-
+CXXFLAGS ?= -O3 -std=c++17 -Wall -fPIC -march=native -ffast-math -Iinclude
 
 # Detección de Sistema Operativo
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
     CXXFLAGS += -fopenmp
+    LIB_EXT := .so
 endif
 ifeq ($(UNAME_S),Darwin)
-    # macOS Clang
     CXXFLAGS += -Xpreprocessor -fopenmp 2>/dev/null || true
+    LIB_EXT := .dylib
 endif
 
 SRCS = src/tensor.cpp src/tokenizer.cpp
-TARGETS = test_suite demo_adaline demo_mlp demo_cnn demo_lstm train_llm generate_llm
+OBJS = $(SRCS:.cpp=.o)
+
+LIB_STATIC = libneuralsuite.a
+LIB_SHARED = libneuralsuite$(LIB_EXT)
+
+TARGETS = $(LIB_STATIC) $(LIB_SHARED) test_suite demo_adaline demo_mlp demo_cnn demo_lstm train_llm generate_llm
 
 all: $(TARGETS)
 
-test_suite: test_suite.cpp $(SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-demo_adaline: demo_adaline.cpp $(SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+$(LIB_STATIC): $(OBJS)
+	ar rcs $@ $^
 
-demo_mlp: demo_mlp.cpp $(SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+$(LIB_SHARED): $(OBJS)
+	$(CXX) -shared $(CXXFLAGS) -o $@ $^
 
+test_suite: test_suite.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
-demo_cnn: demo_cnn.cpp $(SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+demo_adaline: demo_adaline.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
-demo_lstm: demo_lstm.cpp $(SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+demo_mlp: demo_mlp.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
-train_llm: train_llm.cpp $(SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+demo_cnn: demo_cnn.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
-generate_llm: generate_llm.cpp $(SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+demo_lstm: demo_lstm.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
+train_llm: train_llm.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+
+generate_llm: generate_llm.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
 
 clean:
-	rm -f $(TARGETS) *.o
+	rm -f test_suite demo_adaline demo_mlp demo_cnn demo_lstm train_llm generate_llm $(LIB_STATIC) $(LIB_SHARED) src/*.o
+
+.PHONY: all clean
