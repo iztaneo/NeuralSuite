@@ -86,7 +86,10 @@ class AdamW : public Optimizer {
     }
   }
 
+  void SetLearningRate(float lr) { lr_ = lr; }
+
   void Step() override {
+
     step_count_++;
     float bias_correction1 = 1.0f - std::pow(beta1_, step_count_);
     float bias_correction2 = 1.0f - std::pow(beta2_, step_count_);

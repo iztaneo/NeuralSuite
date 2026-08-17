@@ -42,6 +42,28 @@ int SampleToken(const float* logits, int vocab_size, float temperature = 0.8f) {
   return dist(rng);
 }
 
+void ClipGradients(const std::vector<Tensor*>& grads, float max_norm = 1.0f) {
+  float total_norm_sq = 0.0f;
+  for (auto g : grads) {
+    size_t sz = g->TotalSize();
+    for (size_t i = 0; i < sz; ++i) {
+      float val = g->operator[](i);
+      total_norm_sq += val * val;
+    }
+  }
+  float total_norm = std::sqrt(total_norm_sq);
+  if (total_norm > max_norm && total_norm > 0.0f) {
+    float scale = max_norm / total_norm;
+    for (auto g : grads) {
+      size_t sz = g->TotalSize();
+      for (size_t i = 0; i < sz; ++i) {
+        (*g)[i] *= scale;
+      }
+    }
+  }
+}
+
+
 int main(int argc, char** argv) {
   std::string data_path = "sample_data/input.txt";
   if (argc > 1) {
@@ -82,11 +104,15 @@ int main(int argc, char** argv) {
 
   std::vector<Tensor*> params = model.GetParameters();
   std::vector<Tensor*> grads = model.GetGradients();
-  AdamW optimizer(params, grads, 0.001f);
+
+  float base_lr = 0.003f;
+  float min_lr = 0.0001f;
+  AdamW optimizer(params, grads, base_lr);
+
   CrossEntropyLoss criterion;
 
-  int max_iters = 100;
-  int batch_size = 4;
+  int max_iters = 300;
+  int batch_size = 8;
   int block_size = config.block_size;
 
   std::cout << "🏋️ Entrenando durante " << max_iters << " iteraciones en C++...\n" << std::flush;
@@ -94,6 +120,12 @@ int main(int argc, char** argv) {
 
   for (int iter = 1; iter <= max_iters; ++iter) {
     optimizer.ZeroGrad();
+
+    // Cosine decay learning rate
+    float decay_ratio = static_cast<float>(iter) / static_cast<float>(max_iters);
+    float coeff = 0.5f * (1.0f + std::cos(3.14159265f * decay_ratio));
+    float lr = min_lr + coeff * (base_lr - min_lr);
+    optimizer.SetLearningRate(lr);
 
     Tensor X({batch_size, block_size});
     Tensor Y({batch_size * block_size});
@@ -111,7 +143,17 @@ int main(int argc, char** argv) {
     std::memcpy(logits_2d.Data(), logits.Data(), logits.TotalSize() * sizeof(float));
 
     float loss = criterion.Forward(logits_2d, Y);
+
+    Tensor dlogits_2d = criterion.Backward();
+    Tensor dlogits({batch_size, block_size, config.vocab_size});
+    std::memcpy(dlogits.Data(), dlogits_2d.Data(), dlogits_2d.TotalSize() * sizeof(float));
+
+    model.Backward(dlogits);
+    ClipGradients(grads, 1.0f);
     optimizer.Step();
+
+
+
 
     if (iter % 25 == 0 || iter == max_iters) {
       auto current_time = std::chrono::high_resolution_clock::now();

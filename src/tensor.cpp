@@ -148,10 +148,11 @@ Tensor Transpose(const Tensor& A) {
 
 void LayerNormForward(const Tensor& x, const Tensor& gamma, const Tensor& beta,
                       Tensor& out, Tensor& mean, Tensor& rstd, float eps) {
-  int N = x.Shape()[0];
-  int D = x.Shape()[1];
+  int num_dims = x.Shape().size();
+  int D = x.Shape()[num_dims - 1];
+  int N = x.TotalSize() / D;
 
-  out.Reshape({N, D});
+  out.Reshape(x.Shape());
   mean.Reshape({N});
   rstd.Reshape({N});
 
@@ -181,10 +182,11 @@ void LayerNormForward(const Tensor& x, const Tensor& gamma, const Tensor& beta,
 void LayerNormBackward(const Tensor& dout, const Tensor& x, const Tensor& gamma,
                        const Tensor& mean, const Tensor& rstd, Tensor& dx,
                        Tensor& dgamma, Tensor& dbeta) {
-  int N = x.Shape()[0];
-  int D = x.Shape()[1];
+  int num_dims = x.Shape().size();
+  int D = x.Shape()[num_dims - 1];
+  int N = x.TotalSize() / D;
 
-  dx.Reshape({N, D});
+  dx.Reshape(x.Shape());
   dgamma.Reshape({D}); dgamma.Zeros();
   dbeta.Reshape({D}); dbeta.Zeros();
 
@@ -213,6 +215,7 @@ void LayerNormBackward(const Tensor& dout, const Tensor& x, const Tensor& gamma,
     }
   }
 }
+
 
 void SoftmaxForward(const Tensor& input, Tensor& output) {
   int N = input.Shape()[0];

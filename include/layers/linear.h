@@ -20,14 +20,14 @@ namespace neuralsuite {
  */
 class Linear : public Layer {
  public:
-  Linear(int in_dim, int out_dim)
-      : in_features_(in_dim),
-        out_features_(out_dim),
-        weight_({in_dim, out_dim}),
-        bias_({out_dim}),
-        dweight_({in_dim, out_dim}),
-        dbias_({out_dim}) {
-    weight_.XavierInit(in_dim, out_dim);
+  Linear(int in_features, int out_features)
+      : in_features_(in_features),
+        out_features_(out_features),
+        weight_({in_features, out_features}),
+        bias_({out_features}),
+        dweight_({in_features, out_features}),
+        dbias_({out_features}) {
+    weight_.RandomNormal(0.0f, 0.02f);
     bias_.Zeros();
   }
 

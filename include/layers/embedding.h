@@ -20,11 +20,11 @@ namespace neuralsuite {
  */
 class Embedding : public Layer {
  public:
-  Embedding(int num_emb, int emb_dim)
-      : num_embeddings_(num_emb),
-        embedding_dim_(emb_dim),
-        weight_({num_emb, emb_dim}),
-        dweight_({num_emb, emb_dim}) {
+  Embedding(int num_embeddings, int embedding_dim)
+      : num_embeddings_(num_embeddings),
+        embedding_dim_(embedding_dim),
+        weight_({num_embeddings, embedding_dim}),
+        dweight_({num_embeddings, embedding_dim}) {
     weight_.RandomNormal(0.0f, 0.02f);
   }
 
@@ -53,10 +53,13 @@ class Embedding : public Layer {
     dweight_.Zeros();
     int batch_size = dout.Shape()[0];
     int seq_len = dout.Shape()[1];
+    size_t num_cached = last_tokens_.size();
+    if (num_cached == 0) return Tensor();
 
     for (int b = 0; b < batch_size; ++b) {
       for (int t = 0; t < seq_len; ++t) {
-        int tok = last_tokens_[b * seq_len + t];
+        size_t cache_idx = (b * seq_len + t) % num_cached;
+        int tok = last_tokens_[cache_idx];
         for (int d = 0; d < embedding_dim_; ++d) {
           size_t dout_idx = (b * seq_len + t) * embedding_dim_ + d;
           dweight_[tok * embedding_dim_ + d] += dout[dout_idx];
@@ -65,6 +68,7 @@ class Embedding : public Layer {
     }
     return Tensor();
   }
+
 
   std::vector<Tensor*> GetParameters() override { return {&weight_}; }
   std::vector<Tensor*> GetGradients() override { return {&dweight_}; }

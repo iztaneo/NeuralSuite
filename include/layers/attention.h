@@ -3,14 +3,17 @@
 
 /**
  * @file attention.h
- * @brief Causal Multi-Head Self-Attention following Google C++ Style Guide.
+ * @brief Causal Multi-Head Self-Attention with Full Linear Projection and Exact Backward Pass.
  */
 
 #ifndef NEURAL_SUITE_INCLUDE_LAYERS_ATTENTION_H_
 #define NEURAL_SUITE_INCLUDE_LAYERS_ATTENTION_H_
 
+#include <cmath>
+#include <cstring>
 #include <vector>
 #include "../layer.h"
+#include "linear.h"
 
 namespace neuralsuite {
 
@@ -24,36 +27,26 @@ class MultiHeadAttention : public Layer {
       : n_embd_(embd),
         n_head_(heads),
         head_dim_(embd / heads),
-        c_attn_weight_({3 * embd, embd}),
-        c_attn_bias_({3 * embd}),
-        c_proj_weight_({embd, embd}),
-        c_proj_bias_({embd}),
-        dc_attn_weight_({3 * embd, embd}),
-        dc_attn_bias_({3 * embd}),
-        dc_proj_weight_({embd, embd}),
-        dc_proj_bias_({embd}) {
-    c_attn_weight_.XavierInit(embd, 3 * embd);
-    c_proj_weight_.XavierInit(embd, embd);
-    c_attn_bias_.Zeros();
-    c_proj_bias_.Zeros();
-  }
+        c_attn_(embd, 3 * embd),
+        c_proj_(embd, embd) {}
 
   Tensor Forward(const Tensor& input) override {
     last_input_ = input;
     int batch_size = input.Shape()[0];
     int seq_len = input.Shape()[1];
 
-    Tensor qkv({batch_size * seq_len, 3 * n_embd_});
     Tensor input_2d({batch_size * seq_len, n_embd_});
     std::memcpy(input_2d.Data(), input.Data(), input.TotalSize() * sizeof(float));
 
-    Tensor weight_t = Transpose(c_attn_weight_);
-    MatMul(input_2d, weight_t, qkv);
+    // 1. Proyección Q, K, V combinada
+    qkv_cache_ = c_attn_.Forward(input_2d);
 
-    Tensor output({batch_size, seq_len, n_embd_});
-    output.Zeros();
+    // 2. Cálculo de Atención Causal por cabeza
+    Tensor attn_out({batch_size, seq_len, n_embd_});
+    attn_out.Zeros();
 
     float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
+    attn_probs_cache_.Reshape({batch_size, n_head_, seq_len, seq_len});
 
     for (int b = 0; b < batch_size; ++b) {
       for (int h = 0; h < n_head_; ++h) {
@@ -66,7 +59,7 @@ class MultiHeadAttention : public Layer {
             for (int d = 0; d < head_dim_; ++d) {
               size_t q_idx = (b * seq_len + i) * (3 * n_embd_) + (h * head_dim_ + d);
               size_t k_idx = (b * seq_len + j) * (3 * n_embd_) + n_embd_ + (h * head_dim_ + d);
-              dot += qkv[q_idx] * qkv[k_idx];
+              dot += qkv_cache_[q_idx] * qkv_cache_[k_idx];
             }
             scores[i * seq_len + j] = dot * scale;
           }
@@ -76,35 +69,115 @@ class MultiHeadAttention : public Layer {
         CausalSoftmaxForward(scores, attn, seq_len);
 
         for (int i = 0; i < seq_len; ++i) {
+          for (int j = 0; j <= i; ++j) {
+            size_t cache_idx = ((b * n_head_ + h) * seq_len + i) * seq_len + j;
+            attn_probs_cache_[cache_idx] = attn[i * seq_len + j];
+          }
+        }
+
+        for (int i = 0; i < seq_len; ++i) {
           for (int d = 0; d < head_dim_; ++d) {
             float val = 0.0f;
             for (int j = 0; j <= i; ++j) {
               size_t v_idx = (b * seq_len + j) * (3 * n_embd_) + 2 * n_embd_ + (h * head_dim_ + d);
-              val += attn[i * seq_len + j] * qkv[v_idx];
+              val += attn[i * seq_len + j] * qkv_cache_[v_idx];
             }
             size_t out_idx = (b * seq_len + i) * n_embd_ + (h * head_dim_ + d);
-            output[out_idx] = val;
+            attn_out[out_idx] = val;
           }
         }
       }
     }
-    return output;
+
+    // 3. Proyección de salida c_proj_
+    Tensor attn_out_2d({batch_size * seq_len, n_embd_});
+    std::memcpy(attn_out_2d.Data(), attn_out.Data(), attn_out.TotalSize() * sizeof(float));
+
+    Tensor final_2d = c_proj_.Forward(attn_out_2d);
+    Tensor final_output({batch_size, seq_len, n_embd_});
+    std::memcpy(final_output.Data(), final_2d.Data(), final_2d.TotalSize() * sizeof(float));
+
+    return final_output;
   }
 
   Tensor Backward(const Tensor& dout) override {
-    Tensor dx(last_input_.Shape());
-    dx.Zeros();
-    dc_attn_weight_.Zeros(); dc_attn_bias_.Zeros();
-    dc_proj_weight_.Zeros(); dc_proj_bias_.Zeros();
+    int batch_size = last_input_.Shape()[0];
+    int seq_len = last_input_.Shape()[1];
+
+    // 1. Backward a través de c_proj_
+    Tensor dout_2d({batch_size * seq_len, n_embd_});
+    std::memcpy(dout_2d.Data(), dout.Data(), dout.TotalSize() * sizeof(float));
+
+    Tensor dattn_head_2d = c_proj_.Backward(dout_2d);
+    Tensor dattn_head({batch_size, seq_len, n_embd_});
+    std::memcpy(dattn_head.Data(), dattn_head_2d.Data(), dattn_head_2d.TotalSize() * sizeof(float));
+
+    // 2. Backward a través de las cabezas de atención
+    Tensor dqkv({batch_size * seq_len, 3 * n_embd_});
+    dqkv.Zeros();
+
+    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
+
+    for (int b = 0; b < batch_size; ++b) {
+      for (int h = 0; h < n_head_; ++h) {
+        for (int i = 0; i < seq_len; ++i) {
+          std::vector<float> dP(i + 1, 0.0f);
+          for (int j = 0; j <= i; ++j) {
+            float dp = 0.0f;
+            for (int d = 0; d < head_dim_; ++d) {
+              size_t dout_idx = (b * seq_len + i) * n_embd_ + (h * head_dim_ + d);
+              size_t v_idx = (b * seq_len + j) * (3 * n_embd_) + 2 * n_embd_ + (h * head_dim_ + d);
+              dp += dattn_head[dout_idx] * qkv_cache_[v_idx];
+
+              size_t cache_idx = ((b * n_head_ + h) * seq_len + i) * seq_len + j;
+              dqkv[v_idx] += attn_probs_cache_[cache_idx] * dattn_head[dout_idx];
+            }
+            dP[j] = dp;
+          }
+
+          float sum_dP_P = 0.0f;
+          for (int j = 0; j <= i; ++j) {
+            size_t cache_idx = ((b * n_head_ + h) * seq_len + i) * seq_len + j;
+            sum_dP_P += dP[j] * attn_probs_cache_[cache_idx];
+          }
+
+          for (int j = 0; j <= i; ++j) {
+            size_t cache_idx = ((b * n_head_ + h) * seq_len + i) * seq_len + j;
+            float P_ij = attn_probs_cache_[cache_idx];
+            float dS_ij = P_ij * (dP[j] - sum_dP_P) * scale;
+
+            for (int d = 0; d < head_dim_; ++d) {
+              size_t q_idx = (b * seq_len + i) * (3 * n_embd_) + (h * head_dim_ + d);
+              size_t k_idx = (b * seq_len + j) * (3 * n_embd_) + n_embd_ + (h * head_dim_ + d);
+
+              dqkv[q_idx] += dS_ij * qkv_cache_[k_idx];
+              dqkv[k_idx] += dS_ij * qkv_cache_[q_idx];
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Backward a través de c_attn_
+    Tensor dx_2d = c_attn_.Backward(dqkv);
+    Tensor dx({batch_size, seq_len, n_embd_});
+    std::memcpy(dx.Data(), dx_2d.Data(), dx.TotalSize() * sizeof(float));
+
     return dx;
   }
 
   std::vector<Tensor*> GetParameters() override {
-    return {&c_attn_weight_, &c_attn_bias_, &c_proj_weight_, &c_proj_bias_};
+    std::vector<Tensor*> p = c_attn_.GetParameters();
+    auto p2 = c_proj_.GetParameters();
+    p.insert(p.end(), p2.begin(), p2.end());
+    return p;
   }
 
   std::vector<Tensor*> GetGradients() override {
-    return {&dc_attn_weight_, &dc_attn_bias_, &dc_proj_weight_, &dc_proj_bias_};
+    std::vector<Tensor*> g = c_attn_.GetGradients();
+    auto g2 = c_proj_.GetGradients();
+    g.insert(g.end(), g2.begin(), g2.end());
+    return g;
   }
 
  private:
@@ -112,17 +185,12 @@ class MultiHeadAttention : public Layer {
   int n_head_;
   int head_dim_;
 
-  Tensor c_attn_weight_;
-  Tensor c_attn_bias_;
-  Tensor c_proj_weight_;
-  Tensor c_proj_bias_;
-
-  Tensor dc_attn_weight_;
-  Tensor dc_attn_bias_;
-  Tensor dc_proj_weight_;
-  Tensor dc_proj_bias_;
+  Linear c_attn_;
+  Linear c_proj_;
 
   Tensor last_input_;
+  Tensor qkv_cache_;
+  Tensor attn_probs_cache_;
 };
 
 }  // namespace neuralsuite

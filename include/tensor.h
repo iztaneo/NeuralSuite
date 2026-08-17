@@ -48,6 +48,7 @@ class Tensor {
   void Fill(float val);
   void Zeros();
   void Ones();
+  void NormalInit(float mean = 0.0f, float std = 0.02f);
   void RandomNormal(float mean = 0.0f, float stddev = 0.02f);
   void RandomUniform(float min_val = -0.1f, float max_val = 0.1f);
   void XavierInit(int fan_in, int fan_out);

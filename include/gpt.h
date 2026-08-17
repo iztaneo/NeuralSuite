@@ -65,8 +65,25 @@ class GPTBlock : public Layer {
   }
 
   Tensor Backward(const Tensor& dout) override {
-    return dout;
+    // 1. Backward del bloque MLP con conexión residual
+    Tensor dproj_out = mlp_proj_.Backward(dout);
+    Tensor dgelu_out = mlp_gelu_.Backward(dproj_out);
+    Tensor dfc_out = mlp_fc_.Backward(dgelu_out);
+    Tensor dx_norm2 = ln_2_.Backward(dfc_out);
+
+    Tensor dx1(dout.Shape());
+    ElementwiseAdd(dout, dx_norm2, dx1);
+
+    // 2. Backward de la Atención Multi-Cabeza con conexión residual
+    Tensor dattn_out = attn_.Backward(dx1);
+    Tensor dx_norm1 = ln_1_.Backward(dattn_out);
+
+    Tensor dx(dx1.Shape());
+    ElementwiseAdd(dx1, dx_norm1, dx);
+
+    return dx;
   }
+
 
   std::vector<Tensor*> GetParameters() override {
     std::vector<Tensor*> p;
@@ -152,7 +169,31 @@ class GPTModel {
     return logits;
   }
 
+  Tensor Backward(const Tensor& dlogits) {
+    int batch_size = dlogits.Shape()[0];
+    int seq_len = dlogits.Shape()[1];
+
+    Tensor dlogits_2d({batch_size * seq_len, config_.vocab_size});
+    std::memcpy(dlogits_2d.Data(), dlogits.Data(), dlogits.TotalSize() * sizeof(float));
+
+    Tensor dx_2d = lm_head_.Backward(dlogits_2d);
+    Tensor dx({batch_size, seq_len, config_.n_embd});
+    std::memcpy(dx.Data(), dx_2d.Data(), dx_2d.TotalSize() * sizeof(float));
+
+    dx = ln_f_.Backward(dx);
+
+    for (auto it = blocks_.rbegin(); it != blocks_.rend(); ++it) {
+      dx = (*it)->Backward(dx);
+    }
+
+    wte_.Backward(dx);
+    wpe_.Backward(dx);
+
+    return dx;
+  }
+
   std::vector<Tensor*> GetParameters() {
+
     std::vector<Tensor*> p;
     for (auto p1 : wte_.GetParameters()) p.push_back(p1);
     for (auto p2 : wpe_.GetParameters()) p.push_back(p2);
