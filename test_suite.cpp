@@ -1248,6 +1248,118 @@ void TestTokenizerUnknownAndBytes() {
   std::cout << "PASADO ✅\n" << std::flush;
 }
 
+/**
+ * @brief Softmax y LayerNorm del autograd.
+ *
+ * LayerNorm no tiene backward propio: se compone de primitivas y el motor
+ * deduce la derivada. La prueba lo compara ademas contra la implementacion
+ * escrita a mano, que es la referencia ya verificada.
+ */
+void TestAutogradComposites() {
+  std::cout << "🧪 [Test 23] Softmax y LayerNorm por composición... " << std::flush;
+  using namespace neuralsuite::autograd;
+
+  const float eps = 1e-2f;
+  const int N = 3, D = 5;
+
+  Tensor base({N, D});
+  for (size_t i = 0; i < base.TotalSize(); ++i) {
+    base[i] = 0.6f * std::sin(1.3f * static_cast<float>(i)) + 0.1f;
+  }
+  Tensor w({N, D});
+  for (size_t i = 0; i < w.TotalSize(); ++i) {
+    w[i] = 0.5f + 0.5f * std::cos(0.7f * static_cast<float>(i));
+  }
+  auto weight = Variable::Create(w);
+
+  double worst = 0.0;
+
+  // --- Softmax: gradiente frente a diferencias finitas. ---
+  {
+    auto build = [&](const Tensor& xv) {
+      auto x = Variable::Create(xv, true);
+      return std::make_pair(x, Sum(Mul(Softmax(x), weight)));
+    };
+    auto [x, out] = build(base);
+    Backward(out);
+
+    // Cada fila debe sumar uno.
+    Tensor probs = Softmax(Variable::Create(base))->Value();
+    bool rows_ok = true;
+    for (int r = 0; r < N; ++r) {
+      double acc = 0.0;
+      for (int c = 0; c < D; ++c) acc += probs[r * D + c];
+      if (std::abs(acc - 1.0) > 1e-5) rows_ok = false;
+    }
+    Check(rows_ok, "las filas del softmax no suman uno");
+
+    double wsm = 0.0;
+    for (size_t i = 0; i < base.TotalSize(); ++i) {
+      const float orig = base[i];
+      Tensor plus = base;  plus[i]  = orig + eps;
+      Tensor minus = base; minus[i] = orig - eps;
+      const double lp = build(plus).second->Value()[0];
+      const double lm = build(minus).second->Value()[0];
+      const double numeric = (lp - lm) / (2.0 * eps);
+      if (std::max(std::abs(numeric), std::abs(static_cast<double>(x->Grad()[i]))) < kNegligibleGrad) continue;
+      wsm = std::max(wsm, RelativeError(numeric, x->Grad()[i]));
+    }
+    Check(wsm < 1e-2, "autograd Softmax: error relativo " + std::to_string(wsm));
+    worst = std::max(worst, wsm);
+  }
+
+  // --- LayerNorm: mismo resultado que la version escrita a mano. ---
+  {
+    Tensor gamma_t({D}), beta_t({D});
+    for (int j = 0; j < D; ++j) {
+      gamma_t[j] = 0.8f + 0.1f * static_cast<float>(j);
+      beta_t[j] = 0.05f * static_cast<float>(j) - 0.1f;
+    }
+
+    auto x = Variable::Create(base, true);
+    auto gamma = Variable::Create(gamma_t, true);
+    auto beta = Variable::Create(beta_t, true);
+    auto normalized = LayerNorm(x, gamma, beta);
+
+    Tensor manual, mean_c, rstd_c;
+    LayerNormForward(base, gamma_t, beta_t, manual, mean_c, rstd_c);
+
+    double worst_fwd = 0.0;
+    for (size_t i = 0; i < manual.TotalSize(); ++i) {
+      worst_fwd = std::max(worst_fwd,
+                           static_cast<double>(std::abs(normalized->Value()[i] - manual[i])));
+    }
+    Check(worst_fwd < 1e-4,
+          "la LayerNorm compuesta no coincide con la escrita a mano: " + std::to_string(worst_fwd));
+
+    // Y su gradiente, que nadie escribio, frente a diferencias finitas.
+    auto build = [&](const Tensor& xv) {
+      auto vx = Variable::Create(xv, true);
+      auto vg = Variable::Create(gamma_t);
+      auto vb = Variable::Create(beta_t);
+      return std::make_pair(vx, Sum(Mul(LayerNorm(vx, vg, vb), weight)));
+    };
+    auto [vx, out] = build(base);
+    Backward(out);
+
+    double wln = 0.0;
+    for (size_t i = 0; i < base.TotalSize(); ++i) {
+      const float orig = base[i];
+      Tensor plus = base;  plus[i]  = orig + eps;
+      Tensor minus = base; minus[i] = orig - eps;
+      const double lp = build(plus).second->Value()[0];
+      const double lm = build(minus).second->Value()[0];
+      const double numeric = (lp - lm) / (2.0 * eps);
+      if (std::max(std::abs(numeric), std::abs(static_cast<double>(vx->Grad()[i]))) < kNegligibleGrad) continue;
+      wln = std::max(wln, RelativeError(numeric, vx->Grad()[i]));
+    }
+    Check(wln < 2e-2, "autograd LayerNorm: error relativo " + std::to_string(wln));
+    worst = std::max(worst, wln);
+  }
+
+  std::cout << "PASADO ✅ (peor error rel: " << worst << ")\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -1275,6 +1387,7 @@ int main() {
   TestAutogradPrimitives();
   TestSeedAndParamGroups();
   TestTokenizerUnknownAndBytes();
+  TestAutogradComposites();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

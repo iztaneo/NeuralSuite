@@ -11,7 +11,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
-**45 puntos cerrados, 10 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
+**49 puntos cerrados, 7 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
@@ -26,11 +26,11 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | --------------------------------- | ------------------------------------------------------------- |
 | Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
 | Robustez de `Tensor`              | ✅ formas validadas, sin estados inválidos, vistas sin copia    |
-| Testing                           | ✅ 22 pruebas, validadas por mutación, con código de salida     |
+| Testing                           | ✅ 23 pruebas, validadas por mutación, con código de salida     |
 | Portabilidad                      | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release    |
 | Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
-| Autograd                          | ✅ motor y 12 primitivas; capas aún sin migrar                   |
+| Autograd                          | ✅ motor, primitivas y LayerNorm compuesta; capas sin migrar     |
 | Rendimiento                       | ⚠️ correcto pero sin optimizar; el cómputo domina               |
 
 ---
@@ -159,7 +159,19 @@ Cada prueba lleva su calibración documentada en el código.
       recibe en el backward la suma de todas las posiciones que lo usaron. Sin
       esto un sesgo `[D]` no podía sumarse a un lote `[N, D]`, y el propio
       `demo_autograd` tuvo que declararlo con la forma del lote.
-- [ ] Softmax, LayerNorm, gather y convolución como primitivas.
+- [x] **Softmax** como primitiva sobre el último eje. Se implementa directamente
+      y no por composición porque la estabilidad numérica exige restar el máximo
+      de cada fila, y expresarlo con primitivas obligaría a derivar también por
+      ese máximo.
+- [x] **LayerNorm compuesta de primitivas, sin backward propio.** Es la razón de
+      tener autograd: la versión escrita a mano necesita una fórmula de tres
+      términos para `dx`, y omitir uno produce un gradiente equivocado que no da
+      síntoma. Aquí se declara el cálculo hacia delante y la derivada sale sola;
+      coincide con la implementación manual a 1e-4 y su gradiente con
+      diferencias finitas a 4.7e-4.
+- [x] Reducciones por eje (`SumLastAxis`, `MeanLastAxis`), `Div`, `Sqrt` y
+      `AddScalar`, que son las que permiten componer normalizaciones.
+- [ ] `gather` y convolución como primitivas.
 
 Reduce la superficie de error: cada capa implementaba su backward a mano, que es
 exactamente donde aparecieron los dos defectos P0.
@@ -236,7 +248,9 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       sanitizers.
 - [x] Comparación contra la implementación de referencia en PyTorch.
 - [ ] Benchmarks separados de las pruebas.
-- [ ] `softmax(x, dim)` con eje explícito.
+- [x] `SoftmaxForward` opera sobre el último eje de cualquier rango. Antes
+      exigía rango 2 y leía `Shape()[1]` directamente, de modo que un tensor de
+      rango 3 se normalizaba sobre un eje que no le correspondía.
 - [x] **Grupos de parámetros en AdamW.** El decay se declara por grupo en vez
       de inferirse del rango del tensor: la heurística anterior acertaba solo
       porque la convención habitual coincide con ella, y un parámetro 2D que no

@@ -317,9 +317,15 @@ void LayerNormBackward(const Tensor& dout, const Tensor& x, const Tensor& gamma,
 
 
 void SoftmaxForward(const Tensor& input, Tensor& output) {
-  int N = input.Shape()[0];
-  int D = input.Shape()[1];
-  output.Resize({N, D});
+  // Opera sobre el ultimo eje, sea cual sea el rango. Antes exigia rango 2 y
+  // leia Shape()[1] directamente, de modo que un tensor de rango 3 accedia a un
+  // eje que no le correspondia.
+  if (input.Shape().empty()) {
+    throw std::invalid_argument("SoftmaxForward: el tensor no tiene ejes.");
+  }
+  const int D = input.Shape().back();
+  const int N = static_cast<int>(input.TotalSize()) / D;
+  output.Resize(input.Shape());
 
   #pragma omp parallel for schedule(static)
   for (int i = 0; i < N; ++i) {

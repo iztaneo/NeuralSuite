@@ -68,7 +68,9 @@ Existe un **motor de diferenciación automática** (`include/autograd.h`) con do
 primitivas verificadas por diferencias finitas. Deduce los gradientes del paso
 hacia delante en vez de que cada capa escriba su `Backward()` a mano, que es
 donde aparecieron los dos defectos que invalidaban el entrenamiento.
-`./demo_autograd` entrena XOR sin una sola derivada escrita. Las capas
+`./demo_autograd` entrena XOR sin una sola derivada escrita, y `LayerNorm` está
+compuesta de primitivas: su gradiente no lo escribió nadie y coincide con la
+implementación manual. Las capas
 existentes **todavía no están migradas**: el motor debía estar comprobado antes
 de reescribir sobre él lo que ya funciona.
 

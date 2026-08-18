@@ -453,6 +453,189 @@ inline VarPtr TransposeVar(const VarPtr& a) {
   });
 }
 
+
+/** @brief Division elemento a elemento, con broadcasting. */
+inline VarPtr Div(const VarPtr& a, const VarPtr& b) {
+  const std::vector<int> shape = detail::BroadcastShape(a->Shape(), b->Shape(), "Div");
+  const auto sa = detail::BroadcastStrides(a->Shape(), shape);
+  const auto sb = detail::BroadcastStrides(b->Shape(), shape);
+
+  Tensor out(shape);
+  detail::ForEachBroadcast(shape, sa, sb, [&](size_t i, size_t ia, size_t ib) {
+    out[i] = a->Value()[ia] / b->Value()[ib];
+  });
+
+  return MakeOp(std::move(out), {a, b}, [a, b, shape, sa, sb](const Tensor& g) {
+    Tensor ga(shape), gb(shape);
+    detail::ForEachBroadcast(shape, sa, sb, [&](size_t i, size_t ia, size_t ib) {
+      const float bv = b->Value()[ib];
+      ga[i] = g[i] / bv;                                    // d(a/b)/da = 1/b
+      gb[i] = -g[i] * a->Value()[ia] / (bv * bv);           // d(a/b)/db = -a/b^2
+    });
+    if (a->RequiresGrad()) a->AccumulateGrad(detail::ReduceToShape(ga, shape, a->Shape()));
+    if (b->RequiresGrad()) b->AccumulateGrad(detail::ReduceToShape(gb, shape, b->Shape()));
+  });
+}
+
+/** @brief Raiz cuadrada. d(sqrt x)/dx = 1/(2 sqrt x). */
+inline VarPtr Sqrt(const VarPtr& a) {
+  Tensor out(a->Shape());
+  for (size_t i = 0; i < out.TotalSize(); ++i) out[i] = std::sqrt(a->Value()[i]);
+
+  Tensor cached = out;
+  return MakeOp(std::move(out), {a}, [a, cached](const Tensor& g) {
+    if (!a->RequiresGrad()) return;
+    Tensor da(a->Shape());
+    for (size_t i = 0; i < da.TotalSize(); ++i) da[i] = g[i] / (2.0f * cached[i]);
+    a->AccumulateGrad(da);
+  });
+}
+
+/** @brief Suma un escalar constante, sin gradiente propio. */
+inline VarPtr AddScalar(const VarPtr& a, float value) {
+  Tensor out(a->Shape());
+  for (size_t i = 0; i < out.TotalSize(); ++i) out[i] = a->Value()[i] + value;
+  return MakeOp(std::move(out), {a}, [a](const Tensor& g) {
+    if (a->RequiresGrad()) a->AccumulateGrad(g);
+  });
+}
+
+namespace detail {
+
+/** @brief Numero de elementos y paso del ultimo eje. */
+inline void LastAxisLayout(const std::vector<int>& shape, size_t* rows, size_t* width) {
+  if (shape.empty()) throw std::invalid_argument("Reduccion: el tensor no tiene ejes.");
+  *width = static_cast<size_t>(shape.back());
+  size_t total = 1;
+  for (int d : shape) total *= static_cast<size_t>(d);
+  *rows = total / *width;
+}
+
+}  // namespace detail
+
+/**
+ * @brief Suma a lo largo del ultimo eje, conservando el rango.
+ *
+ * `[N, D]` se reduce a `[N, 1]`, que con broadcasting vuelve a combinarse con
+ * el original. Es lo que hace falta para expresar medias y normalizaciones sin
+ * escribir sus derivadas.
+ */
+inline VarPtr SumLastAxis(const VarPtr& a) {
+  size_t rows = 0, width = 0;
+  detail::LastAxisLayout(a->Shape(), &rows, &width);
+
+  std::vector<int> out_shape = a->Shape();
+  out_shape.back() = 1;
+
+  Tensor out(out_shape);
+  for (size_t r = 0; r < rows; ++r) {
+    double acc = 0.0;
+    for (size_t c = 0; c < width; ++c) acc += a->Value()[r * width + c];
+    out[r] = static_cast<float>(acc);
+  }
+
+  return MakeOp(std::move(out), {a}, [a, rows, width](const Tensor& g) {
+    if (!a->RequiresGrad()) return;
+    Tensor da(a->Shape());
+    // Cada elemento contribuyo con 1 a la suma de su fila.
+    for (size_t r = 0; r < rows; ++r) {
+      for (size_t c = 0; c < width; ++c) da[r * width + c] = g[r];
+    }
+    a->AccumulateGrad(da);
+  });
+}
+
+/** @brief Media a lo largo del ultimo eje, conservando el rango. */
+inline VarPtr MeanLastAxis(const VarPtr& a) {
+  size_t rows = 0, width = 0;
+  detail::LastAxisLayout(a->Shape(), &rows, &width);
+
+  std::vector<int> out_shape = a->Shape();
+  out_shape.back() = 1;
+
+  Tensor out(out_shape);
+  for (size_t r = 0; r < rows; ++r) {
+    double acc = 0.0;
+    for (size_t c = 0; c < width; ++c) acc += a->Value()[r * width + c];
+    out[r] = static_cast<float>(acc / static_cast<double>(width));
+  }
+
+  return MakeOp(std::move(out), {a}, [a, rows, width](const Tensor& g) {
+    if (!a->RequiresGrad()) return;
+    Tensor da(a->Shape());
+    for (size_t r = 0; r < rows; ++r) {
+      const float share = g[r] / static_cast<float>(width);
+      for (size_t c = 0; c < width; ++c) da[r * width + c] = share;
+    }
+    a->AccumulateGrad(da);
+  });
+}
+
+/**
+ * @brief Softmax sobre el ultimo eje.
+ *
+ * Se implementa como primitiva y no por composicion porque la estabilidad
+ * numerica exige restar el maximo de cada fila antes de exponenciar; expresarlo
+ * con primitivas obligaria a derivar tambien por ese maximo, que no aporta nada
+ * y complica el grafo.
+ *
+ * dx = p ⊙ (g − Σ(g ⊙ p)), con p la propia salida.
+ */
+inline VarPtr Softmax(const VarPtr& a) {
+  size_t rows = 0, width = 0;
+  detail::LastAxisLayout(a->Shape(), &rows, &width);
+
+  Tensor out(a->Shape());
+  for (size_t r = 0; r < rows; ++r) {
+    float max_val = a->Value()[r * width];
+    for (size_t c = 1; c < width; ++c) {
+      max_val = std::max(max_val, a->Value()[r * width + c]);
+    }
+    double sum = 0.0;
+    for (size_t c = 0; c < width; ++c) {
+      const float e = std::exp(a->Value()[r * width + c] - max_val);
+      out[r * width + c] = e;
+      sum += e;
+    }
+    for (size_t c = 0; c < width; ++c) {
+      out[r * width + c] /= static_cast<float>(sum);
+    }
+  }
+
+  Tensor probs = out;
+  return MakeOp(std::move(out), {a}, [a, probs, rows, width](const Tensor& g) {
+    if (!a->RequiresGrad()) return;
+    Tensor da(a->Shape());
+    for (size_t r = 0; r < rows; ++r) {
+      double dot = 0.0;
+      for (size_t c = 0; c < width; ++c) dot += g[r * width + c] * probs[r * width + c];
+      for (size_t c = 0; c < width; ++c) {
+        da[r * width + c] = probs[r * width + c] * (g[r * width + c] - static_cast<float>(dot));
+      }
+    }
+    a->AccumulateGrad(da);
+  });
+}
+
+/**
+ * @brief LayerNorm compuesta de primitivas, sin backward propio.
+ *
+ * Esta es la razon de tener un autograd. La version escrita a mano de esta
+ * misma operacion necesita una formula de tres terminos para `dx`, y omitir uno
+ * de ellos produce un gradiente equivocado que no da ningun sintoma: fue una de
+ * las mutaciones con las que validamos su prueba. Aqui se declara el calculo
+ * hacia delante y la derivada sale sola.
+ */
+inline VarPtr LayerNorm(const VarPtr& x, const VarPtr& gamma, const VarPtr& beta,
+                        float eps = 1e-5f) {
+  auto mean = MeanLastAxis(x);
+  auto centered = Sub(x, mean);
+  auto variance = MeanLastAxis(Mul(centered, centered));
+  auto denom = Sqrt(AddScalar(variance, eps));
+  auto normalized = Div(centered, denom);
+  return Add(Mul(normalized, gamma), beta);
+}
+
 // Operadores para que las expresiones se lean como la formula.
 inline VarPtr operator+(const VarPtr& a, const VarPtr& b) { return Add(a, b); }
 inline VarPtr operator-(const VarPtr& a, const VarPtr& b) { return Sub(a, b); }
