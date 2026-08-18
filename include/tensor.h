@@ -11,6 +11,7 @@
 #define NEURAL_SUITE_INCLUDE_TENSOR_H_
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -132,6 +133,20 @@ class Tensor {
   size_t offset_ = 0;
   std::vector<int> shape_;
 };
+
+/**
+ * @brief Fija la semilla del generador que usan RandomNormal, RandomUniform y
+ *        XavierInit.
+ *
+ * Sin esto la unica forma de reproducir una inicializacion era confiar en que
+ * nadie hubiera consumido numeros antes: el generador es global, asi que
+ * construir una capa de mas desplaza todo lo que venga despues. Eso convertia
+ * en fragiles las comparaciones entre ejecuciones.
+ *
+ * El generador sigue siendo compartido: no es seguro usarlo desde varios hilos
+ * a la vez, y aislarlo por hilo queda pendiente.
+ */
+void ManualSeed(uint32_t seed);
 
 // ============================================================================
 // LINEAR ALGEBRA & MATH PRIMITIVES (GOOGLE C++ STYLE GUIDE)

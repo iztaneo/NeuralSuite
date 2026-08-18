@@ -122,6 +122,21 @@ class SGD : public Optimizer {
 };
 
 /**
+ * @struct ParamGroup
+ * @brief Conjunto de parametros que comparten su propio weight decay.
+ *
+ * AdamW deducia el decay del rango del tensor: se lo aplicaba a todo lo que
+ * tuviera dos ejes o mas. Funciona por casualidad con la convencion habitual
+ * —matrices si, sesgos y LayerNorm no— pero es una inferencia, no una
+ * declaracion: una capa con un parametro 2D que no deba decaer recibiria el
+ * tratamiento equivocado sin que nada lo indique.
+ */
+struct ParamGroup {
+  std::vector<Parameter*> params;
+  float weight_decay = 0.0f;
+};
+
+/**
  * @class AdamW
  * @brief AdamW Optimizer with Decoupled Weight Decay.
  */
@@ -164,6 +179,28 @@ class AdamW : public Optimizer {
     }
   }
 
+  /**
+   * @brief Construccion por grupos, cada uno con su weight decay declarado.
+   */
+  explicit AdamW(const std::vector<ParamGroup>& groups, float learning_rate = 1e-3f,
+                 float b1 = 0.9f, float b2 = 0.95f, float epsilon = 1e-8f)
+      : lr_(learning_rate), beta1_(b1), beta2_(b2), eps_(epsilon),
+        weight_decay_(0.0f), step_count_(0), use_groups_(true) {
+    for (const ParamGroup& group : groups) {
+      for (Parameter* p : group.params) {
+        if (p == nullptr) throw std::invalid_argument("AdamW: parametro nulo en un grupo.");
+        params_.push_back(&p->Value());
+        grads_.push_back(&p->Grad());
+        decays_.push_back(group.weight_decay);
+      }
+    }
+    ValidateParamGradPairs(params_, grads_);
+    for (auto p : params_) {
+      Tensor m_i(p->Shape()); m_i.Zeros(); m_.push_back(m_i);
+      Tensor v_i(p->Shape()); v_i.Zeros(); v_.push_back(v_i);
+    }
+  }
+
   void SetLearningRate(float lr) { lr_ = lr; }
 
   void Step() override {
@@ -183,8 +220,12 @@ class AdamW : public Optimizer {
         float m_hat = m_[i][k] / bias_correction1;
         float v_hat = v_[i][k] / bias_correction2;
 
-        if (params_[i]->Shape().size() >= 2 && weight_decay_ > 0.0f) {
-          (*params_[i])[k] -= lr_ * weight_decay_ * (*params_[i])[k];
+        // Con grupos el decay viene declarado; sin ellos se mantiene la
+        // heuristica anterior por compatibilidad.
+        const float decay = use_groups_ ? decays_[i]
+                                        : (params_[i]->Shape().size() >= 2 ? weight_decay_ : 0.0f);
+        if (decay > 0.0f) {
+          (*params_[i])[k] -= lr_ * decay * (*params_[i])[k];
         }
 
         (*params_[i])[k] -= lr_ * m_hat / (std::sqrt(v_hat) + eps_);
@@ -201,12 +242,14 @@ class AdamW : public Optimizer {
   std::vector<Tensor*> grads_;
   std::vector<Tensor> m_;
   std::vector<Tensor> v_;
+  std::vector<float> decays_;
   float lr_;
   float beta1_;
   float beta2_;
   float eps_;
   float weight_decay_;
   int step_count_;
+  bool use_groups_ = false;
 };
 
 }  // namespace neuralsuite

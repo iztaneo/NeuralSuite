@@ -7,6 +7,8 @@ namespace neuralsuite {
 
 static std::mt19937 g_rng(1337);
 
+void ManualSeed(uint32_t seed) { g_rng.seed(seed); }
+
 namespace {
 
 // Un Tensor nunca debe poder existir en un estado internamente inválido, así

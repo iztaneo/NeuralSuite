@@ -1093,6 +1093,41 @@ void TestAutogradPrimitives() {
     worst = std::max(worst, w);
   }
 
+  // Broadcasting: un sesgo [D] sumado a un lote [N, D]. En el backward, cada
+  // elemento del sesgo debe recibir la suma de las N posiciones que lo usaron.
+  {
+    const int N = 3, D = 4;
+    Tensor xb({N, D}), bb({D});
+    for (size_t i = 0; i < xb.TotalSize(); ++i) xb[i] = 0.3f * std::sin(1.3f * static_cast<float>(i));
+    for (int i = 0; i < D; ++i) bb[i] = 0.2f + 0.1f * static_cast<float>(i);
+
+    auto build = [&](const Tensor& bias) {
+      auto vx = Variable::Create(xb);
+      auto vb = Variable::Create(bias, true);
+      return std::make_pair(vb, Sum(Tanh(vx + vb)));
+    };
+    auto [vb, out] = build(bb);
+    Check(out->Shape() == std::vector<int>({N, D}) || out->Value().TotalSize() == 1,
+          "el broadcasting no produjo la forma esperada");
+    Backward(out);
+
+    double w = 0.0;
+    for (int i = 0; i < D; ++i) {
+      const float orig = bb[i];
+      Tensor plus = bb;  plus[i]  = orig + eps;
+      Tensor minus = bb; minus[i] = orig - eps;
+      const double lp = build(plus).second->Value()[0];
+      const double lm = build(minus).second->Value()[0];
+      const double numeric = (lp - lm) / (2.0 * eps);
+      if (std::max(std::abs(numeric), std::abs(static_cast<double>(vb->Grad()[i]))) < kNegligibleGrad) continue;
+      w = std::max(w, RelativeError(numeric, vb->Grad()[i]));
+    }
+    Check(w < 1e-2, "autograd broadcasting: error relativo " + std::to_string(w));
+    Check(vb->Grad().Shape() == std::vector<int>({D}),
+          "el gradiente del sesgo no volvio con su forma original");
+    worst = std::max(worst, w);
+  }
+
   // Un nodo usado por dos caminos debe recibir la suma de ambos: y = x*x + x
   // tiene dy/dx = 2x + 1. Si el recorrido no acumulase, saldria uno solo.
   {
@@ -1109,7 +1144,58 @@ void TestAutogradPrimitives() {
     Check(ok, "un nodo con dos caminos no acumulo las dos contribuciones");
   }
 
-  std::cout << "PASADO ✅ (12 primitivas, peor error rel: " << worst << ")\n" << std::flush;
+  std::cout << "PASADO ✅ (12 primitivas + broadcasting, peor error rel: " << worst << ")\n" << std::flush;
+}
+
+/** @brief ManualSeed reproduce la inicializacion; ParamGroup declara el decay. */
+void TestSeedAndParamGroups() {
+  std::cout << "🧪 [Test 21] Semilla reproducible y grupos de parámetros... " << std::flush;
+
+  // Dos inicializaciones con la misma semilla deben coincidir exactamente.
+  ManualSeed(2024);
+  Tensor a({50});
+  a.RandomNormal(0.0f, 1.0f);
+  ManualSeed(2024);
+  Tensor b({50});
+  b.RandomNormal(0.0f, 1.0f);
+
+  bool same = true;
+  for (size_t i = 0; i < a.TotalSize(); ++i) {
+    if (a[i] != b[i]) same = false;
+  }
+  Check(same, "la misma semilla produjo inicializaciones distintas");
+
+  ManualSeed(999);
+  Tensor c({50});
+  c.RandomNormal(0.0f, 1.0f);
+  bool differs = false;
+  for (size_t i = 0; i < a.TotalSize(); ++i) {
+    if (a[i] != c[i]) differs = true;
+  }
+  Check(differs, "semillas distintas produjeron la misma inicializacion");
+
+  // El grupo con decay 0 no debe encoger sus pesos; el que lo declara, si.
+  // Con la heuristica anterior ambos son 2D y recibirian el mismo trato.
+  Parameter decays({2, 2}), keeps({2, 2});
+  for (int i = 0; i < 4; ++i) {
+    decays.Value()[i] = 1.0f;
+    keeps.Value()[i] = 1.0f;
+    decays.Grad()[i] = 0.0f;
+    keeps.Grad()[i] = 0.0f;
+  }
+
+  // Gradientes a cero, para que el unico efecto sobre los pesos sea el decay.
+  // La tasa de aprendizaje debe ser distinta de cero: multiplica tambien al
+  // termino de decay, asi que con cero no se movería nada y la prueba no
+  // distinguiria un grupo del otro.
+  AdamW opt(std::vector<ParamGroup>{{{&decays}, 0.5f}, {{&keeps}, 0.0f}}, 0.1f);
+  opt.Step();
+
+  Check(decays.Value()[0] < 0.99f, "el grupo con weight decay no encogio sus pesos");
+  Check(std::abs(keeps.Value()[0] - 1.0f) < 1e-6f,
+        "el grupo sin weight decay vio sus pesos modificados");
+
+  std::cout << "PASADO ✅\n" << std::flush;
 }
 
 int main() {
@@ -1137,6 +1223,7 @@ int main() {
   TestParameterAndModule();
   TestSerialization();
   TestAutogradPrimitives();
+  TestSeedAndParamGroups();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

@@ -11,7 +11,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
-**38 puntos cerrados, 12 pendientes.** Lo siguiente sería migrar las capas al autograd, o el tokenizador (Fase 08).
+**42 puntos cerrados, 9 pendientes.** Lo siguiente sería migrar las capas al autograd, o el tokenizador (Fase 08).
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
@@ -26,7 +26,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | --------------------------------- | ------------------------------------------------------------- |
 | Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
 | Robustez de `Tensor`              | ✅ formas validadas, sin estados inválidos, vistas sin copia    |
-| Testing                           | ✅ 20 pruebas, validadas por mutación, con código de salida     |
+| Testing                           | ✅ 21 pruebas, validadas por mutación, con código de salida     |
 | Portabilidad                      | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release    |
 | Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
@@ -154,9 +154,12 @@ Cada prueba lleva su calibración documentada en el código.
 - [ ] Migrar las capas existentes a las primitivas. Deliberadamente aparte: el
       motor debía estar verificado antes de reescribir sobre él nada que ya
       funciona y está comprobado contra PyTorch.
+- [x] **Broadcasting** en las operaciones elemento a elemento, con la regla
+      habitual de alinear por la derecha. Un eje que se repite en el forward
+      recibe en el backward la suma de todas las posiciones que lo usaron. Sin
+      esto un sesgo `[D]` no podía sumarse a un lote `[N, D]`, y el propio
+      `demo_autograd` tuvo que declararlo con la forma del lote.
 - [ ] Softmax, LayerNorm, gather y convolución como primitivas.
-- [ ] Broadcasting. Hoy las operaciones elemento a elemento exigen formas
-      idénticas, para no complicar el backward antes de tener lo básico firme.
 
 Reduce la superficie de error: cada capa implementaba su backward a mano, que es
 exactamente donde aparecieron los dos defectos P0.
@@ -191,7 +194,11 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       IEEE-754 justo donde se verifican gradientes.
 - [x] **Windows nunca había compilado**: `#pragma omp simd` requiere un flag
       experimental en MSVC, y su OpenMP exige índice de bucle con signo.
-- [ ] RNG controlable (`manual_seed`) y estado por hilo.
+- [x] `ManualSeed()` fija la semilla del generador. Antes reproducir una
+      inicialización dependía de que nadie hubiera consumido números antes:
+      construir una capa de más desplazaba todo lo que viniera después.
+- [ ] Estado del generador por hilo. Sigue siendo compartido y no es seguro
+      usarlo desde varios hilos a la vez.
 
 ## Fase 08 — Tokenizador ⬜
 
@@ -217,9 +224,11 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       sanitizers.
 - [x] Comparación contra la implementación de referencia en PyTorch.
 - [ ] Benchmarks separados de las pruebas.
-- [ ] `softmax(x, dim)` y broadcasting.
-- [ ] Grupos de parámetros explícitos en AdamW, en vez de inferir el decay del
-      rango del tensor.
+- [ ] `softmax(x, dim)` con eje explícito.
+- [x] **Grupos de parámetros en AdamW.** El decay se declara por grupo en vez
+      de inferirse del rango del tensor: la heurística anterior acertaba solo
+      porque la convención habitual coincide con ella, y un parámetro 2D que no
+      debiera decaer recibía el trato equivocado sin que nada lo indicara.
 
 ## Pendiente aparte — OCR ⬜
 

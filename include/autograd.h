@@ -22,9 +22,6 @@
  * Limitaciones deliberadas de esta primera version, para no acumular
  * complejidad antes de tener las primitivas verificadas:
  *
- * - Sin broadcasting: las operaciones elemento a elemento exigen formas
- *   identicas. Anadirlo sin haber comprobado antes lo basico complicaria el
- *   backward de cada operacion.
  * - Solo `float32`.
  * - El grafo se construye siempre; no hay todavia un modo de inferencia que lo
  *   omita.
@@ -173,11 +170,84 @@ inline void Backward(const VarPtr& root) {
 
 namespace detail {
 
-inline void RequireSameShape(const VarPtr& a, const VarPtr& b, const char* op) {
-  if (a->Shape() != b->Shape()) {
-    throw std::invalid_argument(std::string(op) +
-                                ": las formas deben coincidir; no hay broadcasting.");
+/**
+ * @brief Forma resultante de combinar dos operandos, alineando por la derecha.
+ *
+ * Cada eje debe coincidir o valer 1, en cuyo caso se repite. Es la regla
+ * habitual: sumar un sesgo `[D]` a un lote `[N, D]` no deberia obligar a
+ * materializar N copias del sesgo.
+ */
+inline std::vector<int> BroadcastShape(const std::vector<int>& a, const std::vector<int>& b,
+                                       const char* op) {
+  const size_t rank = std::max(a.size(), b.size());
+  std::vector<int> out(rank);
+  for (size_t i = 0; i < rank; ++i) {
+    // Se recorren de derecha a izquierda; los ejes que faltan valen 1.
+    const int da = (i < a.size()) ? a[a.size() - 1 - i] : 1;
+    const int db = (i < b.size()) ? b[b.size() - 1 - i] : 1;
+    if (da != db && da != 1 && db != 1) {
+      throw std::invalid_argument(std::string(op) + ": formas incompatibles para broadcasting.");
+    }
+    out[rank - 1 - i] = std::max(da, db);
   }
+  return out;
+}
+
+/** @brief Pasos por eje de un tensor contiguo, con 0 donde el eje se repite. */
+inline std::vector<size_t> BroadcastStrides(const std::vector<int>& shape,
+                                            const std::vector<int>& out_shape) {
+  std::vector<size_t> strides(out_shape.size(), 0);
+  size_t running = 1;
+  for (size_t i = 0; i < out_shape.size(); ++i) {
+    const size_t axis_out = out_shape.size() - 1 - i;
+    const int dim = (i < shape.size()) ? shape[shape.size() - 1 - i] : 1;
+    // Paso cero significa "este eje se repite": todos los indices de salida
+    // leen el mismo elemento de la entrada.
+    strides[axis_out] = (dim == 1) ? 0 : running;
+    running *= static_cast<size_t>(dim);
+  }
+  return strides;
+}
+
+/** @brief Recorre la forma de salida aplicando `fn(idx_salida, idx_a, idx_b)`. */
+template <typename Fn>
+void ForEachBroadcast(const std::vector<int>& out_shape, const std::vector<size_t>& sa,
+                      const std::vector<size_t>& sb, Fn&& fn) {
+  size_t total = 1;
+  for (int d : out_shape) total *= static_cast<size_t>(d);
+
+  std::vector<int> counter(out_shape.size(), 0);
+  size_t ia = 0, ib = 0;
+  for (size_t i = 0; i < total; ++i) {
+    fn(i, ia, ib);
+    // Incremento posicional del contador multidimensional.
+    for (size_t axis = out_shape.size(); axis-- > 0;) {
+      ia += sa[axis];
+      ib += sb[axis];
+      if (++counter[axis] < out_shape[axis]) break;
+      ia -= sa[axis] * static_cast<size_t>(out_shape[axis]);
+      ib -= sb[axis] * static_cast<size_t>(out_shape[axis]);
+      counter[axis] = 0;
+    }
+  }
+}
+
+/**
+ * @brief Reduce un gradiente con la forma de salida a la forma del operando.
+ *
+ * Un eje que se repitio en el forward recibe, en el backward, la suma de todas
+ * las posiciones que lo usaron: si un valor influyo en N salidas, su gradiente
+ * es la suma de las N contribuciones.
+ */
+inline Tensor ReduceToShape(const Tensor& grad, const std::vector<int>& out_shape,
+                            const std::vector<int>& target_shape) {
+  Tensor reduced(target_shape);
+  reduced.Zeros();
+  const std::vector<size_t> strides = BroadcastStrides(target_shape, out_shape);
+  const std::vector<size_t> zero(out_shape.size(), 0);
+  ForEachBroadcast(out_shape, strides, zero,
+                   [&](size_t i, size_t it, size_t) { reduced[it] += grad[i]; });
+  return reduced;
 }
 
 }  // namespace detail
@@ -186,50 +256,62 @@ inline void RequireSameShape(const VarPtr& a, const VarPtr& b, const char* op) {
 // PRIMITIVAS
 // ============================================================================
 
-/** @brief Suma elemento a elemento. d(a+b)/da = 1, d(a+b)/db = 1. */
+/** @brief Suma elemento a elemento, con broadcasting. */
 inline VarPtr Add(const VarPtr& a, const VarPtr& b) {
-  detail::RequireSameShape(a, b, "Add");
-  Tensor out(a->Shape());
-  for (size_t i = 0; i < out.TotalSize(); ++i) out[i] = a->Value()[i] + b->Value()[i];
+  const std::vector<int> shape = detail::BroadcastShape(a->Shape(), b->Shape(), "Add");
+  const auto sa = detail::BroadcastStrides(a->Shape(), shape);
+  const auto sb = detail::BroadcastStrides(b->Shape(), shape);
 
-  return MakeOp(std::move(out), {a, b}, [a, b](const Tensor& g) {
-    if (a->RequiresGrad()) a->AccumulateGrad(g);
-    if (b->RequiresGrad()) b->AccumulateGrad(g);
+  Tensor out(shape);
+  detail::ForEachBroadcast(shape, sa, sb, [&](size_t i, size_t ia, size_t ib) {
+    out[i] = a->Value()[ia] + b->Value()[ib];
+  });
+
+  return MakeOp(std::move(out), {a, b}, [a, b, shape](const Tensor& g) {
+    if (a->RequiresGrad()) a->AccumulateGrad(detail::ReduceToShape(g, shape, a->Shape()));
+    if (b->RequiresGrad()) b->AccumulateGrad(detail::ReduceToShape(g, shape, b->Shape()));
   });
 }
 
-/** @brief Producto elemento a elemento. d(a*b)/da = b, d(a*b)/db = a. */
+/** @brief Producto elemento a elemento, con broadcasting. */
 inline VarPtr Mul(const VarPtr& a, const VarPtr& b) {
-  detail::RequireSameShape(a, b, "Mul");
-  Tensor out(a->Shape());
-  for (size_t i = 0; i < out.TotalSize(); ++i) out[i] = a->Value()[i] * b->Value()[i];
+  const std::vector<int> shape = detail::BroadcastShape(a->Shape(), b->Shape(), "Mul");
+  const auto sa = detail::BroadcastStrides(a->Shape(), shape);
+  const auto sb = detail::BroadcastStrides(b->Shape(), shape);
 
-  return MakeOp(std::move(out), {a, b}, [a, b](const Tensor& g) {
-    if (a->RequiresGrad()) {
-      Tensor da(a->Shape());
-      for (size_t i = 0; i < da.TotalSize(); ++i) da[i] = g[i] * b->Value()[i];
-      a->AccumulateGrad(da);
-    }
-    if (b->RequiresGrad()) {
-      Tensor db(b->Shape());
-      for (size_t i = 0; i < db.TotalSize(); ++i) db[i] = g[i] * a->Value()[i];
-      b->AccumulateGrad(db);
-    }
+  Tensor out(shape);
+  detail::ForEachBroadcast(shape, sa, sb, [&](size_t i, size_t ia, size_t ib) {
+    out[i] = a->Value()[ia] * b->Value()[ib];
+  });
+
+  return MakeOp(std::move(out), {a, b}, [a, b, shape, sa, sb](const Tensor& g) {
+    Tensor ga(shape), gb(shape);
+    detail::ForEachBroadcast(shape, sa, sb, [&](size_t i, size_t ia, size_t ib) {
+      ga[i] = g[i] * b->Value()[ib];
+      gb[i] = g[i] * a->Value()[ia];
+    });
+    if (a->RequiresGrad()) a->AccumulateGrad(detail::ReduceToShape(ga, shape, a->Shape()));
+    if (b->RequiresGrad()) b->AccumulateGrad(detail::ReduceToShape(gb, shape, b->Shape()));
   });
 }
 
-/** @brief Resta elemento a elemento. */
+/** @brief Resta elemento a elemento, con broadcasting. */
 inline VarPtr Sub(const VarPtr& a, const VarPtr& b) {
-  detail::RequireSameShape(a, b, "Sub");
-  Tensor out(a->Shape());
-  for (size_t i = 0; i < out.TotalSize(); ++i) out[i] = a->Value()[i] - b->Value()[i];
+  const std::vector<int> shape = detail::BroadcastShape(a->Shape(), b->Shape(), "Sub");
+  const auto sa = detail::BroadcastStrides(a->Shape(), shape);
+  const auto sb = detail::BroadcastStrides(b->Shape(), shape);
 
-  return MakeOp(std::move(out), {a, b}, [a, b](const Tensor& g) {
-    if (a->RequiresGrad()) a->AccumulateGrad(g);
+  Tensor out(shape);
+  detail::ForEachBroadcast(shape, sa, sb, [&](size_t i, size_t ia, size_t ib) {
+    out[i] = a->Value()[ia] - b->Value()[ib];
+  });
+
+  return MakeOp(std::move(out), {a, b}, [a, b, shape](const Tensor& g) {
+    if (a->RequiresGrad()) a->AccumulateGrad(detail::ReduceToShape(g, shape, a->Shape()));
     if (b->RequiresGrad()) {
-      Tensor db(b->Shape());
-      for (size_t i = 0; i < db.TotalSize(); ++i) db[i] = -g[i];
-      b->AccumulateGrad(db);
+      Tensor neg(shape);
+      for (size_t i = 0; i < neg.TotalSize(); ++i) neg[i] = -g[i];
+      b->AccumulateGrad(detail::ReduceToShape(neg, shape, b->Shape()));
     }
   });
 }
