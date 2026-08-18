@@ -1198,6 +1198,56 @@ void TestSeedAndParamGroups() {
   std::cout << "PASADO ✅\n" << std::flush;
 }
 
+/**
+ * @brief Lo desconocido se marca, y el tokenizador de bytes no puede fallar.
+ *
+ * Antes un caracter fuera del vocabulario se codificaba como token 0, que era
+ * un caracter valido: con el vocabulario {a,b,c}, "axc" volvia como "aac".
+ */
+void TestTokenizerUnknownAndBytes() {
+  std::cout << "🧪 [Test 22] Token desconocido y tokenizador de bytes... " << std::flush;
+
+  CharTokenizer abc("abc");
+  Check(abc.VocabSize() == 4, "el vocabulario deberia ser {a,b,c} mas <UNK>");
+
+  const std::vector<int> ids = abc.Encode("axc");
+  Check(ids.size() == 3, "Encode no produjo un token por byte");
+  Check(ids[1] == CharTokenizer::kUnknownToken, "la 'x' desconocida no dio <UNK>");
+  Check(ids[0] != CharTokenizer::kUnknownToken && ids[2] != CharTokenizer::kUnknownToken,
+        "un caracter conocido se confundio con <UNK>");
+  Check(abc.Decode(ids) != "aac", "lo desconocido volvio a confundirse con la 'a'");
+  Check(abc.CountUnknown("axc") == 1, "CountUnknown no detecto el simbolo fuera del vocabulario");
+
+  // Roundtrip completo cuando todo el texto esta en el vocabulario.
+  const std::string sample = "Hello C++ Google Style!";
+  CharTokenizer tok(sample);
+  Check(tok.Decode(tok.Encode(sample)) == sample, "el roundtrip no conserva el texto conocido");
+  Check(tok.CountUnknown(sample) == 0, "se reportaron desconocidos en su propio corpus");
+
+  // El vocabulario guardado y recargado debe comportarse igual.
+  const std::string vocab_path =
+      (std::filesystem::temp_directory_path() / "ns_test_vocab.txt").string();
+  Check(tok.Save(vocab_path), "no se pudo guardar el vocabulario");
+  CharTokenizer reloaded;
+  Check(reloaded.Load(vocab_path), "no se pudo cargar el vocabulario");
+  Check(reloaded.VocabSize() == tok.VocabSize(), "el vocabulario recargado cambio de tamano");
+  Check(reloaded.Decode(reloaded.Encode(sample)) == sample,
+        "el vocabulario recargado no reproduce el texto");
+
+  // ByteTokenizer: por construccion no existe el simbolo desconocido.
+  ByteTokenizer bytes;
+  Check(bytes.VocabSize() == 256, "el vocabulario de bytes deberia ser fijo de 256");
+  const std::string utf8 = "El niño comió jamón. ¿Qué más?";
+  Check(bytes.Decode(bytes.Encode(utf8)) == utf8, "el texto UTF-8 no sobrevivio al roundtrip");
+
+  // Texto que el tokenizador nunca vio: no hace falta reentrenarlo.
+  const std::string otros = "日本語 y emoji 🎉";
+  Check(bytes.Decode(bytes.Encode(otros)) == otros,
+        "un texto de otro alfabeto no sobrevivio al roundtrip");
+
+  std::cout << "PASADO ✅\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -1224,6 +1274,7 @@ int main() {
   TestSerialization();
   TestAutogradPrimitives();
   TestSeedAndParamGroups();
+  TestTokenizerUnknownAndBytes();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

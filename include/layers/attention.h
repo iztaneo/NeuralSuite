@@ -22,6 +22,14 @@ namespace neuralsuite {
 /**
  * @class MultiHeadAttention
  * @brief Multi-Head Causal Self-Attention Layer for Transformer Decoders.
+ *
+ * La posicion llega por embeddings aprendidos (`wpe_` del modelo), no por
+ * rotacion de Q y K. Existio aqui un `ApplyRoPE()` que ningun forward llamaba:
+ * sugeria una capacidad que el modelo no tiene, asi que se retiro. RoPE sigue
+ * planteado en docs/FUTURE_PLAN_KVCACHE_ROPE.md, y anadirlo exige rotar Q y K
+ * en el forward, propagar por esa rotacion en el backward con su gradient
+ * check, y actualizar la implementacion de referencia en PyTorch para que la
+ * comparacion siga siendo valida.
  */
 class MultiHeadAttention : public Layer {
  public:
@@ -176,18 +184,6 @@ class MultiHeadAttention : public Layer {
     Tensor dx_2d = c_attn_.Backward(dqkv);
     dx_2d.Reshape({batch_size, seq_len, n_embd_});
     return dx_2d;
-  }
-
-  static void ApplyRoPE(float* vec, int head_dim, int pos) {
-    for (int i = 0; i < head_dim - 1; i += 2) {
-      float theta = static_cast<float>(pos) / std::pow(10000.0f, static_cast<float>(i) / head_dim);
-      float cos_th = std::cos(theta);
-      float sin_th = std::sin(theta);
-      float x0 = vec[i];
-      float x1 = vec[i + 1];
-      vec[i]     = x0 * cos_th - x1 * sin_th;
-      vec[i + 1] = x0 * sin_th + x1 * cos_th;
-    }
   }
 
   void ClearKVCache() {

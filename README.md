@@ -77,6 +77,13 @@ compilación en Linux (GCC y Clang), macOS y Windows, en modo `Debug` y
 `Release`; la suite numérica; las demos; un entrenamiento del LLM de extremo a
 extremo; y la comparación contra PyTorch.
 
+El tokenizador reserva el índice 0 para `<UNK>`. Antes un símbolo fuera del
+vocabulario se codificaba como token 0, que era un carácter válido: con el
+vocabulario `{a, b, c}`, `"axc"` volvía como `"aac"`. Existe además un
+`ByteTokenizer` de 256 símbolos que, por construcción, no puede encontrarse un
+símbolo desconocido y reproduce cualquier UTF-8 —japonés o emoji incluidos— sin
+reentrenarse.
+
 Los pesos se guardan en formato **NSF**, con número mágico, versión, los
 metadatos de la arquitectura, cada tensor con su nombre y forma, y una suma de
 comprobación. Antes se volcaban floats crudos sin cabecera y cargar un

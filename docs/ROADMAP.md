@@ -11,13 +11,13 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
-**42 puntos cerrados, 9 pendientes.** Lo siguiente sería migrar las capas al autograd, o el tokenizador (Fase 08).
+**45 puntos cerrados, 7 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
 | 00 Confianza y limpieza    | ✅               | 06 Serialización  | ✅           |
 | 01 Corrección crítica      | ✅               | 07 Runtime y build| ✅           |
-| 02 Tensor Core             | ✅ parcial       | 08 Tokenizador    | ⬜           |
+| 02 Tensor Core             | ✅ parcial       | 08 Tokenizador    | ✅ parcial   |
 | 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ⬜           |
 | 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅ parcial   |
 | 05 Autograd                | ✅ parcial       | OCR (aparte)      | ⬜           |
@@ -26,7 +26,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | --------------------------------- | ------------------------------------------------------------- |
 | Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
 | Robustez de `Tensor`              | ✅ formas validadas, sin estados inválidos, vistas sin copia    |
-| Testing                           | ✅ 21 pruebas, validadas por mutación, con código de salida     |
+| Testing                           | ✅ 22 pruebas, validadas por mutación, con código de salida     |
 | Portabilidad                      | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release    |
 | Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
@@ -200,20 +200,32 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 - [ ] Estado del generador por hilo. Sigue siendo compartido y no es seguro
       usarlo desde varios hilos a la vez.
 
-## Fase 08 — Tokenizador ⬜
+## Fase 08 — Tokenizador ✅ (parcial)
 
-- [ ] Token `<UNK>` explícito: hoy un carácter desconocido se convierte en el
-      token 0, que puede ser un carácter válido del vocabulario.
-- [ ] `ByteTokenizer` y BPE propio. El actual trabaja sobre `char`, que en C++
-      es un byte: el texto UTF-8 queda fragmentado.
+- [x] **Token `<UNK>` explícito** en el índice 0. Antes un símbolo fuera del
+      vocabulario se codificaba como token 0, que era un carácter válido: con el
+      vocabulario `{a, b, c}`, codificar y decodificar `"axc"` devolvía `"aac"`,
+      convirtiendo la `x` desconocida en una `a`. Ahora devuelve `"a?c"`, y
+      `CountUnknown()` permite medir cuánto del corpus queda fuera.
+- [x] **`ByteTokenizer`** con vocabulario fijo de 256 símbolos. Por construcción
+      no puede encontrarse un símbolo desconocido, y no necesita reentrenarse
+      para otro idioma: el mismo tokenizador reproduce japonés o emoji sin
+      haberlos visto. Mantiene la dependencia cero, porque tratar bytes no
+      requiere ninguna biblioteca Unicode.
+- [ ] BPE propio, para que las secuencias no crezcan tanto: en el tokenizador
+      de bytes un carácter no ASCII ocupa varios tokens.
 
 ## Fase 09 — Rendimiento ⬜
 
 - [ ] GEMM con blocking, tiling y SIMD; kernel optimizado de Conv2D conservando
       el actual como oráculo de referencia.
 - [ ] KV cache contiguo (hoy `vector<vector<float>>`).
-- [ ] Decidir sobre RoPE: `ApplyRoPE()` existe pero no se invoca en ningún
-      forward, lo que sugiere una capacidad que el modelo no tiene.
+- [x] **RoPE decidido**: se retira `ApplyRoPE()`, que ningún forward llamaba y
+      sugería una capacidad que el modelo no tiene. La posición sigue llegando
+      por embeddings aprendidos. RoPE continúa planteado en
+      `FUTURE_PLAN_KVCACHE_ROPE.md`; implementarlo exige rotar Q y K, propagar
+      por esa rotación con su gradient check, y actualizar la implementación de
+      referencia en PyTorch para que la comparación siga siendo válida.
 
 ## Fase 10 — Ecosistema ✅ (parcial)
 
