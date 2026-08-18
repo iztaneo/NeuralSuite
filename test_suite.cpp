@@ -20,6 +20,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "autograd.h"
 #include "neuralsuite.h"
 
 using namespace neuralsuite;
@@ -993,6 +994,124 @@ void TestSerialization() {
   std::cout << "PASADO ✅\n" << std::flush;
 }
 
+/**
+ * @brief Cada primitiva del autograd, contra diferencias finitas.
+ *
+ * El motor deduce la derivada de la operacion en vez de que la escriba cada
+ * capa. Eso solo vale si cada primitiva es correcta, asi que se comprueban una
+ * a una: se construye una expresion, se reduce a escalar y se compara el
+ * gradiente que produce el motor con el numerico.
+ */
+void TestAutogradPrimitives() {
+  std::cout << "🧪 [Test 20] Primitivas del autograd... " << std::flush;
+  using namespace neuralsuite::autograd;
+
+  const float eps = 1e-2f;
+
+  // Comprueba el gradiente de `x` en una expresion escalar cualquiera.
+  auto check = [&](const char* name, Tensor seed,
+                   const std::function<VarPtr(const VarPtr&)>& build) {
+    auto x = Variable::Create(seed, true);
+    auto out = build(x);
+    Backward(out);
+
+    double worst = 0.0;
+    for (size_t i = 0; i < seed.TotalSize(); ++i) {
+      const float orig = seed[i];
+
+      Tensor plus = seed;  plus[i]  = orig + eps;
+      Tensor minus = seed; minus[i] = orig - eps;
+      const double lp = build(Variable::Create(plus))->Value()[0];
+      const double lm = build(Variable::Create(minus))->Value()[0];
+
+      const double numeric = (lp - lm) / (2.0 * eps);
+      const double analytic = x->Grad()[i];
+      if (std::max(std::abs(numeric), std::abs(analytic)) < kNegligibleGrad) continue;
+      worst = std::max(worst, RelativeError(numeric, analytic));
+    }
+    Check(worst < 1e-2, std::string("autograd ") + name + ": error relativo " +
+                            std::to_string(worst));
+    return worst;
+  };
+
+  Tensor base({2, 3});
+  for (size_t i = 0; i < base.TotalSize(); ++i) {
+    base[i] = 0.4f * std::sin(1.7f * static_cast<float>(i)) + 0.9f;  // positivo, para Log
+  }
+
+  double worst = 0.0;
+  worst = std::max(worst, check("Sum", base, [](const VarPtr& x) { return Sum(x); }));
+  worst = std::max(worst, check("Mean", base, [](const VarPtr& x) { return Mean(x); }));
+  worst = std::max(worst, check("Add", base, [](const VarPtr& x) { return Sum(x + x); }));
+  worst = std::max(worst, check("Sub", base, [](const VarPtr& x) {
+    auto c = Variable::Create(Tensor(x->Shape()));
+    return Sum(x - c);
+  }));
+  worst = std::max(worst, check("Mul", base, [](const VarPtr& x) { return Sum(x * x); }));
+  worst = std::max(worst, check("Exp", base, [](const VarPtr& x) { return Sum(Exp(x)); }));
+  worst = std::max(worst, check("Log", base, [](const VarPtr& x) { return Sum(Log(x)); }));
+  worst = std::max(worst, check("Tanh", base, [](const VarPtr& x) { return Sum(Tanh(x)); }));
+  worst = std::max(worst, check("Reshape", base, [](const VarPtr& x) {
+    return Sum(Tanh(Reshape(x, {3, 2})));
+  }));
+  worst = std::max(worst, check("Transpose", base, [](const VarPtr& x) {
+    return Sum(Tanh(TransposeVar(x)));
+  }));
+
+  // Relu con entradas de ambos signos, lejos del codo.
+  Tensor mixed({6});
+  mixed[0] = 0.8f; mixed[1] = -0.7f; mixed[2] = 1.3f;
+  mixed[3] = -1.1f; mixed[4] = 0.5f; mixed[5] = -0.4f;
+  worst = std::max(worst, check("Relu", mixed, [](const VarPtr& x) { return Sum(Relu(x)); }));
+
+  // MatMul: se comprueba respecto de la matriz de la izquierda.
+  {
+    Tensor a({2, 3}), b({3, 2});
+    for (size_t i = 0; i < a.TotalSize(); ++i) a[i] = 0.3f * std::cos(1.1f * static_cast<float>(i));
+    for (size_t i = 0; i < b.TotalSize(); ++i) b[i] = 0.5f * std::sin(0.9f * static_cast<float>(i)) + 0.2f;
+
+    auto build = [&](const Tensor& av) {
+      auto va = Variable::Create(av, true);
+      auto vb = Variable::Create(b);
+      return std::make_pair(va, Sum(Tanh(MatMulVar(va, vb))));
+    };
+    auto [va, out] = build(a);
+    Backward(out);
+
+    double w = 0.0;
+    for (size_t i = 0; i < a.TotalSize(); ++i) {
+      const float orig = a[i];
+      Tensor plus = a;  plus[i]  = orig + eps;
+      Tensor minus = a; minus[i] = orig - eps;
+      const double lp = build(plus).second->Value()[0];
+      const double lm = build(minus).second->Value()[0];
+      const double numeric = (lp - lm) / (2.0 * eps);
+      if (std::max(std::abs(numeric), std::abs(static_cast<double>(va->Grad()[i]))) < kNegligibleGrad) continue;
+      w = std::max(w, RelativeError(numeric, va->Grad()[i]));
+    }
+    Check(w < 1e-2, "autograd MatMul: error relativo " + std::to_string(w));
+    worst = std::max(worst, w);
+  }
+
+  // Un nodo usado por dos caminos debe recibir la suma de ambos: y = x*x + x
+  // tiene dy/dx = 2x + 1. Si el recorrido no acumulase, saldria uno solo.
+  {
+    Tensor t({4});
+    for (int i = 0; i < 4; ++i) t[i] = 0.5f + 0.3f * static_cast<float>(i);
+    auto x = Variable::Create(t, true);
+    Backward(Sum(x * x + x));
+
+    bool ok = true;
+    for (size_t i = 0; i < t.TotalSize(); ++i) {
+      const float expected = 2.0f * t[i] + 1.0f;
+      if (std::abs(x->Grad()[i] - expected) > 1e-4f) ok = false;
+    }
+    Check(ok, "un nodo con dos caminos no acumulo las dos contribuciones");
+  }
+
+  std::cout << "PASADO ✅ (12 primitivas, peor error rel: " << worst << ")\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -1017,6 +1136,7 @@ int main() {
   TestGradientCheckRemainingLayers();
   TestParameterAndModule();
   TestSerialization();
+  TestAutogradPrimitives();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

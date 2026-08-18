@@ -64,6 +64,14 @@ Antes cada capa exponía dos listas paralelas que el optimizador recorría por
 exactamente el defecto que invalidaba el entrenamiento del Transformer. Ahora
 ambas listas se derivan de la misma declaración.
 
+Existe un **motor de diferenciación automática** (`include/autograd.h`) con doce
+primitivas verificadas por diferencias finitas. Deduce los gradientes del paso
+hacia delante en vez de que cada capa escriba su `Backward()` a mano, que es
+donde aparecieron los dos defectos que invalidaban el entrenamiento.
+`./demo_autograd` entrena XOR sin una sola derivada escrita. Las capas
+existentes **todavía no están migradas**: el motor debía estar comprobado antes
+de reescribir sobre él lo que ya funciona.
+
 Cada push ejecuta en [integración continua](.github/workflows/ci.yml) la
 compilación en Linux (GCC y Clang), macOS y Windows, en modo `Debug` y
 `Release`; la suite numérica; las demos; un entrenamiento del LLM de extremo a
@@ -191,6 +199,8 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Redes densas, convolucionales y recurrentes**
 
+- `./demo_autograd`: entrenamiento de XOR con diferenciación automática,
+  sin derivadas escritas a mano.
 - `./demo_adaline`: Regla de aprendizaje Adaline / Widrow-Hoff.
 - `./demo_mlp`: Entrenamiento de un clasificador MLP (XOR).
 - `./demo_cnn`: Entrenamiento de una Red Convolucional (CNN 2D).

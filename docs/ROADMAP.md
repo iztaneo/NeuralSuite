@@ -11,7 +11,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
-**35 puntos cerrados, 12 pendientes.** Lo siguiente es el autograd (Fase 05).
+**38 puntos cerrados, 12 pendientes.** Lo siguiente sería migrar las capas al autograd, o el tokenizador (Fase 08).
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
@@ -20,17 +20,17 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | 02 Tensor Core             | ✅ parcial       | 08 Tokenizador    | ⬜           |
 | 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ⬜           |
 | 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅ parcial   |
-| **05 Autograd**            | **⬜ siguiente** | OCR (aparte)      | ⬜           |
+| 05 Autograd                | ✅ parcial       | OCR (aparte)      | ⬜           |
 
 | Área                              | Estado                                                        |
 | --------------------------------- | ------------------------------------------------------------- |
 | Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
 | Robustez de `Tensor`              | ✅ formas validadas, sin estados inválidos, vistas sin copia    |
-| Testing                           | ✅ 19 pruebas, validadas por mutación, con código de salida     |
+| Testing                           | ✅ 20 pruebas, validadas por mutación, con código de salida     |
 | Portabilidad                      | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release    |
 | Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
-| Autograd                          | ❌ cada capa implementa su backward a mano                      |
+| Autograd                          | ✅ motor y 12 primitivas; capas aún sin migrar                   |
 | Rendimiento                       | ⚠️ correcto pero sin optimizar; el cómputo domina               |
 
 ---
@@ -140,14 +140,26 @@ Medido en este repositorio: en `MultiHeadAttention` el error baja de 0,48 a
 3e-4 al **agrandar** el paso; en `GraphConv` sube de 1,8e-6 a 1,0 al agrandarlo.
 Cada prueba lleva su calibración documentada en el código.
 
-## Fase 05 — Autograd ⬜ ← siguiente
+## Fase 05 — Autograd ✅ (motor y primitivas)
 
-- [ ] Primitivas con derivada automática (add, mul, matmul, sum, mean, exp, log,
-      tanh, reshape, transpose), y después softmax, LayerNorm, gather y
-      convolución.
+- [x] **Motor de diferenciación automática en modo inverso.** Cada operación
+      registra cómo repartir el gradiente entre sus entradas, y `Backward()`
+      recorre el grafo en orden topológico inverso. Un nodo que alimenta varios
+      caminos acumula las contribuciones de todos.
+- [x] Doce primitivas: `Add`, `Sub`, `Mul`, `MatMul`, `Sum`, `Mean`, `Exp`,
+      `Log`, `Tanh`, `Relu`, `Reshape` y `Transpose`, cada una verificada por
+      diferencias finitas y validada por mutación.
+- [x] `demo_autograd` entrena XOR sin una sola derivada escrita a mano: la
+      pérdida baja de 2.22 a 3e-05 y las cuatro predicciones son correctas.
+- [ ] Migrar las capas existentes a las primitivas. Deliberadamente aparte: el
+      motor debía estar verificado antes de reescribir sobre él nada que ya
+      funciona y está comprobado contra PyTorch.
+- [ ] Softmax, LayerNorm, gather y convolución como primitivas.
+- [ ] Broadcasting. Hoy las operaciones elemento a elemento exigen formas
+      idénticas, para no complicar el backward antes de tener lo básico firme.
 
-Reduce la superficie de error: hoy cada capa implementa su backward a mano, que
-es exactamente donde aparecieron los dos defectos P0.
+Reduce la superficie de error: cada capa implementaba su backward a mano, que es
+exactamente donde aparecieron los dos defectos P0.
 
 ## Fase 06 — Serialización ✅
 

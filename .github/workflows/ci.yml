@@ -61,7 +61,7 @@ jobs:
         run: |
           bin_dir="build"
           failed=0
-          for demo in demo_adaline demo_mlp demo_cnn demo_lstm demo_autoencoder \
+          for demo in demo_adaline demo_autograd demo_mlp demo_cnn demo_lstm demo_autoencoder \
                       demo_diffusion demo_gan demo_gnn demo_ocr demo_resnet \
                       demo_sequential ocr_cli; do
             if ! "./${bin_dir}/${demo}" > /dev/null 2>&1; then

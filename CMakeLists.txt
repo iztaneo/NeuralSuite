@@ -70,6 +70,7 @@ endif()
 set(NEURALSUITE_EXECUTABLES
     test_suite
     demo_adaline
+    demo_autograd
     demo_mlp
     demo_cnn
     demo_lstm
