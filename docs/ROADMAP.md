@@ -11,7 +11,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
-**45 puntos cerrados, 7 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
+**45 puntos cerrados, 10 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
