@@ -66,8 +66,16 @@ class Pool {
     return pool;
   }
 
-  /** @brief Ejecuta `fn(worker_index)` en N hilos y espera a que terminen. */
+  /** @brief Cuantos indices de trabajo admite: los hilos propios mas el llamante. */
+  [[nodiscard]] int Capacity() const { return static_cast<int>(threads_.size()) + 1; }
+
+  /** @brief Ejecuta `fn(worker_index)` en N indices y espera a que terminen. */
   void Run(int workers, const std::function<void(int)>& fn) {
+    // El pool se crea una sola vez, con el numero de hilos que hubiera entonces.
+    // Si despues alguien sube ThreadCount(), pedir mas indices de los que hay
+    // dejaria porciones del bucle sin ejecutar y el resultado saldria mal sin
+    // ningun aviso. Se recorta aqui para que eso no pueda ocurrir.
+    workers = std::min(workers, Capacity());
     {
       std::unique_lock<std::mutex> lock(mutex_);
       task_ = &fn;
@@ -164,8 +172,15 @@ inline void ParallelFor(int count, int min_per_thread,
     return;
   }
 
+  detail::Pool& pool = detail::Pool::Instance();
+  workers = std::min(workers, pool.Capacity());
+  if (workers <= 1) {
+    fn(0, count);
+    return;
+  }
+
   const int chunk = (count + workers - 1) / workers;
-  detail::Pool::Instance().Run(workers, [&fn, chunk, count](int index) {
+  pool.Run(workers, [&fn, chunk, count](int index) {
     const int begin = index * chunk;
     const int end = std::min(count, begin + chunk);
     if (begin < end) fn(begin, end);

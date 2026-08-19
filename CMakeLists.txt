@@ -81,6 +81,11 @@ foreach(exe ${NEURALSUITE_EXECUTABLES})
   target_link_libraries(${exe} PRIVATE neuralsuite_static)
 endforeach()
 
+# Los benchmarks responden "cuanto tarda", no "es correcto": se compilan como
+# ejecutable aparte y no forman parte de ctest, cuyo criterio es binario.
+add_executable(benchmark benchmarks/benchmark.cpp)
+target_link_libraries(benchmark PRIVATE neuralsuite_static)
+
 # Binarios de las pruebas de paridad contra PyTorch (ver tools/parity/README.md).
 foreach(exe parity_gpt parity_lstm)
   add_executable(${exe} tools/parity/${exe}.cpp)

@@ -11,7 +11,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
-**51 puntos cerrados, 9 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
+**52 puntos cerrados, 8 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
@@ -26,7 +26,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | --------------------------------- | ------------------------------------------------------------- |
 | Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
 | Robustez de `Tensor`              | ✅ formas validadas, sin estados inválidos, vistas sin copia    |
-| Testing                           | ✅ 23 pruebas, validadas por mutación, con código de salida     |
+| Testing                           | ✅ 24 pruebas, validadas por mutación, con código de salida     |
 | Portabilidad                      | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release    |
 | Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
@@ -259,7 +259,14 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       numérica, demos, entrenamiento de extremo a extremo, paridad con PyTorch y
       sanitizers.
 - [x] Comparación contra la implementación de referencia en PyTorch.
-- [ ] Benchmarks separados de las pruebas.
+- [x] **Benchmarks separados** en `benchmarks/benchmark.cpp`. Responden "cuánto
+      tarda", que es otra pregunta y con otro criterio: no hay nada que pase o
+      falle, solo números que comparar entre versiones. Existen porque las
+      mediciones que guiaron la paralelización se hicieron a mano y no quedaban
+      en el repositorio, de modo que nadie podía reproducirlas ni notar una
+      regresión. Miden `MatMul` por forma, el escalado con hilos y el paso de
+      entrenamiento en tokens/s, y comprueban de paso que el reparto no altera
+      el resultado.
 - [x] `SoftmaxForward` opera sobre el último eje de cualquier rango. Antes
       exigía rango 2 y leía `Shape()[1]` directamente, de modo que un tensor de
       rango 3 se normalizaba sobre un eje que no le correspondía.

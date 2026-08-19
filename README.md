@@ -78,8 +78,10 @@ de reescribir sobre él lo que ya funciona.
 y reparte sus filas entre hilos. Cada hilo escribe filas que nadie más toca, así
 que no hay reducción y **el resultado es idéntico bit a bit** al de un solo
 hilo: la comparación contra PyTorch devuelve exactamente los mismos números.
-Sobre un Apple M5 de cuatro núcleos, un paso de entrenamiento pasa de 119 ms a
-unos 52 ms.
+Sobre un Apple M5, un paso de entrenamiento pasa de 119 ms a unos 52 ms, y
+`MatMul` escala 4.6x con los hilos disponibles. Las cifras salen de
+`./benchmark`, que además comprueba en cada ejecución que el reparto no altera
+el resultado.
 
 Cada push ejecuta en [integración continua](.github/workflows/ci.yml) la
 compilación en Linux (GCC y Clang), macOS y Windows, en modo `Debug` y

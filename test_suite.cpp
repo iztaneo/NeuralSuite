@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 #include "autograd.h"
+#include "parallel.h"
 #include "neuralsuite.h"
 
 using namespace neuralsuite;
@@ -1360,6 +1361,52 @@ void TestAutogradComposites() {
   std::cout << "PASADO ✅ (peor error rel: " << worst << ")\n" << std::flush;
 }
 
+/**
+ * @brief El reparto entre hilos no altera el resultado.
+ *
+ * Es la propiedad que hace segura la paralelizacion: cada hilo escribe filas
+ * que ningun otro toca, de modo que no hay reduccion que cambie el orden de las
+ * sumas en punto flotante y el resultado es identico bit a bit.
+ */
+void TestParallelDeterminism() {
+  std::cout << "🧪 [Test 24] El paralelismo no cambia el resultado... " << std::flush;
+
+  Tensor A({256, 128}), B({128, 256});
+  A.RandomNormal(0.0f, 1.0f);
+  B.RandomNormal(0.0f, 1.0f);
+
+  const int original = parallel::ThreadCount();
+
+  parallel::ThreadCount() = 1;
+  Tensor serial;
+  MatMul(A, B, serial);
+
+  parallel::ThreadCount() = original;
+  Tensor threaded;
+  MatMul(A, B, threaded);
+
+  bool identical = true;
+  for (size_t i = 0; i < serial.TotalSize(); ++i) {
+    if (serial[i] != threaded[i]) identical = false;
+  }
+  Check(identical, "el resultado con varios hilos difiere del de uno solo");
+
+  // Pedir mas hilos de los que tiene el pool no debe dejar porciones del bucle
+  // sin ejecutar: el pool se crea una vez y no puede crecer despues.
+  parallel::ThreadCount() = original * 64 + 128;
+  Tensor oversubscribed;
+  MatMul(A, B, oversubscribed);
+  parallel::ThreadCount() = original;
+
+  bool complete = true;
+  for (size_t i = 0; i < serial.TotalSize(); ++i) {
+    if (serial[i] != oversubscribed[i]) complete = false;
+  }
+  Check(complete, "pedir mas hilos de los disponibles dejo parte del calculo sin hacer");
+
+  std::cout << "PASADO ✅\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -1388,6 +1435,7 @@ int main() {
   TestSeedAndParamGroups();
   TestTokenizerUnknownAndBytes();
   TestAutogradComposites();
+  TestParallelDeterminism();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
