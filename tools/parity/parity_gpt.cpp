@@ -20,101 +20,15 @@
 #include <string>
 #include <vector>
 #include "neuralsuite.h"
+#include "nsparity.h"
 
 using namespace neuralsuite;
-
-namespace {
-
-struct Array {
-  std::vector<int> shape;
-  std::vector<float> data;
-  size_t Count() const {
-    size_t n = 1;
-    for (int d : shape) n *= static_cast<size_t>(d);
-    return shape.empty() ? 0 : n;
-  }
-};
-
-using Bundle = std::map<std::string, Array>;
-
-template <typename T>
-T ReadPod(std::istream& in) {
-  T value{};
-  in.read(reinterpret_cast<char*>(&value), sizeof(T));
-  return value;
-}
-
-Bundle ReadBundle(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) throw std::runtime_error("No se pudo abrir " + path);
-
-  char magic[8];
-  in.read(magic, 8);
-  if (std::memcmp(magic, "NSPARITY", 8) != 0) {
-    throw std::runtime_error(path + ": no es un archivo NSPARITY");
-  }
-  const int32_t version = ReadPod<int32_t>(in);
-  if (version != 1) throw std::runtime_error(path + ": version no soportada");
-  const int32_t count = ReadPod<int32_t>(in);
-
-  Bundle bundle;
-  for (int32_t i = 0; i < count; ++i) {
-    const int32_t name_len = ReadPod<int32_t>(in);
-    std::string name(static_cast<size_t>(name_len), '\0');
-    in.read(name.data(), name_len);
-
-    Array array;
-    const int32_t ndim = ReadPod<int32_t>(in);
-    for (int32_t d = 0; d < ndim; ++d) array.shape.push_back(ReadPod<int32_t>(in));
-
-    array.data.resize(array.Count());
-    in.read(reinterpret_cast<char*>(array.data.data()),
-            static_cast<std::streamsize>(array.data.size() * sizeof(float)));
-    bundle.emplace(std::move(name), std::move(array));
-  }
-  if (!in) throw std::runtime_error(path + ": archivo truncado");
-  return bundle;
-}
-
-void WriteBundle(const std::string& path, const Bundle& bundle) {
-  std::ofstream out(path, std::ios::binary);
-  if (!out) throw std::runtime_error("No se pudo escribir " + path);
-
-  out.write("NSPARITY", 8);
-  const int32_t version = 1;
-  const int32_t count = static_cast<int32_t>(bundle.size());
-  out.write(reinterpret_cast<const char*>(&version), sizeof(version));
-  out.write(reinterpret_cast<const char*>(&count), sizeof(count));
-
-  for (const auto& [name, array] : bundle) {
-    const int32_t name_len = static_cast<int32_t>(name.size());
-    out.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
-    out.write(name.data(), name_len);
-
-    const int32_t ndim = static_cast<int32_t>(array.shape.size());
-    out.write(reinterpret_cast<const char*>(&ndim), sizeof(ndim));
-    for (int d : array.shape) {
-      const int32_t dim = d;
-      out.write(reinterpret_cast<const char*>(&dim), sizeof(dim));
-    }
-    out.write(reinterpret_cast<const char*>(array.data.data()),
-              static_cast<std::streamsize>(array.data.size() * sizeof(float)));
-  }
-}
-
-const Array& Require(const Bundle& bundle, const std::string& name) {
-  auto it = bundle.find(name);
-  if (it == bundle.end()) throw std::runtime_error("Falta el tensor '" + name + "'");
-  return it->second;
-}
-
-std::string Key(const char* prefix, size_t i) {
-  char buf[32];
-  std::snprintf(buf, sizeof(buf), "%s%03zu", prefix, i);
-  return buf;
-}
-
-}  // namespace
+using nsparity::Array;
+using nsparity::Key;
+using nsparity::Bundle;
+using nsparity::ReadBundle;
+using nsparity::Require;
+using nsparity::WriteBundle;
 
 int main(int argc, char** argv) {
   std::string in_path = "/tmp/gpt_ref.nsp";

@@ -2,12 +2,17 @@
 // Licensed under the Apache License, Version 2.0.
 
 /**
- * @file parity_lstm.cpp
- * @brief Reproduce en C++ el forward y el backward de un nn.LSTM de PyTorch.
+ * @file parity_bilstm.cpp
+ * @brief Reproduce en C++ un nn.LSTM(bidirectional=True) de PyTorch.
  *
- * Carga el archivo NSPARITY que escribe tools/parity/export_lstm.py, copia esos
- * pesos en la capa LSTM, repite el calculo sobre la misma entrada y vuelca sus
- * resultados para que tools/parity/compare_lstm.py los contraste.
+ * Carga el archivo NSPARITY que escribe tools/parity/export_bilstm.py, copia
+ * esos pesos en la capa BiLSTM, repite el calculo sobre la misma entrada y
+ * vuelca sus resultados para que tools/parity/compare_bilstm.py los contraste.
+ *
+ * Es la comprobacion que ninguna prueba interna puede dar: el gradient check
+ * confirma que el backward deriva el forward escrito, y la prueba de
+ * direccionalidad confirma de que depende cada salida, pero solo PyTorch dice
+ * si los numeros son los que deberian ser.
  */
 
 #include <cstdint>
@@ -29,8 +34,8 @@ using nsparity::Require;
 using nsparity::WriteBundle;
 
 int main(int argc, char** argv) {
-  std::string in_path = "/tmp/lstm_ref.nsp";
-  std::string out_path = "/tmp/lstm_cpp.nsp";
+  std::string in_path = "/tmp/bilstm_ref.nsp";
+  std::string out_path = "/tmp/bilstm_cpp.nsp";
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--in" && i + 1 < argc) in_path = argv[++i];
@@ -45,10 +50,12 @@ int main(int argc, char** argv) {
     const int input_size = static_cast<int>(meta.data[2]);
     const int hidden = static_cast<int>(meta.data[3]);
 
-    LSTM lstm(input_size, hidden);
-    auto params = lstm.GetParameters();
-    auto grads = lstm.GetGradients();
+    BiLSTM bilstm(input_size, hidden);
+    auto params = bilstm.GetParameters();
+    auto grads = bilstm.GetGradients();
 
+    // El exportador escribe los parametros en el orden de registro de la capa:
+    // primero los cuatro del sentido directo, luego los cuatro del inverso.
     for (size_t i = 0; i < params.size(); ++i) {
       const Array& src = Require(ref, Key("param", i));
       if (src.Count() != params[i]->TotalSize()) {
@@ -65,7 +72,7 @@ int main(int argc, char** argv) {
     Tensor x({seq, batch, input_size});
     std::memcpy(x.Data(), x_ref.data.data(), x_ref.data.size() * sizeof(float));
 
-    Tensor out_t = lstm.Forward(x);
+    Tensor out_t = bilstm.Forward(x);
 
     double loss = 0.0;
     for (size_t i = 0; i < out_t.TotalSize(); ++i) {
@@ -73,15 +80,15 @@ int main(int argc, char** argv) {
     }
 
     // dL/dh = w, porque la perdida es la suma ponderada de las salidas.
-    Tensor dout({seq, batch, hidden});
+    Tensor dout({seq, batch, 2 * hidden});
     std::memcpy(dout.Data(), w_ref.data.data(), w_ref.data.size() * sizeof(float));
-    Tensor dx = lstm.Backward(dout);
+    Tensor dx = bilstm.Backward(dout);
 
     Bundle bundle;
     Array loss_a; loss_a.shape = {1}; loss_a.data = {static_cast<float>(loss)};
     bundle["cpp_loss"] = loss_a;
 
-    Array out_a; out_a.shape = {seq, batch, hidden};
+    Array out_a; out_a.shape = {seq, batch, 2 * hidden};
     out_a.data.assign(out_t.Data(), out_t.Data() + out_t.TotalSize());
     bundle["cpp_out"] = out_a;
 
@@ -99,7 +106,7 @@ int main(int argc, char** argv) {
 
     WriteBundle(out_path, bundle);
 
-    std::cout << "Pesos de nn.LSTM cargados en la capa LSTM de C++.\n";
+    std::cout << "Pesos de nn.LSTM(bidirectional=True) cargados en BiLSTM de C++.\n";
     std::cout << "  loss C++ : " << loss << "\n";
     std::cout << "  escrito  : " << out_path << "\n";
     return 0;

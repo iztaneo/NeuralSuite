@@ -2,15 +2,17 @@ CXX ?= g++
 CXXFLAGS ?= -O3 -std=c++17 -Wall -fPIC -march=native -ffast-math -Iinclude -Wl,-rpath,'$$ORIGIN'
 
 
-# Detección de Sistema Operativo
+# El paralelismo lo aporta include/parallel.h con std::thread, asi que aqui solo
+# hace falta -pthread. Antes esta seccion anadia -fopenmp, y en macOS la linea
+# terminaba en `2>/dev/null || true`, que make pasaba al compilador como si
+# fueran ficheros: la compilacion no producia ningun objeto y `make` fallaba.
+CXXFLAGS += -pthread
+
 UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    CXXFLAGS += -fopenmp
-    LIB_EXT := .so
-endif
 ifeq ($(UNAME_S),Darwin)
-    CXXFLAGS += -Xpreprocessor -fopenmp 2>/dev/null || true
     LIB_EXT := .dylib
+else
+    LIB_EXT := .so
 endif
 
 SRCS = src/tensor.cpp src/tokenizer.cpp

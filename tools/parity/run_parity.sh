@@ -68,6 +68,7 @@ run_case() {
 
 run_case gpt
 run_case lstm
+run_case bilstm
 
 echo
 echo "### Sonda de precision (GPT) ###"

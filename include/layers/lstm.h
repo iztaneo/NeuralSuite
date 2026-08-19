@@ -10,6 +10,7 @@
 #define NEURAL_SUITE_INCLUDE_LAYERS_LSTM_H_
 
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -267,6 +268,127 @@ class LSTM : public Layer {
   Tensor c_cache_;
   Tensor tanh_c_cache_;
   Tensor h_cache_;
+};
+
+/**
+ * @class BiLSTM
+ * @brief LSTM bidireccional: dos celdas independientes, una por sentido.
+ *
+ * La celda directa recorre la secuencia de `0` a `T-1` y la inversa de `T-1` a
+ * `0`. La salida de cada paso es la concatenacion de ambos estados ocultos, de
+ * modo que la forma pasa de `[T, B, H]` a `[T, B, 2H]`. Asi cada posicion ve
+ * tanto lo que la precede como lo que la sigue, que es lo que necesita el OCR:
+ * el trazo de una letra se interpreta mejor sabiendo con que continua.
+ *
+ * No reimplementa la recurrencia. Invierte el eje temporal de la entrada, se lo
+ * pasa a una segunda `LSTM` ya verificada contra PyTorch y vuelve a invertir su
+ * salida. La alternativa —escribir un bucle que recorra hacia atras— duplicaria
+ * el BPTT, que es justo la parte donde es facil equivocarse.
+ *
+ * Corresponde a `nn.LSTM(..., bidirectional=True)` de PyTorch con una sola capa:
+ * los parametros de la celda inversa son los que alli llevan el sufijo
+ * `_reverse`, y la concatenacion de la salida sigue el mismo orden.
+ */
+class BiLSTM : public Layer {
+ public:
+  BiLSTM(int in_sz, int hid_sz)
+      : input_size_(in_sz), hidden_size_(hid_sz), forward_(in_sz, hid_sz), reverse_(in_sz, hid_sz) {
+    Register(&forward_, "forward");
+    Register(&reverse_, "reverse");
+  }
+
+  /** @brief `[T, B, input_size]` -> `[T, B, 2 * hidden_size]`. */
+  Tensor Forward(const Tensor& input) override {
+    if (input.Shape().size() != 3) {
+      throw std::invalid_argument("BiLSTM: la entrada debe ser [seq_len, batch, input_size].");
+    }
+    if (input.Shape()[2] != input_size_) {
+      throw std::invalid_argument(
+          "BiLSTM: la ultima dimension de la entrada es " + std::to_string(input.Shape()[2]) +
+          " y se esperaba input_size = " + std::to_string(input_size_) + ".");
+    }
+
+    seq_len_ = input.Shape()[0];
+    batch_size_ = input.Shape()[1];
+    const int H = hidden_size_;
+
+    const Tensor h_fwd = forward_.Forward(input);
+    const Tensor h_rev = ReverseTime(reverse_.Forward(ReverseTime(input)));
+
+    Tensor out({seq_len_, batch_size_, 2 * H});
+    for (int t = 0; t < seq_len_; ++t) {
+      for (int b = 0; b < batch_size_; ++b) {
+        const size_t src = static_cast<size_t>(t * batch_size_ + b) * H;
+        const size_t dst = static_cast<size_t>(t * batch_size_ + b) * 2 * H;
+        for (int k = 0; k < H; ++k) {
+          out[dst + k] = h_fwd[src + k];
+          out[dst + H + k] = h_rev[src + k];
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * @brief `[T, B, 2H]` -> `[T, B, input_size]`.
+   *
+   * Cada mitad del gradiente vuelve por su celda. La entrada alimenta a las dos,
+   * asi que las dos contribuciones se suman: es el mismo caso de un tensor que
+   * se bifurca hacia dos consumidores.
+   */
+  Tensor Backward(const Tensor& dout) override {
+    const int H = hidden_size_;
+    if (dout.TotalSize() != static_cast<size_t>(seq_len_) * batch_size_ * 2 * H) {
+      throw std::invalid_argument("BiLSTM: dout no coincide con la forma de la salida.");
+    }
+
+    Tensor dh_fwd({seq_len_, batch_size_, H});
+    Tensor dh_rev({seq_len_, batch_size_, H});
+    for (int t = 0; t < seq_len_; ++t) {
+      for (int b = 0; b < batch_size_; ++b) {
+        const size_t src = static_cast<size_t>(t * batch_size_ + b) * 2 * H;
+        const size_t dst = static_cast<size_t>(t * batch_size_ + b) * H;
+        for (int k = 0; k < H; ++k) {
+          dh_fwd[dst + k] = dout[src + k];
+          dh_rev[dst + k] = dout[src + H + k];
+        }
+      }
+    }
+
+    const Tensor dx_fwd = forward_.Backward(dh_fwd);
+    // La celda inversa vio la secuencia al reves: su gradiente entra invertido y
+    // su resultado sale en ese mismo orden, de modo que hay que devolverlo.
+    const Tensor dx_rev = ReverseTime(reverse_.Backward(ReverseTime(dh_rev)));
+
+    Tensor dx({seq_len_, batch_size_, input_size_});
+    for (size_t i = 0; i < dx.TotalSize(); ++i) dx[i] = dx_fwd[i] + dx_rev[i];
+    return dx;
+  }
+
+  [[nodiscard]] int OutputSize() const { return 2 * hidden_size_; }
+
+ private:
+  /** @brief Invierte el eje temporal de un `[T, B, C]` dejando intacto el resto. */
+  static Tensor ReverseTime(const Tensor& x) {
+    const int T = x.Shape()[0];
+    const int B = x.Shape()[1];
+    const int C = x.Shape()[2];
+    Tensor out({T, B, C});
+    for (int t = 0; t < T; ++t) {
+      const size_t src = static_cast<size_t>(t * B) * C;
+      const size_t dst = static_cast<size_t>((T - 1 - t) * B) * C;
+      std::memcpy(out.Data() + dst, x.Data() + src, static_cast<size_t>(B) * C * sizeof(float));
+    }
+    return out;
+  }
+
+  int input_size_;
+  int hidden_size_;
+  int seq_len_ = 0;
+  int batch_size_ = 0;
+
+  LSTM forward_;
+  LSTM reverse_;
 };
 
 }  // namespace neuralsuite

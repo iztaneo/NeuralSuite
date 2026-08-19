@@ -11,15 +11,15 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Lo que falta
 
-Ocho puntos, y solo uno de ellos es algo que hoy esté **mal**; el resto son
-mejoras sobre código ya verificado. Esa distinción es la que debería ordenar el
-trabajo, más que el número de fase.
+Ocho frentes, y solo uno de ellos es algo que hoy esté **mal** —el OCR, ya en
+curso—; el resto son mejoras sobre código ya verificado. Esa distinción es la
+que ordena el trabajo, más que el número de fase.
 
 ### Incorrecto hoy
 
 | | Fase | Qué pasa |
 | --- | --- | --- |
-| **OCR** | aparte | `CRNNModel` no decodifica imágenes: no hay lector de PNG/JPG, y su arquitectura (Conv + Linear) no corresponde a la de referencia en PyTorch, que usa BiLSTM. La demo declara su alcance, así que no engaña, pero tampoco hace OCR. |
+| **OCR** | aparte | En curso. `CRNNModel` no decodifica imágenes y su arquitectura (Conv + Linear) no corresponde a la de referencia, que usa BiLSTM. La pieza que faltaba —la capa `BiLSTM`— ya está y verificada contra PyTorch; quedan la arquitectura y el lector de imagen. Ver [Pendiente aparte — OCR](#pendiente-aparte--ocr-). |
 
 ### Mejoras sobre lo verificado
 
@@ -60,7 +60,7 @@ trabajo, más que el número de fase.
 | 02 Tensor Core             | ✅               | 08 Tokenizador    | ✅ parcial   |
 | 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ✅ parcial   |
 | 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅           |
-| 05 Autograd                | ✅ parcial       | OCR (aparte)      | ⬜           |
+| 05 Autograd                | ✅ parcial       | OCR (aparte)      | 🔄 en curso  |
 
 El recuento sale del propio documento, no de un número escrito a mano —que ya
 divergió tres veces—:
@@ -378,10 +378,29 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 
 ## Pendiente aparte — OCR ⬜
 
-- [ ] `CRNNModel` no decodifica imágenes: no hay lector de PNG/JPG y la
-      arquitectura (Conv + Linear) no corresponde a la de referencia en PyTorch,
-      que usa un BiLSTM. Hasta entonces la demo declara explícitamente que corre
-      sobre datos sintéticos.
+El único punto del plan donde el repositorio anuncia algo que no hace: `README`,
+`demo_ocr` y `ocr_cli` hablan de OCR, pero `CRNNModel` no lee imágenes y su
+arquitectura no es la que declara. La referencia es
+`LLMRasec/src/ocr.py`: `Conv×3 → BiLSTM → Linear`.
+
+- [x] **`BiLSTM`.** Dos celdas independientes, una por sentido, con la salida
+      concatenada `[T, B, 2H]`. No reimplementa la recurrencia: invierte el eje
+      temporal y reutiliza la `LSTM` ya verificada, porque duplicar el BPTT es
+      justo donde es fácil equivocarse. Verificada por tres vías distintas —
+      gradient check, una prueba de direccionalidad que mide *de qué depende*
+      cada salida, y paridad contra `nn.LSTM(bidirectional=True)`, que sale
+      dentro de 5.3e-06.
+- [ ] **Arquitectura real.** `1→16→32→64` con pools `2,2` / `2,2` / `8,1`,
+      luego `BiLSTM(64, 64)` y `Linear(128, 63)`. Hoy es Conv + Linear.
+- [ ] **Paridad del CRNN completo** contra `LLMRasec/src/ocr.py`, como
+      `gpt`, `lstm` y `bilstm`. Ejercita además el camino convolucional, que
+      hasta ahora solo tiene gradient check.
+- [ ] **Lector de imagen.** PGM primero: cabecera trivial y sin compresión,
+      suficiente para la paridad y para la demo. PNG necesita *inflate* de
+      zlib, y eso es un añadido con entidad propia.
+
+Hasta que estén los cuatro, la demo declara explícitamente que corre sobre
+datos sintéticos.
 
 ---
 
@@ -397,6 +416,7 @@ detectó defectos que la anterior no podía ver.
 | Mutación de las pruebas    | Que la prueba de `GraphConv` no comprobaba lo que decía            |
 | Prueba de ida y vuelta     | Que el número mágico entraba en el checksum al escribir y no al leer |
 | Paridad contra PyTorch     | Detecta errores de semántica que el gradient check no puede ver    |
+| Pruebas de dependencia     | De qué entradas depende cada salida: un `BiLSTM` que no mirara hacia atrás sería derivable y consistente consigo mismo |
 | Integración continua       | Que Windows nunca compiló; dos rutas que solo existían en una máquina |
 
 El gradient checking compara el código consigo mismo: confirma que el

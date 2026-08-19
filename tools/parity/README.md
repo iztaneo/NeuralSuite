@@ -49,6 +49,7 @@ comparación queda fuera de tolerancia.
 | ------ | --------------------------------------------------------------------- |
 | `gpt`  | Pérdida, logits y los 28 gradientes de parámetros del `GPTModel`       |
 | `lstm` | Pérdida, secuencia de salida, `dx` y los 4 gradientes frente a `nn.LSTM` |
+| `bilstm` | Lo mismo con `bidirectional=True`: 8 gradientes, y cada mitad de la salida por separado |
 
 ## Diferencias que se controlan
 
@@ -66,6 +67,11 @@ cálculo bajo prueba:
 - **LSTM.** Aquí no hace falta convertir nada: el orden de puertas (`i, f, g,
   o`), la disposición de los pesos y el layout `[seq, batch, input]` ya
   coinciden con los de `nn.LSTM`.
+- **BiLSTM.** Tampoco. Los parámetros del sentido inverso son los que PyTorch
+  llama `*_l0_reverse`, y la salida concatena directa e inversa en ese orden en
+  ambas implementaciones. Las dos mitades se comparan además por separado: si
+  se hubieran intercambiado al concatenar, el error agregado podría quedar
+  disimulado por el de la otra mitad.
 
 ## Sobre la tolerancia
 

@@ -1407,6 +1407,145 @@ void TestParallelDeterminism() {
   std::cout << "PASADO ✅\n" << std::flush;
 }
 
+/**
+ * @brief BiLSTM: que la mitad inversa mire de verdad hacia el futuro.
+ *
+ * Una comprobación de gradiente no distinguiría un BiLSTM correcto de dos
+ * pasadas hacia delante concatenadas: ambas serían derivables y consistentes
+ * consigo mismas. Lo que define a la capa es de qué depende cada salida, así
+ * que eso es lo que se mide aquí, perturbando la entrada en un extremo y
+ * viendo qué se mueve en el otro.
+ */
+void TestBiLstmDirectionality() {
+  std::cout << "🧪 [Test 25] El BiLSTM mira en los dos sentidos... " << std::flush;
+
+  const int T = 5, B = 2, IN = 3, H = 4;
+  ManualSeed(1234);
+  BiLSTM bi(IN, H);
+
+  Tensor x({T, B, IN});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.4f * std::sin(0.9f * static_cast<float>(i)) + 0.2f;
+  }
+  const Tensor base = bi.Forward(x);
+  Check(base.Shape() == std::vector<int>({T, B, 2 * H}),
+        "la salida del BiLSTM no es [T, B, 2H]");
+
+  // Índice del canal c del paso t, lote 0. Los primeros H son el sentido
+  // directo; los H siguientes, el inverso.
+  auto at = [&](const Tensor& y, int t, int c) {
+    return y[static_cast<size_t>(t * B) * 2 * H + c];
+  };
+  auto changed = [](float a, float b) { return std::abs(a - b) > 1e-6f; };
+
+  // 1. Tocar el último paso no puede alterar el sentido directo en el primero,
+  //    pero sí debe alterar el inverso: es justo lo que una LSTM normal no ve.
+  {
+    Tensor xp = x;
+    for (int j = 0; j < IN; ++j) xp[static_cast<size_t>((T - 1) * B) * IN + j] += 0.5f;
+    const Tensor y = bi.Forward(xp);
+
+    bool fwd_intact = true, rev_moved = false;
+    for (int c = 0; c < H; ++c) {
+      if (changed(at(y, 0, c), at(base, 0, c))) fwd_intact = false;
+      if (changed(at(y, 0, H + c), at(base, 0, H + c))) rev_moved = true;
+    }
+    Check(fwd_intact, "el sentido directo del BiLSTM depende de pasos futuros");
+    Check(rev_moved, "el sentido inverso del BiLSTM no depende del futuro: no es bidireccional");
+  }
+
+  // 2. La simétrica. Descarta además que se haya olvidado devolver la salida
+  //    inversa a su orden temporal: sin esa segunda inversión, la última
+  //    posición del sentido inverso habría visto la secuencia entera.
+  {
+    Tensor xp = x;
+    for (int j = 0; j < IN; ++j) xp[j] += 0.5f;
+    const Tensor y = bi.Forward(xp);
+
+    bool rev_intact = true, fwd_moved = false;
+    for (int c = 0; c < H; ++c) {
+      if (changed(at(y, T - 1, H + c), at(base, T - 1, H + c))) rev_intact = false;
+      if (changed(at(y, T - 1, c), at(base, T - 1, c))) fwd_moved = true;
+    }
+    Check(rev_intact, "el sentido inverso del BiLSTM no quedo realineado en el tiempo");
+    Check(fwd_moved, "el sentido directo del BiLSTM no depende del pasado");
+  }
+
+  // 3. Las dos celdas son independientes: si compartieran pesos, ambas mitades
+  //    coincidirian en la unica posicion donde ven lo mismo.
+  Check(bi.GetParameters().size() == 8,
+        "el BiLSTM deberia exponer 8 tensores de parametros, expone " +
+            std::to_string(bi.GetParameters().size()));
+
+  std::cout << "PASADO ✅\n" << std::flush;
+}
+
+/**
+ * @brief Gradientes del BiLSTM, incluida la suma de las dos ramas en `dx`.
+ *
+ * La entrada alimenta a las dos celdas, así que su gradiente es la suma de dos
+ * contribuciones. Quedarse con una sola daría un resultado que aún parece
+ * razonable —la mitad del valor correcto—, y solo las diferencias finitas lo
+ * delatan.
+ */
+void TestGradientCheckBiLstm() {
+  std::cout << "🧪 [Test 26] Gradientes del BiLSTM... " << std::flush;
+
+  const int T = 4, B = 2, IN = 3, H = 4;
+  ManualSeed(99);
+  BiLSTM bi(IN, H);
+
+  Tensor x({T, B, IN});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.3f * std::sin(0.7f * static_cast<float>(i)) + 0.1f;
+  }
+  Tensor w({T, B, 2 * H});
+  for (size_t i = 0; i < w.TotalSize(); ++i) {
+    w[i] = 0.5f + 0.5f * std::cos(1.3f * static_cast<float>(i));
+  }
+  auto loss_of = [&]() {
+    Tensor y = bi.Forward(x);
+    double s = 0.0;
+    for (size_t i = 0; i < y.TotalSize(); ++i) s += static_cast<double>(y[i]) * w[i];
+    return s;
+  };
+
+  loss_of();
+  Tensor dout(w.Shape());
+  for (size_t i = 0; i < w.TotalSize(); ++i) dout[i] = w[i];
+  Tensor dx = bi.Backward(dout);
+  Check(dx.Shape() == x.Shape(), "dx del BiLSTM no tiene la forma de la entrada");
+
+  // Mismo paso que en el LSTM: los gradientes son pequenos y un eps corto los
+  // ahoga en el ruido de float32.
+  int checked = 0, skipped = 0;
+  const double worst_params =
+      MaxGradError(bi.GetParameters(), bi.GetGradients(), loss_of, 5e-2f, 12,
+                   &checked, &skipped);
+  Check(worst_params < 1e-2,
+        "el peor error relativo de los parametros del BiLSTM es " + std::to_string(worst_params));
+
+  const float eps = 5e-2f;
+  double worst_dx = 0.0;
+  int dx_checked = 0;
+  for (size_t i = 0; i < x.TotalSize(); i += 2) {
+    const float orig = x[i];
+    x[i] = orig + eps; const double lp = loss_of();
+    x[i] = orig - eps; const double lm = loss_of();
+    x[i] = orig;
+
+    const double numeric = (lp - lm) / (2.0 * eps);
+    if (std::max(std::abs(numeric), std::abs(static_cast<double>(dx[i]))) < kNegligibleGrad) continue;
+    worst_dx = std::max(worst_dx, RelativeError(numeric, dx[i]));
+    ++dx_checked;
+  }
+  Check(worst_dx < 1e-2, "el peor error relativo de dx del BiLSTM es " + std::to_string(worst_dx));
+
+  std::cout << "PASADO ✅ (" << checked << " params, " << dx_checked
+            << " dx; peor error rel: " << std::max(worst_params, worst_dx) << ")\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -1436,6 +1575,8 @@ int main() {
   TestTokenizerUnknownAndBytes();
   TestAutogradComposites();
   TestParallelDeterminism();
+  TestBiLstmDirectionality();
+  TestGradientCheckBiLstm();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
