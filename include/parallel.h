@@ -16,13 +16,23 @@
  * plataformas y no hace falta ninguna dependencia externa.
  *
  * Cabe preguntarse si renunciar a OpenMP cuesta rendimiento, ya que sus
- * implementaciones llevan anos afinandose. Se midio: instalando libomp aparte y
- * comparando el mismo bucle repartido de las dos formas, sobre un Apple M5, la
- * diferencia queda entre 0.88x y 1.14x segun la forma de la matriz, con media
- * en torno a 1.02x — es decir, dentro del ruido, y con resultados identicos bit
- * a bit en ambos casos. No hay nada que ganar volviendo a OpenMP, y si algo que
- * perder: en macOS habria que instalarlo aparte, y quien no lo hiciera volveria
- * a ejecutar todo en un solo hilo sin ningun aviso.
+ * implementaciones llevan anos afinandose. Se midio en las dos plataformas,
+ * repartiendo el mismo bucle de ambas formas (benchmarks/compare_openmp.cpp):
+ *
+ *   Apple M5, 10 hilos     propio y OpenMP entre 0.88x y 1.14x, media ~1.02x
+ *   Linux CI, 4 vCPU       serie 3.1 GF; propio 1.76x, OpenMP 2.00x
+ *
+ * En macOS estan a la par. En Linux OpenMP saca alrededor de un 12%, no el 2x
+ * que sugerian las primeras cifras: aquellas se tomaron sin medir el caso de un
+ * solo hilo, y comparar dos aceleraciones sin su referencia no dice nada. La
+ * leccion vale mas que el numero.
+ *
+ * Ese 12% no compensa mantener dos rutas: habria que probar cada bucle por
+ * duplicado, el OpenMP 2.0 de MSVC obliga a indices con signo y prohibe `omp
+ * simd`, y dos repartos distintos pueden divergir en cuanto alguna operacion
+ * lleve una reduccion. Sobre todo, OpenMP falla en silencio cuando no esta: el
+ * `pragma` se ignora y todo corre en un hilo sin ningun aviso, que es
+ * exactamente como este proyecto llego a tener macOS sin paralelizar.
  */
 
 #ifndef NEURAL_SUITE_INCLUDE_PARALLEL_H_
