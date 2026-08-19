@@ -111,6 +111,22 @@ jobs:
       - name: Comparar GPT y LSTM contra PyTorch
         run: tools/parity/run_parity.sh "${GITHUB_WORKSPACE}/LLMRasec"
 
+  # Medicion puntual: en Linux OpenMP es libgomp, una implementacion distinta de
+  # la de macOS. Sirve para comprobar que el reparto propio tampoco se queda
+  # corto aqui. No condiciona el build: el proyecto no usa OpenMP.
+  openmp-comparison:
+    name: Reparto propio frente a OpenMP (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilar el comparador con OpenMP
+        run: |
+          g++ -std=c++17 -Iinclude -O2 -DNDEBUG -fopenmp \
+              benchmarks/compare_openmp.cpp src/tensor.cpp src/tokenizer.cpp \
+              -o compare_openmp
+      - name: Medir
+        run: ./compare_openmp
+
   # Los sanitizers detectan accesos invalidos y comportamiento indefinido que
   # las pruebas numericas pueden atravesar sin dar sintoma.
   #
