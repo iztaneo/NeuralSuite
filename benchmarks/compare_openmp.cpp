@@ -17,7 +17,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <thread>
 #include <vector>
+#include <omp.h>
 #include "parallel.h"
 #include "tensor.h"
 using namespace neuralsuite;
@@ -57,6 +59,14 @@ static void run(int M,int K,int N){
          M,K,N, mine, gf/mine, omp, gf/omp, omp/mine, d);
 }
 int main(){
+  printf("hardware_concurrency = %u\n", std::thread::hardware_concurrency());
+  printf("parallel::ThreadCount() = %d\n", parallel::ThreadCount());
+  #pragma omp parallel
+  {
+    #pragma omp single
+    printf("omp_get_num_threads = %d\n", omp_get_num_threads());
+  }
+  printf("\n");
   printf("Reparto propio (std::thread) frente a OpenMP, mismo bucle:\n");
   printf("  ratio > 1 significa que el propio es mas rapido\n\n");
   run(512,128,384);
