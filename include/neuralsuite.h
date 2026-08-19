@@ -22,6 +22,7 @@
 #include "serialization.h"
 #include "artifacts.h"
 #include "gpt.h"
+#include "image.h"
 #include "layer.h"
 #include "losses.h"
 #include "optimizers.h"

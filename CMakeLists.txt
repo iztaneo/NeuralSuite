@@ -92,6 +92,11 @@ foreach(exe parity_gpt parity_lstm parity_bilstm parity_crnn)
   target_link_libraries(${exe} PRIVATE neuralsuite_static)
 endforeach()
 
+# Volcador de pixeles para comparar el decodificador de imagen contra Pillow
+# (ver tools/image/README.md).
+add_executable(imgdump tools/image/imgdump.cpp)
+target_link_libraries(imgdump PRIVATE neuralsuite_static)
+
 # `ctest` ejecuta la suite numerica. Se registran los dos modos de uso que debe
 # soportar test_suite: devolver codigo de salida y no depender del directorio.
 enable_testing()

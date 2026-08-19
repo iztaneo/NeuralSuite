@@ -420,12 +420,20 @@ arquitectura no es la que declara. La referencia es
       orden que no coincide entre las dos. Ejercita de paso el camino
       convolucional de extremo a extremo, que hasta ahora solo tenía gradient
       check — y ya se vio con `GraphConv` que eso puede no comprobar nada.
-- [ ] **Lector de imagen.** PGM primero: cabecera trivial y sin compresión,
-      suficiente para la paridad y para la demo. PNG necesita *inflate* de
-      zlib, y eso es un añadido con entidad propia.
-
-Hasta que estén los cuatro, la demo declara explícitamente que corre sobre
-datos sintéticos.
+- [x] **Lector de imagen.** `include/image/` decodifica PNG, BMP y Netpbm sin
+      ninguna dependencia externa. El PNG obligó a escribir *inflate* completo
+      (RFC 1951 y 1950, con Huffman dinámico y comprobación del Adler-32), y
+      admite profundidades de 1 a 16 bits, los cinco tipos de color, paleta con
+      `tRNS` y entrelazado Adam7. Los 46 archivos del banco se decodifican byte
+      a byte igual que Pillow, incluidos los tres PNG que ya estaban en el
+      repositorio. `ocr_cli --image` ya lee de verdad el archivo que se le pasa.
+- [ ] **Entrenar sobre texto real.** Es lo único que queda para que la
+      transcripción de una foto signifique algo: el camino completo funciona,
+      pero el modelo no tiene pesos ajustados sobre tipografías reales.
+- [ ] **JPEG.** Decisión aparte: necesita Huffman, cuantización, IDCT y
+      submuestreo de croma, y el progresivo es prácticamente otro
+      decodificador. Del orden de mil doscientas líneas frente a las
+      quinientas del PNG.
 
 ---
 

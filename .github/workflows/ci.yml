@@ -101,15 +101,22 @@ jobs:
           python -m venv LLMRasec/venv
           LLMRasec/venv/bin/pip install --upgrade pip
           LLMRasec/venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch
-          LLMRasec/venv/bin/pip install numpy
+          LLMRasec/venv/bin/pip install numpy pillow
 
       - name: Configurar y compilar
         run: |
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel
 
-      - name: Comparar GPT y LSTM contra PyTorch
+      - name: Comparar GPT, LSTM, BiLSTM y CRNN contra PyTorch
         run: tools/parity/run_parity.sh "${GITHUB_WORKSPACE}/LLMRasec"
+
+      # El decodificador de imagen se contrasta contra Pillow, que ya esta
+      # instalado en este entorno. El criterio es mas estricto que el de la
+      # paridad numerica: aqui no hay punto flotante de por medio, asi que la
+      # igualdad tiene que ser byte a byte.
+      - name: Comparar el decodificador de imagen contra Pillow
+        run: tools/image/run_image_parity.sh "${GITHUB_WORKSPACE}/LLMRasec"
 
   # Los sanitizers detectan accesos invalidos y comportamiento indefinido que
   # las pruebas numericas pueden atravesar sin dar sintoma.

@@ -130,6 +130,9 @@ pendiente, está en [`docs/ROADMAP.md`](docs/ROADMAP.md).
 9. **Modelo OCR**: `CRNNModel` (Conv×3 → `BiLSTM` → `Linear`), que lee una línea
    de texto y devuelve una predicción por columna — ver la nota de alcance en la
    sección de demostraciones.
+10. **Decodificación de imagen**: `include/image/` lee PNG (con su propio
+    `inflate`), BMP y Netpbm sin bibliotecas externas — ver
+    [tools/image/README.md](tools/image/README.md).
 
 ---
 
@@ -245,21 +248,22 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 - `./demo_ocr`: Entrena el `CRNNModel` a transcribir líneas sintéticas y
   comprueba, al final, cuántas lee exactamente.
-- `./ocr_cli`: Ejecuta el forward del `CRNNModel` y escribe la salida a un `.txt`.
+- `./ocr_cli --image foto.png`: Decodifica la imagen, la pasa a gris, la
+  reescala a 32 px de alto y ejecuta el `CRNNModel`. Admite PNG, BMP y
+  PBM/PGM/PPM; el formato se detecta por el contenido, no por la extensión.
 
-> **Alcance del OCR.** NeuralSuite **no incluye un decodificador de imagen
-> PNG/JPG propio**, así que `ocr_cli` no lee los píxeles del archivo que se le
-> pasa en `--image`: corre el forward sobre una línea generada por
-> `SynthTextGenerator`. Los glifos de esas líneas son patrones binarios
-> derivados del índice de cada clase, **no una tipografía real**, de modo que
-> nada de esto es reconocimiento de texto del mundo real y su salida no debe
-> interpretarse como una transcripción.
+> **Alcance del OCR.** `ocr_cli --image` sí lee el archivo: `include/image/`
+> decodifica PNG, BMP y PBM/PGM/PPM sin depender de ninguna biblioteca externa,
+> y los 46 archivos del banco de pruebas se decodifican byte a byte igual que
+> Pillow. JPEG todavía no.
 >
-> Lo que sí es real es el problema y la arquitectura: la red recibe la imagen de
-> una línea entera y devuelve la secuencia de caracteres, una predicción por
-> cada cuatro columnas, con la misma estructura que la implementación de
-> referencia en PyTorch. `demo_ocr` transcribe las 4 líneas del lote sin errores
-> tras 120 épocas.
+> Lo que falta es el entrenamiento: el modelo no tiene pesos ajustados sobre
+> tipografías reales, así que la transcripción de una foto no será una lectura
+> del texto. `ocr_cli` lo dice explícitamente cuando corre sin pesos entrenados.
+>
+> `demo_ocr` sí cierra el ciclo completo sobre datos sintéticos —glifos que son
+> patrones binarios derivados del índice de cada clase, no una tipografía— y
+> transcribe las 4 líneas del lote sin errores tras 120 épocas.
 
 ---
 
