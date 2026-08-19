@@ -48,15 +48,24 @@ template<typename Fn> static double med(Fn&& f,int reps){
 }
 
 static void run(int M,int K,int N){
-  Tensor A({M,K}),B({K,N}),C1,C2;
+  Tensor A({M,K}),B({K,N}),C0,C1,C2;
   A.RandomNormal(0,1); B.RandomNormal(0,1);
+  const int nt=parallel::ThreadCount();
+
   MatMul(A,B,C1);                                  // crea el pool al maximo
-  const double mine=med([&]{ MatMul(A,B,C1); },15);
+  const double par=med([&]{ MatMul(A,B,C1); },15);
+
+  // Referencia serie: sin ella no se puede saber si el reparto propio esta
+  // acelerando algo o corriendo en un solo hilo.
+  parallel::ThreadCount()=1;
+  const double ser=med([&]{ MatMul(A,B,C0); },15);
+  parallel::ThreadCount()=nt;
+
   const double omp =med([&]{ MatMulOmp(A,B,C2); },15);
   double d=0; for(size_t i=0;i<C1.TotalSize();++i) d=std::max(d,(double)std::abs(C1[i]-C2[i]));
   const double gf=2.0*M*K*N/1e6;
-  printf("  %4dx%4dx%-4d  propio %7.3f ms (%6.1f GF)   OpenMP %7.3f ms (%6.1f GF)   ratio %.2fx  dif=%.1e\n",
-         M,K,N, mine, gf/mine, omp, gf/omp, omp/mine, d);
+  printf("  %4dx%4dx%-4d  serie %6.1f GF | propio %6.1f GF (x%.2f) | OpenMP %6.1f GF (x%.2f)  dif=%.1e\n",
+         M,K,N, gf/ser, gf/par, ser/par, gf/omp, ser/omp, d);
 }
 int main(){
   printf("hardware_concurrency = %u\n", std::thread::hardware_concurrency());
