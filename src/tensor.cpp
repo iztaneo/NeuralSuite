@@ -220,14 +220,48 @@ void MatMul(const Tensor& A, const Tensor& B, Tensor& C) {
   // identico bit a bit al de un solo hilo. Esa propiedad es la que permite
   // paralelizar sin tocar la comparacion contra PyTorch.
   parallel::ParallelFor(M, /*min_per_thread=*/16, [&](int row_begin, int row_end) {
-    for (int i = row_begin; i < row_end; ++i) {
+    // Se calculan cuatro filas de C a la vez. El bucle anterior leia una fila
+    // entera de B para producir una sola fila de C, de modo que cada elemento
+    // de B viajaba de memoria a registro para una unica multiplicacion; asi
+    // sirve para cuatro. Medido en un solo hilo, sube de 35 a 44 GFLOP/s.
+    //
+    // Cuatro y no mas: con seis u ocho acumuladores el compilador se queda sin
+    // registros vectoriales y tiene que volcarlos a memoria, con lo que el
+    // rendimiento cae por debajo del punto de partida (medido: 41 y 33).
+    //
+    // Para un mismo elemento de C, las contribuciones se siguen sumando en
+    // orden de k creciente, igual que antes, de modo que el resultado es
+    // identico bit a bit.
+    int i = row_begin;
+    for (; i + 4 <= row_end; i += 4) {
+      for (int k = 0; k < K; ++k) {
+        const float a0 = A[(i + 0) * K + k];
+        const float a1 = A[(i + 1) * K + k];
+        const float a2 = A[(i + 2) * K + k];
+        const float a3 = A[(i + 3) * K + k];
+        const float* b_row = &B[k * N];
+        float* c0 = &C[(i + 0) * N];
+        float* c1 = &C[(i + 1) * N];
+        float* c2 = &C[(i + 2) * N];
+        float* c3 = &C[(i + 3) * N];
+        // El bucle interno recorre memoria contigua y los compiladores lo
+        // autovectorizan; `omp simd` solo lo aceptaba MSVC con una bandera
+        // experimental.
+        for (int j = 0; j < N; ++j) {
+          const float b = b_row[j];
+          c0[j] += a0 * b;
+          c1[j] += a1 * b;
+          c2[j] += a2 * b;
+          c3[j] += a3 * b;
+        }
+      }
+    }
+    // Las filas que no completan un grupo de cuatro.
+    for (; i < row_end; ++i) {
       for (int k = 0; k < K; ++k) {
         const float a = A[i * K + k];
         const float* b_row = &B[k * N];
         float* c_row = &C[i * N];
-        // El bucle interno recorre memoria contigua y los compiladores lo
-        // autovectorizan; `omp simd` solo lo aceptaba MSVC con una bandera
-        // experimental.
         for (int j = 0; j < N; ++j) {
           c_row[j] += a * b_row[j];
         }

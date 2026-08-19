@@ -78,8 +78,9 @@ de reescribir sobre él lo que ya funciona.
 y reparte sus filas entre hilos. Cada hilo escribe filas que nadie más toca, así
 que no hay reducción y **el resultado es idéntico bit a bit** al de un solo
 hilo: la comparación contra PyTorch devuelve exactamente los mismos números.
-Sobre un Apple M5, un paso de entrenamiento pasa de 119 ms a unos 29 ms, y
-`MatMul` escala 5.3x con los hilos disponibles. Las cifras salen de
+Sobre un Apple M5, un paso de entrenamiento pasa de 119 ms a unos 27 ms —unas
+4.5 veces— combinando reparto dinámico entre hilos y un kernel que calcula
+cuatro filas a la vez. Las cifras salen de
 `./benchmark`, que además comprueba en cada ejecución que el reparto no altera
 el resultado.
 

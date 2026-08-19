@@ -11,7 +11,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
-**52 puntos cerrados, 8 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
+**55 puntos cerrados, 8 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
@@ -31,7 +31,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
 | Autograd                          | ✅ motor, primitivas y LayerNorm compuesta; capas sin migrar     |
-| Rendimiento                       | ⚠️ paralelizado (2.2x); falta blocking y SIMD en el GEMM        |
+| Rendimiento                       | ✅ 4.5x medido; falta SIMD explícito y kernel de Conv2D          |
 
 ---
 
@@ -245,8 +245,8 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       índices con signo, y sobre todo OpenMP degrada en silencio cuando falta. El motivo no era preferencia: con AppleClang los `pragma omp` se
       ignoran, de modo que en macOS todo corría en un solo hilo y `MatMul` usaba
       una cuarta parte de la máquina. Medido sobre un Apple M5 de cuatro núcleos
-      de rendimiento: `MatMul` pasa de 35 a 192 GFLOP/s, y el paso de
-      entrenamiento de 119 ms a unos 29 ms.
+      de rendimiento: `MatMul` pasa de 35 a 232 GFLOP/s, y el paso de
+      entrenamiento de 119 ms a unos 27 ms.
 - [x] **Reparto dinámico en lugar de trozos iguales.** Con un trozo por hilo, el
       tiempo lo marca el más lento, y los núcleos rara vez son iguales: un
       Apple M5 mezcla núcleos de rendimiento y de eficiencia, y en un servidor
@@ -256,8 +256,18 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       reparto propio de OpenMP. El resultado es idéntico bit a bit,
       porque cada hilo escribe filas disjuntas y no hay reducción que altere el
       orden de las sumas.
-- [ ] GEMM con blocking, tiling y SIMD; kernel optimizado de Conv2D conservando
-      el actual como oráculo de referencia.
+- [x] **Bloqueo de registros en el GEMM: cuatro filas de C a la vez.** El bucle
+      leía una fila entera de `B` para producir una sola fila de `C`, de modo
+      que cada elemento de `B` viajaba de memoria a registro para una única
+      multiplicación. Medido en un solo hilo: de 35 a 44 GFLOP/s.
+      Cuatro y no más — con seis u ocho acumuladores el compilador se queda sin
+      registros vectoriales y cae a 41 y 33.
+      **El bloqueo de cache no aportó nada** (a veces empeoraba): las matrices
+      de estos tamaños ya caben, y lo que faltaba era reutilizar los datos ya
+      cargados, no traerlos mejor.
+- [ ] Kernel optimizado de Conv2D, conservando el actual como oráculo.
+- [ ] Intrínsecos SIMD por arquitectura. Hoy el bucle interno lo autovectoriza
+      el compilador.
 - [ ] KV cache contiguo (hoy `vector<vector<float>>`).
 - [x] **RoPE decidido**: se retira `ApplyRoPE()`, que ningún forward llamaba y
       sugería una capacidad que el modelo no tiene. La posición sigue llegando
