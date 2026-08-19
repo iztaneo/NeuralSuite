@@ -4,7 +4,7 @@
 
 **NeuralSuite** es un framework y suite de aprendizaje profundo escrita totalmente en **C++17 puro desde cero** (sin PyTorch, TensorFlow, BLAS, Eigen ni librerías externas de IA).
 
-Es totalmente **multiplataforma (Linux, macOS y Windows)** y cuenta con soporte para **ejecución paralela multi-hilo en CPU (OpenMP/SIMD)**.
+Es totalmente **multiplataforma (Linux, macOS y Windows)** y paraleliza en CPU con `std::thread`, sin depender de OpenMP.
 
 ---
 
@@ -73,6 +73,13 @@ compuesta de primitivas: su gradiente no lo escribió nadie y coincide con la
 implementación manual. Las capas
 existentes **todavía no están migradas**: el motor debía estar comprobado antes
 de reescribir sobre él lo que ya funciona.
+
+`MatMul` es el 80% del tiempo de un paso de entrenamiento —medido, no supuesto—
+y reparte sus filas entre hilos. Cada hilo escribe filas que nadie más toca, así
+que no hay reducción y **el resultado es idéntico bit a bit** al de un solo
+hilo: la comparación contra PyTorch devuelve exactamente los mismos números.
+Sobre un Apple M5 de cuatro núcleos, un paso de entrenamiento pasa de 119 ms a
+unos 52 ms.
 
 Cada push ejecuta en [integración continua](.github/workflows/ci.yml) la
 compilación en Linux (GCC y Clang), macOS y Windows, en modo `Debug` y
@@ -158,12 +165,13 @@ Opciones disponibles:
 
 | Opción                      | Por defecto | Efecto                                                 |
 | --------------------------- | ----------- | ------------------------------------------------------ |
-| `NEURALSUITE_ENABLE_OPENMP` | `ON`        | Usa OpenMP si está disponible; si no, compila secuencial |
 | `NEURALSUITE_NATIVE_ARCH`   | `OFF`       | `-march=native`: más rápido en esta CPU, no portable    |
 | `NEURALSUITE_FAST_MATH`     | `OFF`       | `-ffast-math`: relaja IEEE-754, estorba al verificar    |
 
-OpenMP es **opcional**. Sin él los pragmas se ignoran y todo corre de forma
-secuencial, que es lo que ocurre en macOS con AppleClang. Para medir
+El paralelismo lo aporta `include/parallel.h` con la biblioteca estándar, así
+que no hace falta OpenMP: antes los `pragma omp` se ignoraban en macOS con
+AppleClang y todo corría en un solo hilo. `parallel::ThreadCount()` permite
+fijar el número de hilos, y ponerlo a 1 desactiva el reparto. Para medir
 rendimiento en local:
 
 ```bash

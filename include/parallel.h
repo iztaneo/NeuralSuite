@@ -1,0 +1,178 @@
+// Copyright 2026 NeuralSuite Authors.
+// Licensed under the Apache License, Version 2.0.
+
+/**
+ * @file parallel.h
+ * @brief Reparto de bucles entre hilos, con la biblioteca estandar.
+ *
+ * El paralelismo dependia de OpenMP, que no esta disponible en todas las
+ * plataformas que el proyecto soporta: con AppleClang los `pragma` se ignoran y
+ * todo corre en un solo hilo. Medido sobre un Apple M5 de cuatro nucleos de
+ * rendimiento, eso dejaba `MatMul` —que es el 80% del tiempo de un paso de
+ * entrenamiento— usando una cuarta parte de la maquina.
+ *
+ * Aqui el reparto se hace con `std::thread`, que existe en cualquier
+ * compilador de C++17, de modo que el comportamiento es el mismo en las tres
+ * plataformas y no hace falta ninguna dependencia externa.
+ */
+
+#ifndef NEURAL_SUITE_INCLUDE_PARALLEL_H_
+#define NEURAL_SUITE_INCLUDE_PARALLEL_H_
+
+#include <algorithm>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+namespace neuralsuite {
+namespace parallel {
+
+/**
+ * @brief Numero de hilos que se usan para repartir los bucles.
+ *
+ * Por defecto, el numero de nucleos que informa el sistema. Fijarlo a 1
+ * desactiva el paralelismo, lo que resulta util para medir o para depurar.
+ */
+inline int& ThreadCount() {
+  static int count = []() {
+    const unsigned hw = std::thread::hardware_concurrency();
+    return hw > 0 ? static_cast<int>(hw) : 1;
+  }();
+  return count;
+}
+
+namespace detail {
+
+/** @brief Marca si el hilo actual ya esta ejecutando trabajo repartido. */
+inline bool& InsideParallelRegion() {
+  static thread_local bool inside = false;
+  return inside;
+}
+
+/**
+ * @class Pool
+ * @brief Hilos persistentes que esperan trabajo.
+ *
+ * Crear hilos en cada llamada costaria mas que el propio calculo en las
+ * matrices pequenas, y un paso de entrenamiento hace decenas de
+ * multiplicaciones. Los hilos se crean una vez y se reutilizan.
+ */
+class Pool {
+ public:
+  static Pool& Instance() {
+    static Pool pool;
+    return pool;
+  }
+
+  /** @brief Ejecuta `fn(worker_index)` en N hilos y espera a que terminen. */
+  void Run(int workers, const std::function<void(int)>& fn) {
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      task_ = &fn;
+      pending_ = workers - 1;   // el hilo llamante hace la primera porcion
+      remaining_ = pending_;
+      ++generation_;
+      work_ready_.notify_all();
+    }
+
+    // El llamante trabaja tambien: asi con un solo hilo no hay ningun coste de
+    // sincronizacion, y con varios se aprovecha su nucleo.
+    fn(0);
+
+    std::unique_lock<std::mutex> lock(mutex_);
+    work_done_.wait(lock, [this] { return remaining_ == 0; });
+    task_ = nullptr;
+  }
+
+  ~Pool() {
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      stop_ = true;
+      work_ready_.notify_all();
+    }
+    for (std::thread& t : threads_) {
+      if (t.joinable()) t.join();
+    }
+  }
+
+ private:
+  Pool() {
+    const int n = std::max(1, ThreadCount()) - 1;
+    for (int i = 0; i < n; ++i) {
+      threads_.emplace_back([this, i] { WorkerLoop(i + 1); });
+    }
+  }
+
+  void WorkerLoop(int index) {
+    detail::InsideParallelRegion() = true;
+    unsigned long long seen = 0;
+    while (true) {
+      const std::function<void(int)>* task = nullptr;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        work_ready_.wait(lock, [&] { return stop_ || (generation_ != seen && index <= pending_); });
+        if (stop_) return;
+        seen = generation_;
+        task = task_;
+      }
+      if (task) (*task)(index);
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (--remaining_ == 0) work_done_.notify_one();
+      }
+    }
+  }
+
+  std::vector<std::thread> threads_;
+  std::mutex mutex_;
+  std::condition_variable work_ready_;
+  std::condition_variable work_done_;
+  const std::function<void(int)>* task_ = nullptr;
+  unsigned long long generation_ = 0;
+  int pending_ = 0;
+  int remaining_ = 0;
+  bool stop_ = false;
+};
+
+}  // namespace detail
+
+/**
+ * @brief Reparte `[0, count)` entre los hilos disponibles.
+ *
+ * `fn(begin, end)` recibe un rango contiguo y no solapado, de modo que las
+ * porciones no necesitan sincronizarse entre si. Si cada hilo escribe en zonas
+ * distintas del resultado —como las filas de una matriz—, el resultado es
+ * identico bit a bit al de un solo hilo: no hay reduccion que cambie el orden
+ * de las sumas en punto flotante.
+ *
+ * `min_per_thread` evita repartir trabajo tan pequeno que la sincronizacion
+ * cueste mas que el calculo.
+ */
+inline void ParallelFor(int count, int min_per_thread,
+                        const std::function<void(int begin, int end)>& fn) {
+  if (count <= 0) return;
+
+  int workers = std::max(1, ThreadCount());
+  workers = std::min(workers, std::max(1, count / std::max(1, min_per_thread)));
+
+  // Anidar reparto dentro de reparto agotaria los hilos y podria bloquear: si
+  // ya estamos dentro de una region paralela, se ejecuta en serie.
+  if (workers <= 1 || detail::InsideParallelRegion()) {
+    fn(0, count);
+    return;
+  }
+
+  const int chunk = (count + workers - 1) / workers;
+  detail::Pool::Instance().Run(workers, [&fn, chunk, count](int index) {
+    const int begin = index * chunk;
+    const int end = std::min(count, begin + chunk);
+    if (begin < end) fn(begin, end);
+  });
+}
+
+}  // namespace parallel
+}  // namespace neuralsuite
+
+#endif  // NEURAL_SUITE_INCLUDE_PARALLEL_H_

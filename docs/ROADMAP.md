@@ -11,14 +11,14 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Estado actual
 
-**49 puntos cerrados, 7 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
+**51 puntos cerrados, 9 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
 | 00 Confianza y limpieza    | ✅               | 06 Serialización  | ✅           |
 | 01 Corrección crítica      | ✅               | 07 Runtime y build| ✅           |
 | 02 Tensor Core             | ✅ parcial       | 08 Tokenizador    | ✅ parcial   |
-| 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ⬜           |
+| 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ✅ parcial   |
 | 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅ parcial   |
 | 05 Autograd                | ✅ parcial       | OCR (aparte)      | ⬜           |
 
@@ -31,7 +31,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
 | Autograd                          | ✅ motor, primitivas y LayerNorm compuesta; capas sin migrar     |
-| Rendimiento                       | ⚠️ correcto pero sin optimizar; el cómputo domina               |
+| Rendimiento                       | ⚠️ paralelizado (2.2x); falta blocking y SIMD en el GEMM        |
 
 ---
 
@@ -229,6 +229,18 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 
 ## Fase 09 — Rendimiento ⬜
 
+- [x] **Perfilado antes de optimizar.** `MatMul` resultó ser el 80% del tiempo
+      de un paso de entrenamiento; el resto se reparte entre los bucles de
+      atención (que a su vez llaman a `MatMul`), GELU y `Transpose`. LayerNorm y
+      softmax juntos no llegan al 1%.
+- [x] **Paralelismo con `std::thread`** en `include/parallel.h`, sustituyendo a
+      OpenMP. El motivo no era preferencia: con AppleClang los `pragma omp` se
+      ignoran, de modo que en macOS todo corría en un solo hilo y `MatMul` usaba
+      una cuarta parte de la máquina. Medido sobre un Apple M5 de cuatro núcleos
+      de rendimiento: `MatMul` pasa de 35 a 121-135 GFLOP/s, y el paso de
+      entrenamiento de 119 ms a unos 52 ms. El resultado es idéntico bit a bit,
+      porque cada hilo escribe filas disjuntas y no hay reducción que altere el
+      orden de las sumas.
 - [ ] GEMM con blocking, tiling y SIMD; kernel optimizado de Conv2D conservando
       el actual como oráculo de referencia.
 - [ ] KV cache contiguo (hoy `vector<vector<float>>`).

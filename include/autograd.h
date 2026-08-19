@@ -14,7 +14,7 @@
  * como propagar el gradiente hacia sus entradas, y `Backward()` recorre el
  * grafo en orden topologico inverso aplicando la regla de la cadena.
  *
- *     auto x = Variable::Create(tensor, /*requires_grad=*\/ true);
+ *     auto x = Variable::Create(tensor, true);   // requires_grad
  *     auto y = Tanh(MatMul(x, w) + b);
  *     Backward(Sum(y));
  *     x->Grad();   // ya calculado, sin escribir ninguna derivada

@@ -13,11 +13,12 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-# OpenMP acelera algunos bucles pero no es imprescindible: sin el, los pragmas
-# se ignoran y todo se ejecuta secuencialmente. Exigirlo con REQUIRED rompia la
-# configuracion en macOS, porque AppleClang no lo trae, de modo que el build
-# documentado en el README no funcionaba en una de las plataformas que anuncia.
-option(NEURALSUITE_ENABLE_OPENMP "Usar OpenMP si esta disponible" ON)
+# El paralelismo lo aporta include/parallel.h con std::thread, asi que OpenMP ya
+# no interviene. Se uso mientras los bucles llevaban `pragma omp`, pero eso
+# dejaba sin paralelizar las plataformas donde no esta disponible: en macOS con
+# AppleClang los pragmas se ignoraban y todo corria en un solo hilo, con MatMul
+# usando una cuarta parte de la maquina.
+find_package(Threads REQUIRED)
 
 # -march=native compila para la CPU de la maquina actual: va bien para medir en
 # local, pero produce binarios que pueden no arrancar en otro procesador.
@@ -39,14 +40,6 @@ else()
     endif()
 endif()
 
-if(NEURALSUITE_ENABLE_OPENMP)
-    find_package(OpenMP)
-    if(OpenMP_CXX_FOUND)
-        message(STATUS "OpenMP encontrado: ejecucion paralela activada.")
-    else()
-        message(STATUS "OpenMP no disponible: se compila la version secuencial.")
-    endif()
-endif()
 
 include_directories(include)
 
@@ -59,10 +52,8 @@ add_library(neuralsuite_static STATIC ${NEURALSUITE_SOURCES})
 set_target_properties(neuralsuite_shared PROPERTIES OUTPUT_NAME "neuralsuite")
 set_target_properties(neuralsuite_static PROPERTIES OUTPUT_NAME "neuralsuite")
 
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(neuralsuite_shared PRIVATE OpenMP::OpenMP_CXX)
-    target_link_libraries(neuralsuite_static PRIVATE OpenMP::OpenMP_CXX)
-endif()
+target_link_libraries(neuralsuite_shared PRIVATE Threads::Threads)
+target_link_libraries(neuralsuite_static PRIVATE Threads::Threads)
 
 # Ejecutables: pruebas, demos y herramientas.
 # Toda fuente ejecutable del repositorio debe estar registrada aquí; CMake es la

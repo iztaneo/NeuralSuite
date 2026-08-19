@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0.
 
 #include "tensor.h"
+#include "parallel.h"
 
 namespace neuralsuite {
 
@@ -214,19 +215,25 @@ void MatMul(const Tensor& A, const Tensor& B, Tensor& C) {
   C.Resize({M, N});
   C.Zeros();
 
-  #pragma omp parallel for schedule(static) if(M >= 16)
-  for (int i = 0; i < M; ++i) {
-    for (int k = 0; k < K; ++k) {
-      float a = A[i * K + k];
-      const float* b_row = &B[k * N];
-      float* c_row = &C[i * N];
-      // Sin `omp simd`: MSVC solo lo admite con -openmp:experimental. El bucle
-      // es vectorizable de por si y los compiladores lo autovectorizan.
-      for (int j = 0; j < N; ++j) {
-        c_row[j] += a * b_row[j];
+  // Cada hilo se queda con un bloque de filas de C, que nadie mas escribe: sin
+  // reduccion no cambia el orden de las sumas, de modo que el resultado es
+  // identico bit a bit al de un solo hilo. Esa propiedad es la que permite
+  // paralelizar sin tocar la comparacion contra PyTorch.
+  parallel::ParallelFor(M, /*min_per_thread=*/16, [&](int row_begin, int row_end) {
+    for (int i = row_begin; i < row_end; ++i) {
+      for (int k = 0; k < K; ++k) {
+        const float a = A[i * K + k];
+        const float* b_row = &B[k * N];
+        float* c_row = &C[i * N];
+        // El bucle interno recorre memoria contigua y los compiladores lo
+        // autovectorizan; `omp simd` solo lo aceptaba MSVC con una bandera
+        // experimental.
+        for (int j = 0; j < N; ++j) {
+          c_row[j] += a * b_row[j];
+        }
       }
     }
-  }
+  });
 }
 
 
@@ -236,12 +243,13 @@ Tensor Transpose(const Tensor& A) {
   int N = A.Shape()[1];
   Tensor C({N, M});
 
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < M; ++i) {
-    for (int j = 0; j < N; ++j) {
-      C[j * M + i] = A[i * N + j];
+  parallel::ParallelFor(M, /*min_per_thread=*/32, [&](int begin, int end) {
+    for (int i = begin; i < end; ++i) {
+      for (int j = 0; j < N; ++j) {
+        C[j * M + i] = A[i * N + j];
+      }
     }
-  }
+  });
   return C;
 }
 
@@ -255,8 +263,8 @@ void LayerNormForward(const Tensor& x, const Tensor& gamma, const Tensor& beta,
   mean.Resize({N});
   rstd.Resize({N});
 
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < N; ++i) {
+  parallel::ParallelFor(N, /*min_per_thread=*/16, [&](int row_begin, int row_end) {
+  for (int i = row_begin; i < row_end; ++i) {
     float m = 0.0f;
     for (int j = 0; j < D; ++j) m += x[i * D + j];
     m /= D;
@@ -276,6 +284,7 @@ void LayerNormForward(const Tensor& x, const Tensor& gamma, const Tensor& beta,
       out[i * D + j] = x_hat * gamma[j] + beta[j];
     }
   }
+  });
 }
 
 void LayerNormBackward(const Tensor& dout, const Tensor& x, const Tensor& gamma,
@@ -327,8 +336,8 @@ void SoftmaxForward(const Tensor& input, Tensor& output) {
   const int N = static_cast<int>(input.TotalSize()) / D;
   output.Resize(input.Shape());
 
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < N; ++i) {
+  parallel::ParallelFor(N, /*min_per_thread=*/16, [&](int row_begin, int row_end) {
+  for (int i = row_begin; i < row_end; ++i) {
     float max_val = input[i * D];
     for (int j = 1; j < D; ++j) {
       if (input[i * D + j] > max_val) max_val = input[i * D + j];
@@ -345,6 +354,7 @@ void SoftmaxForward(const Tensor& input, Tensor& output) {
       output[i * D + j] /= sum;
     }
   }
+  });
 }
 
 void CausalSoftmaxForward(const Tensor& input, Tensor& output, int seq_len) {
@@ -353,8 +363,8 @@ void CausalSoftmaxForward(const Tensor& input, Tensor& output, int seq_len) {
 
   output.Resize(input.Shape());
 
-  #pragma omp parallel for schedule(static)
-  for (int b = 0; b < B; ++b) {
+  parallel::ParallelFor(B, /*min_per_thread=*/1, [&](int b_begin, int b_end) {
+  for (int b = b_begin; b < b_end; ++b) {
 
     for (int i = 0; i < seq_len; ++i) {
       int offset = (b * seq_len + i) * seq_len;
@@ -378,6 +388,7 @@ void CausalSoftmaxForward(const Tensor& input, Tensor& output, int seq_len) {
       }
     }
   }
+  });
 }
 
 void GeluForward(const Tensor& input, Tensor& output) {
@@ -386,31 +397,33 @@ void GeluForward(const Tensor& input, Tensor& output) {
 
   // El indice va con signo: el OpenMP de MSVC (2.0) rechaza size_t en el bucle
   // de un `parallel for`.
-  const long long n = static_cast<long long>(sz);
-  #pragma omp parallel for schedule(static)
-  for (long long i = 0; i < n; ++i) {
-    float x = input[i];
-    float cube = 0.044715f * x * x * x;
-    float inner = 0.7978845608f * (x + cube);
-    output[i] = 0.5f * x * (1.0f + std::tanh(inner));
-  }
+  parallel::ParallelFor(static_cast<int>(sz), /*min_per_thread=*/4096,
+                        [&](int begin, int end) {
+    for (int i = begin; i < end; ++i) {
+      const float x = input[i];
+      const float cube = 0.044715f * x * x * x;
+      const float inner = 0.7978845608f * (x + cube);
+      output[i] = 0.5f * x * (1.0f + std::tanh(inner));
+    }
+  });
 }
 
 void GeluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
   size_t sz = input.TotalSize();
   dx.Resize(input.Shape());
 
-  const long long n = static_cast<long long>(sz);
-  #pragma omp parallel for schedule(static)
-  for (long long i = 0; i < n; ++i) {
-    float x = input[i];
-    float cube = 0.044715f * x * x * x;
-    float inner = 0.7978845608f * (x + cube);
-    float th = std::tanh(inner);
-    float d_inner = 0.7978845608f * (1.0f + 3.0f * 0.044715f * x * x);
-    float d_gelu = 0.5f * (1.0f + th) + 0.5f * x * (1.0f - th * th) * d_inner;
-    dx[i] = dout[i] * d_gelu;
-  }
+  parallel::ParallelFor(static_cast<int>(sz), /*min_per_thread=*/4096,
+                        [&](int begin, int end) {
+    for (int i = begin; i < end; ++i) {
+      const float x = input[i];
+      const float cube = 0.044715f * x * x * x;
+      const float inner = 0.7978845608f * (x + cube);
+      const float th = std::tanh(inner);
+      const float d_inner = 0.7978845608f * (1.0f + 3.0f * 0.044715f * x * x);
+      const float d_gelu = 0.5f * (1.0f + th) + 0.5f * x * (1.0f - th * th) * d_inner;
+      dx[i] = dout[i] * d_gelu;
+    }
+  });
 }
 
 void ReluForward(const Tensor& input, Tensor& output) {
