@@ -280,6 +280,14 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 - [x] `-march=native` y `-ffast-math` dejan de aplicarse siempre. La primera
       producía binarios que podían no arrancar en otra CPU; la segunda relaja
       IEEE-754 justo donde se verifican gradientes.
+- [x] **El `Makefile` arrastraba los mismos defectos, sin corregir.** Al quitar
+      OpenMP quedó `CXXFLAGS += -Xpreprocessor -fopenmp 2>/dev/null || true`, y
+      make pasaba esos tres tokens al compilador como ficheros: en macOS no
+      producía ningún objeto. Seguía forzando `-march=native` y `-ffast-math`,
+      así que este build y el de CI no calculaban lo mismo. Y mantenía a mano
+      tres listas de programas que ya habían divergido: `demo_autograd` no se
+      compilaba y `clean` borraba cuatro de los quince binarios. Ahora los
+      programas salen de un `wildcard` y hay una sola regla.
 - [x] **Windows nunca había compilado**: `#pragma omp simd` requiere un flag
       experimental en MSVC, y su OpenMP exige índice de bucle con signo.
 - [x] `ManualSeed()` fija la semilla del generador. Antes reproducir una
