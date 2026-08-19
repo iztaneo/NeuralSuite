@@ -11,7 +11,7 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Lo que falta
 
-Nueve puntos, y solo uno de ellos es algo que hoy esté **mal**; el resto son
+Ocho puntos, y solo uno de ellos es algo que hoy esté **mal**; el resto son
 mejoras sobre código ya verificado. Esa distinción es la que debería ordenar el
 trabajo, más que el número de fase.
 
@@ -37,7 +37,6 @@ trabajo, más que el número de fase.
 | Intrínsecos SIMD por arquitectura | 09 | Hoy el bucle interno lo autovectoriza el compilador. |
 | Kernel optimizado de Conv2D | 09 | Conservando el actual como oráculo de referencia. |
 | KV cache contiguo | 09 | Solo afecta a la generación token a token. |
-| Strides y `Transpose` como vista | 02 | **Medido: 14% de las reservas y sin efecto en el reloj.** Gana sentido junto al autograd, no antes. |
 
 ---
 
@@ -58,7 +57,7 @@ trabajo, más que el número de fase.
 | -------------------------- | ---------------- | ----------------- | ------------ |
 | 00 Confianza y limpieza    | ✅               | 06 Serialización  | ✅           |
 | 01 Corrección crítica      | ✅               | 07 Runtime y build| ✅ parcial   |
-| 02 Tensor Core             | ✅ parcial       | 08 Tokenizador    | ✅ parcial   |
+| 02 Tensor Core             | ✅               | 08 Tokenizador    | ✅ parcial   |
 | 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ✅ parcial   |
 | 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅           |
 | 05 Autograd                | ✅ parcial       | OCR (aparte)      | ⬜           |
@@ -130,7 +129,7 @@ sitio y la medición a otro.
 - [x] Las pruebas dejan de usar `assert()`, que **desaparece bajo `NDEBUG`** y
       hacía que la suite pasara sin verificar nada en compilaciones Release.
 
-## Fase 02 — Tensor Core ✅ (parcial)
+## Fase 02 — Tensor Core ✅
 
 `5d25002`, `44d0eb3`
 
@@ -145,9 +144,29 @@ sitio y la medición a otro.
 - [x] Almacenamiento compartido y `View()` sin copia. Medido sobre un paso de
       entrenamiento: 118 MB → 72,6 MB reservados. **El tiempo por paso no
       cambia**: el cuello de botella es el cómputo, no las reservas.
-- [ ] Strides, `Transpose` como vista y `Contiguous()`. Aplazado: hoy ninguna
-      operación consume vistas no contiguas, así que sería refactor sin
-      beneficio. Gana sentido junto con el autograd.
+- [x] **Strides y `Transpose` como vista: medido y descartado.** Toda
+      transposición del repositorio alimenta directamente un `MatMul`, así que
+      se probó lo que una vista permitiría —leer el operando transpuesto sin
+      copiarlo— implementando `MatMulNT` y `MatMulTN` y comparándolas contra
+      transponer primero:
+
+      | | transponer + MatMul | leer transpuesto |
+      | --- | --- | --- |
+      | `A · Bᵀ` 1024×512×512 | **210 GF** | 59 GF |
+      | `Aᵀ · B` 1024×512×512 | 203 GF | 211 GF |
+
+      Evitar la copia sale entre 3 y 4 veces más caro en el caso frecuente. Al
+      leer `B` transpuesta, cada elemento de `C` pasa a ser un producto escalar:
+      una reducción con dependencia en el bucle interno, que atasca el pipeline.
+      La forma original no la tiene, porque cada iteración escribe una columna
+      distinta.
+
+      La conclusión invierte la premisa: **la copia no es un desperdicio, es lo
+      que compra el patrón de acceso rápido**, y se paga sola con creces. Medido
+      de extremo a extremo, el paso de entrenamiento empeoraba de 26.7 a 34.2 ms.
+      Añadir strides al `Tensor` solo tendría sentido para operaciones que
+      todavía no existen, y `Contiguous()` seria precisamente deshacer la vista
+      para volver a este caso.
 
 ## Fase 03 — `Parameter` y `Module` ✅
 
