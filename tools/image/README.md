@@ -17,11 +17,46 @@ tools/image/run_image_parity.sh ../LLMRasec
 | PNG | profundidades 1, 2, 4, 8 y 16 bits; los cinco tipos de color; paleta con y sin `tRNS`; los cinco filtros de fila forzados uno a uno; entrelazado Adam7; sin comprimir y a compresión máxima |
 | BMP | 1, 4, 8, 16, 24 y 32 bits; paleta; máscaras 5-6-5; filas de abajo arriba y de arriba abajo |
 | Netpbm | P1 a P6, las seis variantes, con comentarios en medio de la cabecera |
-| Reales | los tres PNG que ya vivían en el repositorio, escritos por herramientas ajenas |
+| JPEG | línea base y progresivo; 4:4:4, 4:2:2 y 4:2:0; gris y color; calidades 25, 85, 88, 90, 95 y 100; tablas Huffman optimizadas; intervalos de reinicio |
+| Reales | los tres PNG que ya vivían en el repositorio, y sus versiones JPEG: un documento escaneado no se parece a los patrones sintéticos, tiene bordes duros y zonas planas |
 
 Las dimensiones son 37×23 a propósito. No son múltiplo de 4 ni de 8, que es
 justo lo que destapa los errores de relleno de fila en BMP y de empaquetado de
 bits en PNG.
+
+## Por qué el JPEG se compara con tolerancia y los demás no
+
+Porque **la salida de un JPEG no está especificada**. La norma fija requisitos
+de precisión para la transformada inversa (ITU-T T.83), no un resultado
+concreto, de modo que dos decodificadores correctos difieren en algunos píxeles
+por una unidad. PNG, BMP y Netpbm reconstruyen los píxeles exactos que se
+codificaron, y ahí una diferencia de un solo byte sí es un fallo.
+
+El criterio para JPEG es **la distribución del error, no el peor píxel**, y esa
+distinción importa. El máximo crece con el tamaño de la imagen: cada muestra
+tiene una probabilidad pequeña e independiente de caer en un empate de redondeo,
+así que con más muestras es más probable que alguna lo haga. Se midió: la misma
+imagen 4:2:0 de 131×96 da máximo 2 en una versión y 3 en otra —un único píxel de
+37728— con media idéntica hasta la cuarta cifra. Poner el umbral en el máximo
+habría convertido eso en un fallo y empujado a relajarlo hasta que pasara.
+
+Lo que sí distingue un defecto es la forma del error. Mutando el decodificador:
+
+| Defecto inyectado | Media del error |
+| --- | --- |
+| Se ignoran los marcadores de reinicio | 101 |
+| El predictor continuo no se reinicia | 41 a 87 |
+| El zigzag se aplica en orden natural | 16 a 29 |
+| Los coeficientes progresivos no se desplazan por `Al` | 13 a 19 |
+| La crominancia se toma del píxel más próximo | 4.5 a 6.9 |
+| **Sin defecto** | **0.01 a 0.34** |
+
+Entre uno y dos órdenes de magnitud. El umbral de 0.5 de media separa las dos
+poblaciones con holgura, y no sale de ajustarlo hasta que pasara: la
+transformada de este proyecto se contrasta aparte contra su definición
+matemática en el test 29 de `test_suite`, y su error propio queda por debajo de
+medio nivel de cuantización, así que lo que se mide aquí es enteramente el
+redondeo de la otra implementación.
 
 ## Por qué hay un codificador PNG en `generar_casos.py`
 

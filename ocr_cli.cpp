@@ -29,7 +29,7 @@ namespace {
 void PrintUsage() {
   std::cout << "Uso: ocr_cli [--image ruta] [--out ruta] [--len n] [--no-invertir]\n"
             << "\n"
-            << "  --image ruta   imagen a transcribir (PNG, BMP, PBM/PGM/PPM).\n"
+            << "  --image ruta   imagen a transcribir (PNG, JPEG, BMP, PBM/PGM/PPM).\n"
             << "                 Sin este argumento se genera una linea sintetica.\n"
             << "  --out ruta     donde escribir el texto (por defecto resultado.txt).\n"
             << "  --len n        caracteres de la linea sintetica (por defecto 10).\n"

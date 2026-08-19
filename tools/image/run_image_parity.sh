@@ -50,6 +50,17 @@ a = np.array(img)
 if a.ndim == 2:
     a = a[:, :, None]
 np.save(path.rsplit(".", 1)[0] + ".npy", a)
+
+# La misma imagen como JPEG. Un documento escaneado no se parece a los patrones
+# sinteticos: tiene bordes duros y zonas planas, que es donde la cuantizacion
+# produce los coeficientes mas dispares.
+base = path.rsplit(".", 1)[0].replace("repo_", "repofoto_")
+rgb = img.convert("RGB")
+for etiqueta, kw in (("_420", dict(quality=85, subsampling=2)),
+                     ("_prog", dict(quality=85, subsampling=2, progressive=True))):
+    destino = base + etiqueta + ".jpg"
+    rgb.save(destino, "JPEG", **kw)
+    np.save(destino[:-4] + ".npy", np.array(Image.open(destino)))
 PY
 done
 

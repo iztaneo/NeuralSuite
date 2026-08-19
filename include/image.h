@@ -5,8 +5,9 @@
  * @file image.h
  * @brief Carga de imagenes desde disco y conversion a tensor.
  *
- * Reune los decodificadores de PNG, BMP y Netpbm bajo una sola llamada y anade
- * lo que el modelo necesita despues: pasar a gris, normalizar y ajustar el alto.
+ * Reune los decodificadores de PNG, JPEG, BMP y Netpbm bajo una sola llamada y
+ * anade lo que el modelo necesita despues: pasar a gris, normalizar y ajustar el
+ * alto.
  *
  * El formato se decide por los primeros bytes del archivo, nunca por su
  * extension. Un `.png` que en realidad es un BMP es algo corriente —lo produce
@@ -22,6 +23,7 @@
 #include <string>
 #include <vector>
 #include "image/bmp.h"
+#include "image/jpeg.h"
 #include "image/netpbm.h"
 #include "image/png.h"
 #include "tensor.h"
@@ -30,12 +32,13 @@ namespace neuralsuite {
 namespace image {
 
 /** @brief Formatos que se reconocen. */
-enum class Format { kUnknown, kPng, kBmp, kNetpbm };
+enum class Format { kUnknown, kPng, kBmp, kJpeg, kNetpbm };
 
 /** @brief Identifica el formato por el numero magico del archivo. */
 inline Format DetectFormat(const uint8_t* data, size_t size) {
   if (size >= 8 && data[0] == 0x89 && std::memcmp(data + 1, "PNG", 3) == 0) return Format::kPng;
   if (size >= 2 && data[0] == 'B' && data[1] == 'M') return Format::kBmp;
+  if (size >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return Format::kJpeg;
   if (size >= 2 && data[0] == 'P' && data[1] >= '1' && data[1] <= '6') return Format::kNetpbm;
   return Format::kUnknown;
 }
@@ -44,6 +47,7 @@ inline const char* FormatName(Format format) {
   switch (format) {
     case Format::kPng: return "PNG";
     case Format::kBmp: return "BMP";
+    case Format::kJpeg: return "JPEG";
     case Format::kNetpbm: return "Netpbm";
     default: return "desconocido";
   }
@@ -54,9 +58,10 @@ inline bool Decode(const uint8_t* data, size_t size, Bitmap* out, std::string* e
   switch (DetectFormat(data, size)) {
     case Format::kPng: return DecodePng(data, size, out, error);
     case Format::kBmp: return DecodeBmp(data, size, out, error);
+    case Format::kJpeg: return DecodeJpeg(data, size, out, error);
     case Format::kNetpbm: return DecodeNetpbm(data, size, out, error);
     default:
-      *error = "formato de imagen no reconocido. Se admiten PNG, BMP y Netpbm (PBM/PGM/PPM).";
+      *error = "formato de imagen no reconocido. Se admiten PNG, JPEG, BMP y Netpbm (PBM/PGM/PPM).";
       return false;
   }
 }

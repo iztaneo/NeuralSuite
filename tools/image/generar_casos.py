@@ -269,6 +269,54 @@ def main():
     pbm.save(f"{d}/pbm_bin.pbm")
     np.save(f"{d}/pbm_bin.npy", np.where(bits, 0, 255).astype(np.uint8)[:, :, None])
 
+    # --- JPEG ---
+    #
+    # A diferencia de los otros tres formatos, la salida de un JPEG no esta
+    # especificada bit a bit: la norma fija requisitos de precision para la
+    # transformada inversa (T.83), no un resultado exacto. Por eso estos casos
+    # se comparan con tolerancia y no por igualdad, y por eso conviene que el
+    # contenido sea suave: sobre ruido puro la cuantizacion satura los
+    # coeficientes altos y lo que se mide deja de ser el decodificador.
+    yy, xx = np.mgrid[0:H, 0:W]
+    suave = (128 + 90 * np.sin(xx / 5.0) * np.cos(yy / 4.0)).astype(np.uint8)
+    color = np.stack([suave, np.roll(suave, 3, axis=1), np.roll(suave, 5, axis=0)], axis=2)
+    img_color, img_gris = Image.fromarray(color), Image.fromarray(suave)
+
+    # Una imagen mas grande, con varios MCU por fila y detalle a distintas
+    # escalas: las pequenas caben en muy pocos bloques y no ejercitan el
+    # recorrido de los MCU ni los intervalos de reinicio.
+    GH, GW = 96, 131
+    gy, gx = np.mgrid[0:GH, 0:GW]
+    grande = np.stack([
+        (128 + 100 * np.sin(gx / 9.0) * np.cos(gy / 7.0)).astype(np.uint8),
+        (128 + 80 * np.sin((gx + gy) / 11.0)).astype(np.uint8),
+        (128 + 90 * np.cos(gx / 6.0 - gy / 13.0)).astype(np.uint8),
+    ], axis=2)
+    img_grande = Image.fromarray(grande)
+
+    casos_jpeg = [
+        ("jpg_444", img_color, dict(quality=95, subsampling=0)),
+        ("jpg_422", img_color, dict(quality=90, subsampling=1)),
+        ("jpg_420", img_color, dict(quality=90, subsampling=2)),
+        ("jpg_gris", img_gris, dict(quality=95)),
+        ("jpg_calidad25", img_color, dict(quality=25, subsampling=2)),
+        ("jpg_calidad100", img_color, dict(quality=100, subsampling=0)),
+        ("jpg_optimizado", img_color, dict(quality=85, optimize=True)),
+        ("jpg_progresivo", img_color, dict(quality=90, subsampling=0, progressive=True)),
+        ("jpg_progresivo_420", img_color, dict(quality=85, subsampling=2, progressive=True)),
+        ("jpg_progresivo_gris", img_gris, dict(quality=85, progressive=True)),
+        ("jpg_grande_420", img_grande, dict(quality=88, subsampling=2)),
+        ("jpg_grande_progresivo", img_grande, dict(quality=88, subsampling=2, progressive=True)),
+        # Los marcadores de reinicio parten el flujo y obligan a reiniciar el
+        # predictor del coeficiente continuo. Un decodificador que los ignore
+        # produce basura a partir del primero.
+        ("jpg_reinicios", img_grande, dict(quality=90, subsampling=2, restart_marker_blocks=2)),
+        ("jpg_reinicios_444", img_grande, dict(quality=90, subsampling=0, restart_marker_blocks=1)),
+    ]
+    for name, img, kw in casos_jpeg:
+        img.save(f"{d}/{name}.jpg", **kw)
+        referencia(f"{d}/{name}.npy", Image.open(f"{d}/{name}.jpg"))
+
     n = len([f for f in os.listdir(d) if not f.endswith(".npy")])
     print(f"Escritos {n} archivos en {d}")
 

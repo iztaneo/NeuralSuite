@@ -131,8 +131,8 @@ pendiente, está en [`docs/ROADMAP.md`](docs/ROADMAP.md).
    de texto y devuelve una predicción por columna — ver la nota de alcance en la
    sección de demostraciones.
 10. **Decodificación de imagen**: `include/image/` lee PNG (con su propio
-    `inflate`), BMP y Netpbm sin bibliotecas externas — ver
-    [tools/image/README.md](tools/image/README.md).
+    `inflate`), JPEG (línea base y progresivo), BMP y Netpbm sin bibliotecas
+    externas — ver [tools/image/README.md](tools/image/README.md).
 
 ---
 
@@ -248,14 +248,14 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 - `./demo_ocr`: Entrena el `CRNNModel` a transcribir líneas sintéticas y
   comprueba, al final, cuántas lee exactamente.
-- `./ocr_cli --image foto.png`: Decodifica la imagen, la pasa a gris, la
-  reescala a 32 px de alto y ejecuta el `CRNNModel`. Admite PNG, BMP y
+- `./ocr_cli --image foto.jpg`: Decodifica la imagen, la pasa a gris, la
+  reescala a 32 px de alto y ejecuta el `CRNNModel`. Admite PNG, JPEG, BMP y
   PBM/PGM/PPM; el formato se detecta por el contenido, no por la extensión.
 
 > **Alcance del OCR.** `ocr_cli --image` sí lee el archivo: `include/image/`
-> decodifica PNG, BMP y PBM/PGM/PPM sin depender de ninguna biblioteca externa,
-> y los 46 archivos del banco de pruebas se decodifican byte a byte igual que
-> Pillow. JPEG todavía no.
+> decodifica PNG, JPEG, BMP y PBM/PGM/PPM sin depender de ninguna biblioteca
+> externa. Los 46 archivos sin pérdida del banco se decodifican byte a byte
+> igual que Pillow, y los 20 JPEG dentro del redondeo que la norma permite.
 >
 > Lo que falta es el entrenamiento: el modelo no tiene pesos ajustados sobre
 > tipografías reales, así que la transcripción de una foto no será una lectura

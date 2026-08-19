@@ -428,12 +428,16 @@ arquitectura no es la que declara. La referencia es
       a byte igual que Pillow, incluidos los tres PNG que ya estaban en el
       repositorio. `ocr_cli --image` ya lee de verdad el archivo que se le pasa.
 - [ ] **Entrenar sobre texto real.** Es lo único que queda para que la
-      transcripción de una foto signifique algo: el camino completo funciona,
-      pero el modelo no tiene pesos ajustados sobre tipografías reales.
-- [ ] **JPEG.** Decisión aparte: necesita Huffman, cuantización, IDCT y
-      submuestreo de croma, y el progresivo es prácticamente otro
-      decodificador. Del orden de mil doscientas líneas frente a las
-      quinientas del PNG.
+      transcripción de una foto signifique algo: el camino completo funciona
+      —archivo, píxeles, tensor, red, texto— pero el modelo no tiene pesos
+      ajustados sobre tipografías reales.
+- [x] **JPEG**, secuencial de línea base y progresivo. Huffman, cuantización,
+      transformada inversa e interpolación de crominancia. Es el único formato
+      cuya salida **no está especificada bit a bit**: la norma fija requisitos
+      de precisión para la transformada (T.83), no un resultado exacto, así que
+      la comparación con libjpeg necesita un criterio estadístico y la
+      transformada se verifica aparte contra su definición matemática. El modo
+      aritmético, el sin pérdida y el de 12 bits se rechazan diciendo cuál es.
 
 ---
 
