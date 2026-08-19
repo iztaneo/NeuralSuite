@@ -398,8 +398,19 @@ arquitectura no es la que declara. La referencia es
       gradient check, una prueba de direccionalidad que mide *de qué depende*
       cada salida, y paridad contra `nn.LSTM(bidirectional=True)`, que sale
       dentro de 5.3e-06.
-- [ ] **Arquitectura real.** `1→16→32→64` con pools `2,2` / `2,2` / `8,1`,
-      luego `BiLSTM(64, 64)` y `Linear(128, 63)`. Hoy es Conv + Linear.
+- [x] **Arquitectura real.** `1→16→32→64` con pools `2,2` / `2,2` / `8,1`,
+      luego `BiLSTM(64, hidden)` y `Linear(2·hidden, clases)`. La red devuelve
+      ahora una predicción por cada cuatro columnas en vez de una por imagen:
+      la diferencia entre leer una palabra y clasificar un carácter suelto.
+      `MaxPool2D` admite ventana rectangular, que es lo que hacía falta para
+      colapsar el alto sin tocar el ancho. Tres defectos que salieron por el
+      camino: la versión anterior compartía una única `Activation` entre dos
+      puntos de la red —y `Activation` guarda su entrada para el backward, así
+      que la segunda pisada borraba la caché de la primera—; `SynthTextGenerator`
+      devolvía ruido gaussiano con etiquetas `i % 4`, sobre el que ninguna red
+      podía acertar más que por azar; y las dos conversiones de disposición
+      estaban escritas como funciones distintas cuando calculaban lo mismo.
+      `demo_ocr` transcribe las 4 líneas del lote sin errores.
 - [ ] **Paridad del CRNN completo** contra `LLMRasec/src/ocr.py`, como
       `gpt`, `lstm` y `bilstm`. Ejercita además el camino convolucional, que
       hasta ahora solo tiene gradient check.

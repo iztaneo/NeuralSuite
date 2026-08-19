@@ -3,18 +3,17 @@
 
 /**
  * @file ocr_cli.cpp
- * @brief CRNN Forward-Pass Demo (Conv2D + MaxPool2D + Linear).
+ * @brief Forward del CRNN sobre una linea sintetica (Conv x3 -> BiLSTM -> Linear).
  *
- * IMPORTANTE: NeuralSuite no incluye todavía un decodificador de imagen
- * (PNG/JPG) propio. Este binario NO lee los píxeles del archivo pasado en
- * --image; ejecuta el forward del CRNNModel sobre un tensor 8x8 de ruido
- * sintético para demostrar el pipeline Conv2D->MaxPool2D->Linear->decode.
- * No se debe interpretar la salida como una transcripción real del archivo.
+ * IMPORTANTE: NeuralSuite todavia no decodifica imagenes. Este binario NO lee
+ * los pixeles del archivo que se le pase en --image; genera una linea sintetica
+ * con SynthTextGenerator y ejecuta el forward sobre ella. La salida no es una
+ * transcripcion del archivo, y el aviso se imprime siempre para que no pueda
+ * confundirse con una.
  */
 
-#include <iostream>
 #include <fstream>
-#include <memory>
+#include <iostream>
 #include <string>
 #include <vector>
 #include "neuralsuite.h"
@@ -24,60 +23,61 @@ using namespace neuralsuite;
 int main(int argc, char* argv[]) {
   std::string image_path;
   std::string out_path = "resultado.txt";
+  int word_len = 10;
 
   for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
+    const std::string arg = argv[i];
     if (arg == "--image" && i + 1 < argc) image_path = argv[++i];
     if (arg == "--out" && i + 1 < argc) out_path = argv[++i];
+    if (arg == "--len" && i + 1 < argc) word_len = std::stoi(argv[++i]);
+    if (arg == "--help") {
+      std::cout << "Uso: ocr_cli [--image ruta] [--out ruta] [--len n]\n";
+      return 0;
+    }
   }
 
   std::cout << "============================================================\n" << std::flush;
-  std::cout << "CRNN FORWARD-PASS DEMO (Conv2D + MaxPool2D + Linear)\n" << std::flush;
+  std::cout << "CRNN: Conv x3 -> BiLSTM -> Linear -> decode\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
   if (!image_path.empty()) {
     std::cout << "AVISO: NeuralSuite no decodifica " << image_path << " todavia.\n"
-              << "       No hay lector PNG/JPG propio; esta demo corre sobre\n"
-              << "       ruido sintetico 8x8, no sobre los pixeles del archivo.\n" << std::flush;
+              << "       No hay lector PNG/JPG propio, asi que este forward corre\n"
+              << "       sobre una linea sintetica, no sobre los pixeles del archivo.\n"
+              << std::flush;
   } else {
-    std::cout << "Ejecutando forward sobre un tensor 8x8 de ruido sintetico.\n" << std::flush;
+    std::cout << "Forward sobre una linea sintetica de " << word_len << " caracteres.\n"
+              << std::flush;
   }
 
-  std::vector<char> vocab;
-  for (char c = 'A'; c <= 'Z'; ++c) vocab.push_back(c);
-  for (char c = 'a'; c <= 'z'; ++c) vocab.push_back(c);
-  for (char c = '0'; c <= '9'; ++c) vocab.push_back(c);
-  vocab.push_back(' ');
+  const std::vector<char> vocab = CRNNModel::DefaultVocab();
+  CRNNModel ocr_model(1, 16, static_cast<int>(vocab.size()));
 
-  CRNNModel ocr_model(1, 16, vocab.size());
   const std::string weights_path = ReleasePath("ocr_model_mitsubishi_cpp.ns");
   if (!ocr_model.Load(weights_path)) {
     std::cout << "AVISO: no se encontraron pesos en '" << weights_path << "';\n"
               << "       el modelo corre con inicializacion aleatoria.\n" << std::flush;
   }
 
-  // Tensor de entrada de ruido sintetico [1, 1, 8, 8] (ver aviso arriba).
-  Tensor input_image_tensor({1, 1, 8, 8});
-  input_image_tensor.RandomNormal(0.5f, 0.2f);
+  Tensor image, targets;
+  SynthTextGenerator::Generate(image, targets, /*batch=*/1, word_len,
+                               static_cast<int>(vocab.size()));
 
-  // Inferencia Forward puramente matemática a través de la red convolucional C++
-  Tensor logits = ocr_model.Forward(input_image_tensor);
+  const Tensor logits = ocr_model.Forward(image);
+  const std::string decoded_text = ocr_model.DecodeWord(logits, vocab);
 
-  // Decodificación de activaciones neuronales (sin fallback de texto fijo:
-  // si el modelo no predice ningún carácter, se reporta vacío tal cual).
-  std::string decoded_text = ocr_model.DecodeWord(logits, vocab);
-
-  std::cout << "\nSALIDA CRUDA DEL FORWARD (sobre ruido sintetico, no sobre la imagen):\n" << std::flush;
+  std::cout << "\nSALIDA DEL FORWARD (sobre la linea sintetica, no sobre la imagen):\n" << std::flush;
   std::cout << "------------------------------------------------------------\n" << std::flush;
+  std::cout << "   - entrada  : " << CRNNModel::kInputHeight << "x" << image.Shape()[3]
+            << " px  ->  " << CRNNModel::TimestepsFor(image.Shape()[3]) << " pasos\n" << std::flush;
   if (decoded_text.empty()) {
-    std::cout << "   - Renglon 1: (vacio - el modelo no predijo ningun caracter)\n" << std::flush;
+    std::cout << "   - renglon 1: (vacio - el modelo no predijo ningun caracter)\n" << std::flush;
   } else {
-    std::cout << "   - Renglon 1: '" << decoded_text << "'\n" << std::flush;
+    std::cout << "   - renglon 1: '" << decoded_text << "'\n" << std::flush;
   }
 
   std::ofstream out_file(out_path);
   if (out_file.is_open()) {
     out_file << decoded_text << "\n";
-    out_file.close();
     std::cout << "------------------------------------------------------------\n" << std::flush;
     std::cout << "Resultado guardado en: '" << out_path << "'\n" << std::flush;
   }

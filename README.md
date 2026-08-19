@@ -127,8 +127,9 @@ pendiente, está en [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 7. **Bloques residuales**: `Residual` (base de la demo ResNet).
 8. **Redes de grafos**: `GraphConv` (base de la demo GNN).
-9. **Modelo OCR**: `CRNNModel` (Conv2D + MaxPool2D + Linear) — ver la nota de
-   alcance en la sección de demostraciones.
+9. **Modelo OCR**: `CRNNModel` (Conv×3 → `BiLSTM` → `Linear`), que lee una línea
+   de texto y devuelve una predicción por columna — ver la nota de alcance en la
+   sección de demostraciones.
 
 ---
 
@@ -242,16 +243,23 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **OCR**
 
-- `./demo_ocr`: Entrena el `CRNNModel` sobre lotes sintéticos.
+- `./demo_ocr`: Entrena el `CRNNModel` a transcribir líneas sintéticas y
+  comprueba, al final, cuántas lee exactamente.
 - `./ocr_cli`: Ejecuta el forward del `CRNNModel` y escribe la salida a un `.txt`.
 
 > **Alcance del OCR.** NeuralSuite **no incluye un decodificador de imagen
 > PNG/JPG propio**, así que `ocr_cli` no lee los píxeles del archivo que se le
-> pasa en `--image`: corre el forward sobre un tensor sintético de ruido 8×8.
-> `demo_ocr` entrena igualmente sobre ruido sintético con 4 etiquetas fijas.
-> Ambos sirven para ejercitar el camino `Conv2D → MaxPool2D → Linear → decode`,
-> **no son reconocimiento de texto real** y su salida no debe interpretarse como
-> una transcripción.
+> pasa en `--image`: corre el forward sobre una línea generada por
+> `SynthTextGenerator`. Los glifos de esas líneas son patrones binarios
+> derivados del índice de cada clase, **no una tipografía real**, de modo que
+> nada de esto es reconocimiento de texto del mundo real y su salida no debe
+> interpretarse como una transcripción.
+>
+> Lo que sí es real es el problema y la arquitectura: la red recibe la imagen de
+> una línea entera y devuelve la secuencia de caracteres, una predicción por
+> cada cuatro columnas, con la misma estructura que la implementación de
+> referencia en PyTorch. `demo_ocr` transcribe las 4 líneas del lote sin errores
+> tras 120 épocas.
 
 ---
 

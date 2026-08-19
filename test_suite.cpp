@@ -1546,6 +1546,141 @@ void TestGradientCheckBiLstm() {
             << std::flush;
 }
 
+/**
+ * @brief CRNN de OCR: contrato de formas y gradientes de la red completa.
+ *
+ * Conv2D, MaxPool2D, BiLSTM y Linear ya tienen su propia comprobación de
+ * gradiente. Lo que aquí es nuevo es el cableado: dos cambios de disposición
+ * entre `[B, C, 1, T]` y `[T, B, C]`, y el orden en que se deshace la cadena.
+ * Un error ahí no produce una desviación pequeña, produce un gradiente que no
+ * tiene nada que ver.
+ *
+ * Es una comprobación deliberadamente gruesa, y conviene decir por qué. La red
+ * es lineal a trozos en muchos sitios —tres ReLU sobre 16, 32 y 64 canales, y
+ * tres pooling cuyo argmax puede cambiar—, así que perturbar una coordenada
+ * cruza algún codo con bastante probabilidad. En ese punto la función no es
+ * derivable a esa escala y la diferencia finita mide otra cosa. Se barrió el
+ * paso entre 3e-5 y 1e-2, y no hay ninguna ventana limpia: por debajo domina la
+ * cancelación de float32 y por encima, los codos. Lo mejor está en 1e-3, con la
+ * mediana en 8e-04 y alrededor del 13% de coordenadas por encima de 1e-2. Se
+ * probó también con una pérdida cuadrática, sin cancelación, y sale igual: es
+ * una propiedad de la arquitectura, no del código.
+ *
+ * De ahí el criterio: la mediana y el percentil, no el peor caso. Un fallo de
+ * cableado mueve la distribución entera, y así se comprobó mutando las cuatro
+ * conversiones. La verificación fina de esta red es la paridad contra PyTorch,
+ * que compara gradiente contra gradiente y no usa diferencias finitas.
+ */
+void TestCrnnOcr() {
+  std::cout << "🧪 [Test 27] CRNN de OCR: formas y gradientes... " << std::flush;
+
+  // El lote y los pasos deben ser distintos: con 2 y 2, las dos conversiones
+  // entre `[T, B, K]` y `[B, T, K]` son la misma permutación y confundir una con
+  // la otra no cambiaría nada. Se comprobó: la mutación pasaba desapercibida.
+  const int kClasses = 5, kHidden = 4, kBatch = 2, kWidth = 12;
+  const int kSteps = CRNNModel::TimestepsFor(kWidth);
+
+  ManualSeed(21);
+  CRNNModel crnn(1, kHidden, kClasses);
+
+  Tensor x({kBatch, 1, CRNNModel::kInputHeight, kWidth});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.5f * std::sin(0.37f * static_cast<float>(i)) + 0.15f;
+  }
+
+  // 1. Una predicción por columna superviviente, no una por imagen. Es la
+  //    diferencia entre leer una palabra y clasificar un carácter suelto.
+  const Tensor probe = crnn.Forward(x);
+  Check(probe.Shape() == std::vector<int>({kBatch, kSteps, kClasses}),
+        "la salida del CRNN deberia ser [batch, tiempo, clases]");
+  Check(kSteps == kWidth / 4, "el CRNN no reduce el ancho en un factor de 4");
+
+  // 2. La geometría de entrada se valida en vez de producir basura.
+  bool threw = false;
+  try {
+    Tensor bad({1, 1, CRNNModel::kInputHeight + 1, kWidth});
+    crnn.Forward(bad);
+  } catch (const std::invalid_argument&) { threw = true; }
+  Check(threw, "el CRNN acepto una imagen con el alto equivocado");
+
+  threw = false;
+  try {
+    Tensor bad({1, 1, CRNNModel::kInputHeight, kWidth + 1});
+    crnn.Forward(bad);
+  } catch (const std::invalid_argument&) { threw = true; }
+  Check(threw, "el CRNN acepto un ancho que no es multiplo de 4");
+
+  // 3. Gradientes de toda la red. Los pesos de la pérdida varían por posición
+  //    —una suma simple no distinguiría un intercambio entre pasos temporales o
+  //    entre muestras— y llevan un factor común que solo sirve para levantar los
+  //    gradientes por encima del suelo de ruido: al ser lineal, no altera
+  //    ninguno de los errores relativos que se miden.
+  Tensor w({kBatch, kSteps, kClasses});
+  for (size_t i = 0; i < w.TotalSize(); ++i) {
+    w[i] = 200.0f * (0.5f + 0.5f * std::cos(1.7f * static_cast<float>(i)));
+  }
+  auto loss_of = [&]() {
+    Tensor y = crnn.Forward(x);
+    double s = 0.0;
+    for (size_t i = 0; i < y.TotalSize(); ++i) s += static_cast<double>(y[i]) * w[i];
+    return s;
+  };
+
+  loss_of();
+  Tensor dout(w.Shape());
+  for (size_t i = 0; i < w.TotalSize(); ++i) dout[i] = w[i];
+  Tensor dx = crnn.Backward(dout);
+  Check(dx.Shape() == x.Shape(), "dx del CRNN no tiene la forma de la imagen");
+
+  const float eps = 1e-3f;
+  const double kFloor = 1e-2;  // por debajo, el error relativo es ruido
+  std::vector<double> errors;
+
+  auto sample = [&](Tensor& value, const Tensor& grad, size_t stride) {
+    for (size_t i = 0; i < value.TotalSize(); i += stride) {
+      const float orig = value[i];
+      value[i] = orig + eps; const double lp = loss_of();
+      value[i] = orig - eps; const double lm = loss_of();
+      value[i] = orig;
+      const double numeric = (lp - lm) / (2.0 * eps);
+      if (std::max(std::abs(numeric), std::abs(static_cast<double>(grad[i]))) < kFloor) continue;
+      errors.push_back(RelativeError(numeric, grad[i]));
+    }
+  };
+
+  const std::vector<Tensor*> params = crnn.GetParameters();
+  const std::vector<Tensor*> grads = crnn.GetGradients();
+  Check(params.size() == grads.size(), "el CRNN no alinea parametros y gradientes");
+  for (size_t t = 0; t < params.size(); ++t) {
+    sample(*params[t], *grads[t], std::max<size_t>(1, params[t]->TotalSize() / 8));
+  }
+  const size_t n_params = errors.size();
+  sample(x, dx, 7);
+
+  Check(n_params > 40, "se comprobaron muy pocos parametros del CRNN: " + std::to_string(n_params));
+  Check(errors.size() - n_params > 40,
+        "se comprobaron muy pocas entradas de dx del CRNN: " + std::to_string(errors.size() - n_params));
+
+  std::sort(errors.begin(), errors.end());
+  const double median = errors[errors.size() / 2];
+  const double p95 = errors[static_cast<size_t>(errors.size() * 0.95)];
+  size_t outliers = 0;
+  for (double e : errors) {
+    if (e > 1e-2) ++outliers;
+  }
+
+  Check(median < 5e-3, "la mediana del error relativo del CRNN es " + std::to_string(median));
+  Check(p95 < 1.5e-1, "el percentil 95 del error relativo del CRNN es " + std::to_string(p95));
+  Check(outliers * 10 < errors.size() * 3,
+        "el " + std::to_string(100 * outliers / errors.size()) +
+            "% de las coordenadas del CRNN supera 1e-2: son demasiadas para ser cruces de ReLU");
+
+  std::cout << "PASADO ✅ (" << n_params << " params, " << errors.size() - n_params
+            << " dx; mediana " << median << ", p95 " << p95 << ", " << outliers
+            << " sobre 1e-2)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -1577,6 +1712,7 @@ int main() {
   TestParallelDeterminism();
   TestBiLstmDirectionality();
   TestGradientCheckBiLstm();
+  TestCrnnOcr();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
