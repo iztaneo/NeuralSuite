@@ -50,6 +50,7 @@ comparación queda fuera de tolerancia.
 | `gpt`  | Pérdida, logits y los 28 gradientes de parámetros del `GPTModel`       |
 | `lstm` | Pérdida, secuencia de salida, `dx` y los 4 gradientes frente a `nn.LSTM` |
 | `bilstm` | Lo mismo con `bidirectional=True`: 8 gradientes, y cada mitad de la salida por separado |
+| `crnn` | El OCR completo: logits, `dx` hacia la imagen y los 16 gradientes frente a `src/ocr.py` |
 
 ## Diferencias que se controlan
 
@@ -72,6 +73,24 @@ cálculo bajo prueba:
   ambas implementaciones. Las dos mitades se comparan además por separado: si
   se hubieran intercambiado al concatenar, el error agregado podría quedar
   disimulado por el de la otra mitad.
+- **Conv2D.** `nn.Conv2d` guarda `[out, in, kh, kw]`, igual que `Conv2D`, así
+  que aquí tampoco hay nada que convertir. La capa densa final del CRNN sí se
+  transpone, como todas las densas.
+
+## El caso del CRNN
+
+Es el único donde la tolerancia de `1e-3` no basta, y conviene saber por qué. El
+gradiente de un peso de convolución es una suma sobre todas las posiciones del
+lote y de la imagen —miles de términos—, y el orden en que se acumulan no
+coincide entre las dos implementaciones. En float32 eso se nota: `conv2.weight`
+sale en 2.3e-03.
+
+Por eso `export_crnn.py` calcula además el mismo modelo en float64 y guarda esos
+gradientes como referencia. `compare_crnn.py` solo declara un fallo si C++ se
+aparta de ese valor mucho más que PyTorch en float32. En la configuración
+actual, ambos se apartan por igual —6.1e-03 y 8.3e-03—, así que la discrepancia
+es redondeo. Es el mismo criterio que `precision_probe.py` aplica al GPT, y la
+razón por la que ninguno de los dos usa un umbral fijo a ojo.
 
 ## Sobre la tolerancia
 

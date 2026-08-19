@@ -87,7 +87,7 @@ add_executable(benchmark benchmarks/benchmark.cpp)
 target_link_libraries(benchmark PRIVATE neuralsuite_static)
 
 # Binarios de las pruebas de paridad contra PyTorch (ver tools/parity/README.md).
-foreach(exe parity_gpt parity_lstm parity_bilstm)
+foreach(exe parity_gpt parity_lstm parity_bilstm parity_crnn)
   add_executable(${exe} tools/parity/${exe}.cpp)
   target_link_libraries(${exe} PRIVATE neuralsuite_static)
 endforeach()

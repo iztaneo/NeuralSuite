@@ -411,9 +411,15 @@ arquitectura no es la que declara. La referencia es
       podía acertar más que por azar; y las dos conversiones de disposición
       estaban escritas como funciones distintas cuando calculaban lo mismo.
       `demo_ocr` transcribe las 4 líneas del lote sin errores.
-- [ ] **Paridad del CRNN completo** contra `LLMRasec/src/ocr.py`, como
-      `gpt`, `lstm` y `bilstm`. Ejercita además el camino convolucional, que
-      hasta ahora solo tiene gradient check.
+- [x] **Paridad del CRNN completo** contra `LLMRasec/src/ocr.py`. Logits en
+      2.2e-05, `dx` hacia la imagen en 2.5e-04, y 15 de los 16 gradientes por
+      debajo de 3e-04. El que se sale —`conv2.weight`, en 2.3e-03— resultó ser
+      redondeo: el exportador calcula además el modelo en float64 y ambas
+      implementaciones se apartan de él por igual (6.1e-03 PyTorch, 8.3e-03
+      C++), porque el gradiente de una convolución suma miles de términos en un
+      orden que no coincide entre las dos. Ejercita de paso el camino
+      convolucional de extremo a extremo, que hasta ahora solo tenía gradient
+      check — y ya se vio con `GraphConv` que eso puede no comprobar nada.
 - [ ] **Lector de imagen.** PGM primero: cabecera trivial y sin compresión,
       suficiente para la paridad y para la demo. PNG necesita *inflate* de
       zlib, y eso es un añadido con entidad propia.
