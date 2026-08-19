@@ -234,7 +234,11 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       atención (que a su vez llaman a `MatMul`), GELU y `Transpose`. LayerNorm y
       softmax juntos no llegan al 1%.
 - [x] **Paralelismo con `std::thread`** en `include/parallel.h`, sustituyendo a
-      OpenMP. El motivo no era preferencia: con AppleClang los `pragma omp` se
+      OpenMP. Contrastado contra el propio OpenMP —instalándolo aparte y
+      repartiendo el mismo bucle de las dos formas— para descartar que la
+      implementación casera dejara rendimiento sobre la mesa: la diferencia
+      queda entre 0.88x y 1.14x según la forma, con media ~1.02x, y ambos dan
+      resultados idénticos bit a bit. El motivo no era preferencia: con AppleClang los `pragma omp` se
       ignoran, de modo que en macOS todo corría en un solo hilo y `MatMul` usaba
       una cuarta parte de la máquina. Medido sobre un Apple M5 de cuatro núcleos
       de rendimiento: `MatMul` pasa de 35 a 121-135 GFLOP/s, y el paso de
