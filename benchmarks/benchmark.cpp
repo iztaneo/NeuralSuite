@@ -82,6 +82,12 @@ void BenchThreadScaling() {
   B.RandomNormal(0.0f, 1.0f);
 
   const int original = parallel::ThreadCount();
+
+  // El pool se crea en la primera llamada y despues no crece, asi que hay que
+  // forzarlo aqui con el numero maximo de hilos. Sin esto, empezar midiendo con
+  // pocos hilos lo dejaria con esa capacidad y las mediciones siguientes se
+  // recortarian a ella, dando un escalado plano que no es el real.
+  MatMul(A, B, C);
   double baseline = 0.0;
   for (int threads : {1, 2, 4, original}) {
     if (threads > original) continue;

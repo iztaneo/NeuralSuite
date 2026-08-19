@@ -79,7 +79,7 @@ y reparte sus filas entre hilos. Cada hilo escribe filas que nadie más toca, as
 que no hay reducción y **el resultado es idéntico bit a bit** al de un solo
 hilo: la comparación contra PyTorch devuelve exactamente los mismos números.
 Sobre un Apple M5, un paso de entrenamiento pasa de 119 ms a unos 52 ms, y
-`MatMul` escala 4.6x con los hilos disponibles. Las cifras salen de
+`MatMul` escala unas 3.7x con los hilos disponibles. Las cifras salen de
 `./benchmark`, que además comprueba en cada ejecución que el reparto no altera
 el resultado.
 
