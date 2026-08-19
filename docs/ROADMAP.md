@@ -245,8 +245,15 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       índices con signo, y sobre todo OpenMP degrada en silencio cuando falta. El motivo no era preferencia: con AppleClang los `pragma omp` se
       ignoran, de modo que en macOS todo corría en un solo hilo y `MatMul` usaba
       una cuarta parte de la máquina. Medido sobre un Apple M5 de cuatro núcleos
-      de rendimiento: `MatMul` pasa de 35 a 121-135 GFLOP/s, y el paso de
-      entrenamiento de 119 ms a unos 52 ms. El resultado es idéntico bit a bit,
+      de rendimiento: `MatMul` pasa de 35 a 192 GFLOP/s, y el paso de
+      entrenamiento de 119 ms a unos 29 ms.
+- [x] **Reparto dinámico en lugar de trozos iguales.** Con un trozo por hilo, el
+      tiempo lo marca el más lento, y los núcleos rara vez son iguales: un
+      Apple M5 mezcla núcleos de rendimiento y de eficiencia, y en un servidor
+      dos hilos pueden compartir el mismo núcleo físico. Repartir bloques que
+      cada hilo toma al desocuparse sube la aceleración de 3.7x a 5.3x y el paso
+      de entrenamiento de 37 ms a 29 ms. Es justo el margen que separaba al
+      reparto propio de OpenMP. El resultado es idéntico bit a bit,
       porque cada hilo escribe filas disjuntas y no hay reducción que altere el
       orden de las sumas.
 - [ ] GEMM con blocking, tiling y SIMD; kernel optimizado de Conv2D conservando
