@@ -9,18 +9,39 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ---
 
-## Estado actual
+## Lo que falta
 
-**55 puntos cerrados, 8 pendientes.** Lo que queda con algo incorrecto es el OCR; el resto son mejoras sobre código ya verificado.
+Nueve puntos, y solo uno de ellos es algo que hoy esté **mal**; el resto son
+mejoras sobre código ya verificado. Esa distinción es la que debería ordenar el
+trabajo, más que el número de fase.
 
-| Fase                       | Estado           | Fase              | Estado       |
-| -------------------------- | ---------------- | ----------------- | ------------ |
-| 00 Confianza y limpieza    | ✅               | 06 Serialización  | ✅           |
-| 01 Corrección crítica      | ✅               | 07 Runtime y build| ✅           |
-| 02 Tensor Core             | ✅ parcial       | 08 Tokenizador    | ✅ parcial   |
-| 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ✅ parcial   |
-| 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅ parcial   |
-| 05 Autograd                | ✅ parcial       | OCR (aparte)      | ⬜           |
+### Incorrecto hoy
+
+| | Fase | Qué pasa |
+| --- | --- | --- |
+| **OCR** | aparte | `CRNNModel` no decodifica imágenes: no hay lector de PNG/JPG, y su arquitectura (Conv + Linear) no corresponde a la de referencia en PyTorch, que usa BiLSTM. La demo declara su alcance, así que no engaña, pero tampoco hace OCR. |
+
+### Mejoras sobre lo verificado
+
+| | Fase | Nota |
+| --- | --- | --- |
+| `gather` y convolución como primitivas de autograd | 05 | Continúa el motor; trabajo de tamaño propio. |
+| Migrar las capas al autograd | 05 | Sustituiría código verificado contra PyTorch por código sin comprobar. El cambio más grande y el más arriesgado. |
+| BPE propio | 08 | Reduciría la longitud de las secuencias; hoy un carácter no ASCII ocupa varios tokens. |
+| Estado del generador por hilo | 07 | El RNG es global; no es seguro usarlo desde varios hilos. Hoy nadie lo hace. |
+
+### Rendimiento
+
+| | Fase | Nota |
+| --- | --- | --- |
+| Intrínsecos SIMD por arquitectura | 09 | Hoy el bucle interno lo autovectoriza el compilador. |
+| Kernel optimizado de Conv2D | 09 | Conservando el actual como oráculo de referencia. |
+| KV cache contiguo | 09 | Solo afecta a la generación token a token. |
+| Strides y `Transpose` como vista | 02 | **Medido: 14% de las reservas y sin efecto en el reloj.** Gana sentido junto al autograd, no antes. |
+
+---
+
+## Estado por área
 
 | Área                              | Estado                                                        |
 | --------------------------------- | ------------------------------------------------------------- |
@@ -32,6 +53,42 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 | API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
 | Autograd                          | ✅ motor, primitivas y LayerNorm compuesta; capas sin migrar     |
 | Rendimiento                       | ✅ 4.5x medido; falta SIMD explícito y kernel de Conv2D          |
+
+| Fase                       | Estado           | Fase              | Estado       |
+| -------------------------- | ---------------- | ----------------- | ------------ |
+| 00 Confianza y limpieza    | ✅               | 06 Serialización  | ✅           |
+| 01 Corrección crítica      | ✅               | 07 Runtime y build| ✅ parcial   |
+| 02 Tensor Core             | ✅ parcial       | 08 Tokenizador    | ✅ parcial   |
+| 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ✅ parcial   |
+| 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅           |
+| 05 Autograd                | ✅ parcial       | OCR (aparte)      | ⬜           |
+
+El recuento sale del propio documento, no de un número escrito a mano —que ya
+divergió tres veces—:
+
+```bash
+echo "cerrados: $(grep -c '^- \[x\]' docs/ROADMAP.md)  pendientes: $(grep -c '^- \[ \]' docs/ROADMAP.md)"
+```
+
+---
+
+## Rendimiento medido
+
+Todas las cifras salen de `./benchmark` sobre un Apple M5, y todos los cambios
+conservan el resultado **idéntico bit a bit**: la paridad con PyTorch devuelve
+los mismos números después de cada uno.
+
+| Cambio | Paso de entrenamiento | `MatMul` |
+| --- | --- | --- |
+| Punto de partida (un solo hilo, OpenMP ignorado en macOS) | 119 ms | 35 GF |
+| Reparto entre hilos con `std::thread` | 52 ms | 130 GF |
+| Reparto dinámico en vez de trozos iguales | 29 ms | 192 GF |
+| Bloqueo de registros: cuatro filas de `C` a la vez | **27 ms** | **232 GF** |
+
+Dos resultados negativos que conviene no repetir: reducir la memoria reservada
+de 118 MB a 72 MB **no movió el reloj**, y el bloqueo de cache en el GEMM **no
+aportó nada** —a veces empeoraba—. En ambos casos la intuición apuntaba a un
+sitio y la medición a otro.
 
 ---
 
@@ -193,7 +250,7 @@ sentido. Ahora la carga rechaza, indicando el motivo, un archivo de otra
 arquitectura, truncado, con un byte alterado, o sin cabecera. Los pesos
 guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 
-## Fase 07 — Runtime y build portable ✅
+## Fase 07 — Runtime y build portable ✅ (parcial)
 
 `cb0c07d`, `49ef343`
 
@@ -227,7 +284,7 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 - [ ] BPE propio, para que las secuencias no crezcan tanto: en el tokenizador
       de bytes un carácter no ASCII ocupa varios tokens.
 
-## Fase 09 — Rendimiento ⬜
+## Fase 09 — Rendimiento ✅ (parcial)
 
 - [x] **Perfilado antes de optimizar.** `MatMul` resultó ser el 80% del tiempo
       de un paso de entrenamiento; el resto se reparte entre los bucles de
@@ -276,7 +333,7 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       por esa rotación con su gradient check, y actualizar la implementación de
       referencia en PyTorch para que la comparación siga siendo válida.
 
-## Fase 10 — Ecosistema ✅ (parcial)
+## Fase 10 — Ecosistema ✅
 
 `cb0c07d`, `49ef343`
 
