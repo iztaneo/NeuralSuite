@@ -2683,8 +2683,80 @@ void TestConv2DRapidaContraReferencia() {
     peor = std::max({peor, e_salida, e_peso, e_sesgo, e_entrada});
   }
 
+  // Anidar reparto dentro de reparto. Conv2D reparte por imagen del lote y
+  // dentro llama a MatMul, que reparte por filas. El guardia que evita volver a
+  // pedir el pool estando dentro de el solo marcaba a los hilos trabajadores, y
+  // no al que hace la llamada, que tambien ejecuta una porcion. Resultado: se
+  // pisaba la tarea en vuelo y la espera de fuera no despertaba nunca. Estuvo
+  // latente hasta que algo anido de verdad.
+  {
+    std::vector<int> conteo(200, 0);
+    parallel::ParallelFor(200, 1, [&](int desde, int hasta) {
+      for (int i = desde; i < hasta; ++i) {
+        parallel::ParallelFor(20, 1, [&](int d2, int h2) {
+          for (int j = d2; j < h2; ++j) conteo[i] += 1;
+        });
+      }
+    });
+    long suma = 0;
+    for (int v : conteo) suma += v;
+    Check(suma == 200 * 20,
+          "el reparto anidado no ejecuto todo el trabajo: " + std::to_string(suma));
+  }
+
+  // El reparto entre hilos de Conv2D es por imagen del lote, y en el paso hacia
+  // atras los gradientes de los pesos suman sobre todo el lote. Esa reduccion se
+  // hace aparte, en orden fijo, justamente para que el resultado no dependa de
+  // cuantos hilos haya. Si algun dia se sustituye por una suma directa desde los
+  // hilos, seguiria pasando la comparacion contra la referencia -el error
+  // seguiria siendo de redondeo- pero el entrenamiento dejaria de ser
+  // reproducible. Esto lo detecta.
+  {
+    const int hilos_originales = parallel::ThreadCount();
+    Conv2D capa(8, 12, 3, 1, 1);
+    Tensor x({6, 8, 10, 14});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.5f * std::sin(0.23f * static_cast<float>(i)) - 0.1f;
+    }
+    Tensor dout({6, 12, 10, 14});
+    for (size_t i = 0; i < dout.TotalSize(); ++i) {
+      dout[i] = 0.3f * std::cos(0.11f * static_cast<float>(i));
+    }
+
+    parallel::ThreadCount() = 1;
+    capa.Forward(x);
+    const Tensor dx_serie = capa.Backward(dout);
+    const Tensor dw_serie = *capa.GetGradients()[0];
+    const Tensor db_serie = *capa.GetGradients()[1];
+
+    parallel::ThreadCount() = std::max(4, hilos_originales);
+    capa.Forward(x);
+    const Tensor dx_hilos = capa.Backward(dout);
+    parallel::ThreadCount() = hilos_originales;
+
+    bool iguales = dx_serie.TotalSize() == dx_hilos.TotalSize();
+    for (size_t i = 0; iguales && i < dx_serie.TotalSize(); ++i) {
+      iguales = dx_serie[i] == dx_hilos[i];
+    }
+    Check(iguales, "dx de Conv2D cambia con el numero de hilos");
+
+    const Tensor& dw_hilos = *capa.GetGradients()[0];
+    const Tensor& db_hilos = *capa.GetGradients()[1];
+    bool pesos_iguales = true;
+    for (size_t i = 0; pesos_iguales && i < dw_serie.TotalSize(); ++i) {
+      pesos_iguales = dw_serie[i] == dw_hilos[i];
+    }
+    Check(pesos_iguales, "dW de Conv2D cambia con el numero de hilos");
+    bool sesgos_iguales = true;
+    for (size_t i = 0; sesgos_iguales && i < db_serie.TotalSize(); ++i) {
+      sesgos_iguales = db_serie[i] == db_hilos[i];
+    }
+    Check(sesgos_iguales, "db de Conv2D cambia con el numero de hilos");
+  }
+
   std::cout << "PASADO ✅ (" << (sizeof(casos) / sizeof(casos[0]))
-            << " configuraciones; peor error relativo: " << peor << ")\n"
+            << " configuraciones; peor error relativo: " << peor
+            << "; identico con 1 y con varios hilos)\n"
             << std::flush;
 }
 

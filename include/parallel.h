@@ -107,7 +107,25 @@ class Pool {
 
     // El llamante trabaja tambien: asi con un solo hilo no hay ningun coste de
     // sincronizacion, y con varios se aprovecha su nucleo.
-    fn(0);
+    //
+    // Y mientras lo hace tiene que contar como dentro de la region paralela.
+    // WorkerLoop marca sus hilos, pero el llamante no se marcaba a si mismo, de
+    // modo que si su porcion volvia a pedir reparto -por ejemplo una
+    // convolucion que reparte por lote y llama a MatMul, que reparte por
+    // filas- se reentraba en el pool con trabajo aun en vuelo: se pisaba la
+    // tarea, se adelantaba la generacion y la espera de fuera no se despertaba
+    // nunca. El bloqueo era real y estuvo latente hasta que algo anido de
+    // verdad.
+    {
+      class Marca {
+       public:
+        Marca() : previo_(InsideParallelRegion()) { InsideParallelRegion() = true; }
+        ~Marca() { InsideParallelRegion() = previo_; }
+       private:
+        bool previo_;
+      } marca;
+      fn(0);
+    }
 
     std::unique_lock<std::mutex> lock(mutex_);
     work_done_.wait(lock, [this] { return remaining_ == 0; });

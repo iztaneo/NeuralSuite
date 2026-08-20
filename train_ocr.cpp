@@ -213,6 +213,8 @@ int main(int argc, char** argv) {
 
   std::string error;
   std::vector<Muestra> entrenamiento, validacion;
+  std::printf("decodificando las imagenes del corpus...\n");
+  std::fflush(stdout);
   const auto t_carga = std::chrono::steady_clock::now();
   if (!CargarParticion(raiz, "train", alto, ancho, &entrenamiento, &error) ||
       !CargarParticion(raiz, "val", alto, ancho, &validacion, &error)) {
@@ -255,6 +257,13 @@ int main(int argc, char** argv) {
 
     double perdida_total = 0.0;
     int lotes = 0;
+    // Cada epoca son varios minutos. Sin senal dentro de ella, seguir el
+    // entrenamiento con `tail -f` es mirar una pantalla quieta y no poder
+    // distinguir «va lento» de «se colgo».
+    const int total_lotes = static_cast<int>(orden.size() / lote);
+    const int cada = std::max(1, total_lotes / 10);
+    const auto t_epoca = std::chrono::steady_clock::now();
+
     for (size_t inicio = 0; inicio + lote <= orden.size(); inicio += lote) {
       optimizador.ZeroGrad();
 
@@ -280,6 +289,16 @@ int main(int argc, char** argv) {
       d.Reshape(logits.Shape());
       modelo.Backward(d);
       optimizador.Step();
+
+      if (lotes % cada == 0 || lotes == total_lotes) {
+        const double seg = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t_epoca).count();
+        const double restante = lotes ? seg * (total_lotes - lotes) / lotes : 0.0;
+        std::printf("  epoca %d: %d/%d lotes  perdida %.4f  %.0f img/s  quedan %.0f s\n",
+                    epoca, lotes, total_lotes, perdida_total / lotes,
+                    lotes * lote / std::max(seg, 1e-9), restante);
+        std::fflush(stdout);
+      }
     }
 
     const Evaluacion e = Evaluar(modelo, validacion, alto, ancho, lote, vocabulario);

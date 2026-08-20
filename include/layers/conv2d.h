@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include "../layer.h"
+#include "../parallel.h"
 #include "../parameter.h"
 
 namespace neuralsuite {
@@ -173,6 +174,20 @@ class Conv2DReference : public Layer {
  * No da los mismos bits que `Conv2DReference`: la suma se hace en otro orden y
  * en punto flotante eso importa. Lo que si debe cumplir es coincidir dentro del
  * redondeo, y de eso se encarga la prueba que las contrasta.
+ *
+ * El reparto entre hilos se hace **por el lote**, no dentro de la
+ * multiplicacion. `MatMul` reparte por filas del resultado, y en una
+ * convolucion esas filas son los canales de salida: 16, 32 o 64. Con el minimo
+ * de trabajo por hilo que exige `ParallelFor`, eso dejaba la primera
+ * convolucion en un solo hilo y la segunda en dos, teniendo diez. Las imagenes
+ * de un lote, en cambio, son trabajos independientes y hay tantas como haga
+ * falta.
+ *
+ * En el paso hacia atras los gradientes de los pesos suman sobre todo el lote,
+ * que es una reduccion. Para que el resultado no dependa de cuantos hilos haya,
+ * cada imagen escribe su contribucion en su propio hueco y la suma se hace
+ * despues en orden fijo. Cuesta memoria y a cambio el gradiente es el mismo con
+ * uno o con diez hilos.
  */
 class Conv2D : public Layer {
  public:
@@ -219,15 +234,20 @@ class Conv2D : public Layer {
     const Tensor pesos = weight_.Value().View({out_channels_, k});
 
     Tensor output({batch, out_channels_, out_h, out_w});
-    Tensor columnas({k, posiciones});
-    Tensor parcial;
 
-    for (int b = 0; b < batch; ++b) {
-      Im2Col(input, b, height, width, out_h, out_w, &columnas);
-      MatMul(pesos, columnas, parcial);
-      std::memcpy(output.Data() + static_cast<size_t>(b) * out_channels_ * posiciones,
-                  parcial.Data(), static_cast<size_t>(out_channels_) * posiciones * sizeof(float));
-    }
+    // Cada imagen del lote es independiente: no hay reduccion, asi que el
+    // resultado es identico bit a bit al de un solo hilo.
+    parallel::ParallelFor(batch, /*min_per_thread=*/1, [&](int desde, int hasta) {
+      Tensor columnas({k, posiciones});
+      Tensor parcial;
+      for (int b = desde; b < hasta; ++b) {
+        Im2Col(input, b, height, width, out_h, out_w, &columnas);
+        MatMul(pesos, columnas, parcial);
+        std::memcpy(output.Data() + static_cast<size_t>(b) * out_channels_ * posiciones,
+                    parcial.Data(),
+                    static_cast<size_t>(out_channels_) * posiciones * sizeof(float));
+      }
+    });
 
     // El sesgo se suma al final: meterlo en la matriz obligaria a anadir una
     // fila de unos a las columnas, y eso cuesta mas memoria que este bucle.
@@ -261,33 +281,54 @@ class Conv2D : public Layer {
     const Tensor pesos = weight_.Value().View({out_channels_, k});
     const Tensor pesos_t = Transpose(pesos);   // [k, canales_salida]
 
-    Tensor columnas({k, posiciones});
-    Tensor dpesos_lote, dcolumnas;
+    // Un hueco por imagen para las contribuciones a los gradientes. Sumarlas
+    // aqui mismo desde varios hilos seria una carrera, y hacerlo con bloqueos
+    // dejaria el resultado a merced del orden de llegada.
+    const size_t tam_pesos = static_cast<size_t>(out_channels_) * k;
+    std::vector<float> dpesos_por_imagen(tam_pesos * batch, 0.0f);
+    std::vector<float> dsesgo_por_imagen(static_cast<size_t>(out_channels_) * batch, 0.0f);
 
-    for (int b = 0; b < batch; ++b) {
-      // dout de este lote, leido como [canales_salida, posiciones].
+    parallel::ParallelFor(batch, /*min_per_thread=*/1, [&](int desde, int hasta) {
+      Tensor columnas({k, posiciones});
+      Tensor dpesos_lote, dcolumnas;
       Tensor dout_2d({out_channels_, posiciones});
-      std::memcpy(dout_2d.Data(),
-                  dout.Data() + static_cast<size_t>(b) * out_channels_ * posiciones,
-                  static_cast<size_t>(out_channels_) * posiciones * sizeof(float));
 
-      // dW = dout * columnas^T, acumulado sobre el lote.
-      Im2Col(last_input_, b, height, width, out_h, out_w, &columnas);
-      const Tensor columnas_t = Transpose(columnas);   // [posiciones, k]
-      MatMul(dout_2d, columnas_t, dpesos_lote);
-      for (size_t i = 0; i < dweight.TotalSize(); ++i) dweight[i] += dpesos_lote[i];
+      for (int b = desde; b < hasta; ++b) {
+        // dout de esta imagen, leido como [canales_salida, posiciones].
+        std::memcpy(dout_2d.Data(),
+                    dout.Data() + static_cast<size_t>(b) * out_channels_ * posiciones,
+                    static_cast<size_t>(out_channels_) * posiciones * sizeof(float));
 
-      // dbias = suma de dout sobre las posiciones.
-      for (int oc = 0; oc < out_channels_; ++oc) {
-        const float* fila = dout_2d.Data() + static_cast<size_t>(oc) * posiciones;
-        float suma = 0.0f;
-        for (int i = 0; i < posiciones; ++i) suma += fila[i];
-        dbias[oc] += suma;
+        // dW = dout * columnas^T
+        Im2Col(last_input_, b, height, width, out_h, out_w, &columnas);
+        const Tensor columnas_t = Transpose(columnas);   // [posiciones, k]
+        MatMul(dout_2d, columnas_t, dpesos_lote);
+        std::memcpy(dpesos_por_imagen.data() + tam_pesos * b, dpesos_lote.Data(),
+                    tam_pesos * sizeof(float));
+
+        // dbias = suma de dout sobre las posiciones.
+        for (int oc = 0; oc < out_channels_; ++oc) {
+          const float* fila = dout_2d.Data() + static_cast<size_t>(oc) * posiciones;
+          float suma = 0.0f;
+          for (int i = 0; i < posiciones; ++i) suma += fila[i];
+          dsesgo_por_imagen[static_cast<size_t>(out_channels_) * b + oc] = suma;
+        }
+
+        // dColumnas = W^T * dout, y de ahi se reparte a la imagen. Cada imagen
+        // escribe en su propia franja de dx, asi que no hay carrera.
+        MatMul(pesos_t, dout_2d, dcolumnas);
+        Col2Im(dcolumnas, b, height, width, out_h, out_w, &dx);
       }
+    });
 
-      // dColumnas = W^T * dout, y de ahi se reparte a la imagen.
-      MatMul(pesos_t, dout_2d, dcolumnas);
-      Col2Im(dcolumnas, b, height, width, out_h, out_w, &dx);
+    // La reduccion, en orden de imagen y en un solo hilo: asi el gradiente sale
+    // igual con uno o con diez.
+    for (int b = 0; b < batch; ++b) {
+      const float* origen = dpesos_por_imagen.data() + tam_pesos * b;
+      for (size_t i = 0; i < tam_pesos; ++i) dweight[i] += origen[i];
+      for (int oc = 0; oc < out_channels_; ++oc) {
+        dbias[oc] += dsesgo_por_imagen[static_cast<size_t>(out_channels_) * b + oc];
+      }
     }
     return dx;
   }
