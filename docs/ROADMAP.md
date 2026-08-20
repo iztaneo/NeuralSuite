@@ -27,6 +27,7 @@ que ordena el trabajo, más que el número de fase.
 | --- | --- | --- |
 | `gather` y convolución como primitivas de autograd | 05 | Continúa el motor; trabajo de tamaño propio. |
 | `ReLU` y `MaxPool2D` paralelizados | 09 | El cuello actual: 15.2 ms de un paso de 28.2, el **53.8%**. Son bucles elementales sin reparto entre hilos. |
+| Tesseract como referencia en `tools/` | 10 | Mismo papel que PyTorch y Pillow: instrumento de medida, nunca dentro de la biblioteca. Sin él, «54% de error» no dice si estamos lejos o cerca. Ya está instalado en la máquina de desarrollo. |
 | Kernel optimizado de `MultiHeadAttention` | 09 | Mismo patrón, encontrado con un barrido de «capas con bucles profundos que no llaman a `MatMul`»: calcula `Q·Kᵀ` y `puntuaciones·V` con siete bucles anidados. **No medido**: se sabe que el patrón coincide, no cuánto pesa. Afecta a `train_llm`, que nadie ha ejecutado en volumen. |
 | Migrar las capas al autograd | 05 | Sustituiría código verificado contra PyTorch por código sin comprobar. El cambio más grande y el más arriesgado. |
 | BPE propio | 08 | Reduciría la longitud de las secuencias; hoy un carácter no ASCII ocupa varios tokens. |
@@ -465,6 +466,10 @@ arquitectura no es la que declara. La referencia es
       resto del canal —encontrar dónde hay texto y separarlo en renglones— no
       existe. Son tres piezas, y el orden importa porque cada una depende de la
       anterior:
+      La vara de medir es Tesseract, que sobre la página original da **0.1%**
+      frente a nuestro **54%**. Esa es la distancia real a un OCR maduro, y
+      conviene tenerla delante.
+
       Cuánto se aleja cada caso de lo que el modelo sabe leer, medido en error
       de carácter: **2.3%** en la validación sintética, **54%** en la página de
       la Ilíada —impresa, pero en serif pequeña y con renglones cinco veces más
@@ -474,6 +479,15 @@ arquitectura no es la que declara. La referencia es
       De la Ilíada salió además una corrección: se atribuía el fallo a los
       acentos y a los espacios, y son 3.5 puntos de 53.6. El grueso es el
       modelo leyendo mal un régimen que no vio.
+
+      Nota metodológica que casi se pasa por alto: la transcripción de
+      referencia de esa página la escribió el asistente **leyendo la imagen**,
+      con la misma facultad que puede rellenar palabras plausibles. Medir un OCR
+      contra algo que alucina no es medir. Se verificó contra Tesseract: 16 de
+      las 18 líneas coinciden carácter a carácter, y las dos discrepancias son
+      `LIBRO I` frente a `LIBRO 1` y `Leto;` frente a `Leto:` — dos caracteres
+      de 853, el 0.23%. La referencia se sostiene, pero el orden correcto era
+      comprobarlo antes de publicar el número.
       - [x] **Cortador de renglones** (`include/image/renglones.h`, `ocr_cli
         --renglones`). Proyección horizontal con umbral de Otsu, que sale del
         histograma en vez de ser una constante. Encuentra los 18 renglones de la
