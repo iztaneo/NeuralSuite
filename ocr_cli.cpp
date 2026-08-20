@@ -35,6 +35,9 @@ void PrintUsage() {
             << "  --len n        caracteres de la linea sintetica (por defecto 10).\n"
             << "  --pesos ruta   archivo de pesos (por defecto release/ocr_texto.ns).\n"
             << "  --oculto n     tamano oculto del modelo; debe coincidir con los pesos.\n"
+            << "  --renglones    separar la imagen en renglones y transcribir cada uno.\n"
+            << "                 Necesario para una pagina: sin esto la imagen entera se\n"
+            << "                 trata como una sola linea y se reduce a una miniatura.\n"
             << "  --no-invertir  no invertir el gris. Por defecto se invierte, porque\n"
             << "                 un documento trae tinta oscura sobre papel claro y la\n"
             << "                 red espera trazo claro sobre fondo oscuro.\n";
@@ -48,6 +51,7 @@ int main(int argc, char* argv[]) {
   int word_len = 10;
   bool invert = true;
   int oculto = 64;
+  bool por_renglones = false;
   std::string pesos = ReleasePath("ocr_texto.ns");
 
   for (int i = 1; i < argc; ++i) {
@@ -62,6 +66,8 @@ int main(int argc, char* argv[]) {
       pesos = argv[++i];
     } else if (arg == "--oculto" && i + 1 < argc) {
       oculto = std::stoi(argv[++i]);
+    } else if (arg == "--renglones") {
+      por_renglones = true;
     } else if (arg == "--no-invertir") {
       invert = false;
     } else if (arg == "--help") {
@@ -119,6 +125,38 @@ int main(int argc, char* argv[]) {
     Tensor targets;
     SynthTextGenerator::Generate(input, targets, /*batch=*/1, word_len,
                                  static_cast<int>(vocab.size()));
+  }
+
+  if (por_renglones) {
+    if (image_path.empty()) {
+      std::cerr << "ERROR: --renglones necesita una imagen (--image).\n";
+      return 1;
+    }
+    image::Bitmap pagina;
+    std::string error;
+    if (!image::Load(image_path, &pagina, &error)) {
+      std::cerr << "ERROR: " << error << "\n";
+      return 1;
+    }
+    const std::vector<image::Renglon> renglones = image::DetectarRenglones(pagina);
+    std::cout << "\n------------------------------------------------------------\n"
+              << "   " << renglones.size() << " renglones detectados\n"
+              << "------------------------------------------------------------\n" << std::flush;
+
+    std::ofstream salida(out_path);
+    for (size_t i = 0; i < renglones.size(); ++i) {
+      const image::Bitmap recorte = image::RecortarRenglon(pagina, renglones[i]);
+      const Tensor entrada = image::RenglonATensor(recorte, CRNNModel::kInputHeight,
+                                                   CRNNModel::kWidthReduction, invert);
+      const std::string texto = ocr_model.DecodeWord(ocr_model.Forward(entrada), vocab);
+      std::printf("  %2zu  %3dx%-3d px  '%s'\n", i + 1, renglones[i].ancho, renglones[i].alto,
+                  texto.c_str());
+      if (salida.is_open()) salida << texto << "\n";
+    }
+    std::cout << "------------------------------------------------------------\n";
+    if (salida.is_open()) std::cout << "Resultado guardado en: '" << out_path << "'\n";
+    std::cout << "============================================================\n" << std::flush;
+    return 0;
   }
 
   const Tensor logits = ocr_model.Forward(input);

@@ -2853,6 +2853,115 @@ void TestLstmRapidaContraReferencia() {
             << std::flush;
 }
 
+/**
+ * @brief Separación de una imagen en renglones.
+ *
+ * La comprobación de verdad son las dos imágenes del repositorio —19 renglones
+ * en la página de la Ilíada, 3 bandas en el logotipo de Mitsubishi— pero esas no
+ * pueden vivir aquí: la prueba tiene que correr sin depender de archivos ni del
+ * directorio de trabajo. Se construyen bandas de tinta en memoria, con las
+ * posiciones conocidas de antemano.
+ */
+void TestSeparacionEnRenglones() {
+  std::cout << "🧪 [Test 32] Separación de una imagen en renglones... " << std::flush;
+  using namespace neuralsuite::image;
+
+  // Dibuja una banda horizontal de tinta entre dos columnas.
+  auto banda = [](Bitmap* destino, int y0, int y1, int x0, int x1, uint8_t nivel) {
+    for (int y = y0; y <= y1; ++y) {
+      for (int x = x0; x <= x1; ++x) {
+        destino->pixels[static_cast<size_t>(y) * destino->width + x] = nivel;
+      }
+    }
+  };
+  auto lienzo = [](int w, int h, uint8_t fondo) {
+    Bitmap b;
+    b.width = w; b.height = h; b.channels = 1;
+    b.pixels.assign(static_cast<size_t>(w) * h, fondo);
+    return b;
+  };
+
+  // 1. Tres renglones separados, con márgenes distintos a cada lado.
+  {
+    Bitmap imagen = lienzo(100, 60, 245);
+    banda(&imagen, 5, 14, 10, 80, 20);
+    banda(&imagen, 25, 34, 30, 60, 20);
+    banda(&imagen, 45, 54, 0, 99, 20);
+
+    const std::vector<Renglon> r = DetectarRenglones(imagen);
+    Check(r.size() == 3, "se esperaban 3 renglones y salieron " + std::to_string(r.size()));
+    Check(r[0].y == 5 && r[0].alto == 10, "el primer renglon no esta donde se dibujo");
+    // El recorte lateral es lo que evita reescalar franjas de fondo vacio.
+    Check(r[0].x == 10 && r[0].ancho == 71, "el primer renglon no se recorto a lo ancho");
+    Check(r[1].x == 30 && r[1].ancho == 31, "el segundo renglon no se recorto a lo ancho");
+    Check(r[2].x == 0 && r[2].ancho == 100, "el tercer renglon, que ocupa todo, se recorto de mas");
+  }
+
+  // 2. Un acento queda despegado del cuerpo de la letra. Sin volver a unirlos,
+  //    saldria como un renglon propio y el modelo recibiria una mota suelta.
+  {
+    Bitmap imagen = lienzo(60, 40, 250);
+    banda(&imagen, 8, 9, 20, 24, 15);    // el acento
+    banda(&imagen, 12, 24, 10, 50, 15);  // el cuerpo, dos filas mas abajo
+    const std::vector<Renglon> r = DetectarRenglones(imagen);
+    Check(r.size() == 1, "el acento salio como un renglon aparte: " + std::to_string(r.size()));
+    Check(r[0].y == 8 && r[0].alto == 17, "el renglon unido no abarca el acento y el cuerpo");
+  }
+
+  // 3. Una mota de una fila no es un renglon.
+  {
+    Bitmap imagen = lienzo(60, 40, 250);
+    banda(&imagen, 5, 5, 30, 32, 10);     // mota
+    banda(&imagen, 20, 32, 5, 55, 10);    // renglon de verdad
+    const std::vector<Renglon> r = DetectarRenglones(imagen);
+    Check(r.size() == 1, "la mota se conto como renglon");
+    Check(r[0].y == 20, "se quedo con la mota en vez de con el renglon");
+  }
+
+  // 4. El umbral sale del histograma, no de una constante. Con poco contraste
+  //    —un escaneo gris sobre gris— un valor fijo como 128 fallaria: aqui los
+  //    dos niveles, 150 y 190, estan del mismo lado de ese corte.
+  {
+    Bitmap imagen = lienzo(80, 30, 190);
+    banda(&imagen, 10, 19, 20, 60, 150);
+    const std::vector<Renglon> r = DetectarRenglones(imagen);
+    Check(r.size() == 1, "no encontro el renglon de bajo contraste");
+    Check(r[0].y == 10 && r[0].alto == 10, "el renglon de bajo contraste salio mal delimitado");
+  }
+
+  // 5. El recorte deja margen para que la tinta ocupe la proporcion con la que
+  //    se entreno. Al ras, cada letra abarca mas pasos de la secuencia de los
+  //    que el modelo vio nunca, y aparecen caracteres insertados.
+  {
+    Bitmap imagen = lienzo(100, 60, 245);
+    banda(&imagen, 20, 39, 10, 90, 20);   // renglon de 20 px de alto
+    const std::vector<Renglon> r = DetectarRenglones(imagen);
+    Check(r.size() == 1, "no encontro el renglon");
+    const Bitmap recorte = RecortarRenglon(imagen, r[0]);
+    const double proporcion = static_cast<double>(r[0].alto) / recorte.height;
+    Check(std::abs(proporcion - kProporcionTintaEntrenamiento) < 0.08,
+          "el recorte deja la tinta ocupando " + std::to_string(proporcion) +
+              " del alto y se esperaba cerca de " +
+              std::to_string(kProporcionTintaEntrenamiento));
+
+    // Y el tensor sale con el alto que espera la red y un ancho multiplo de 4.
+    const Tensor t = RenglonATensor(recorte, 32, 4, /*invertir=*/true);
+    Check(t.Shape()[2] == 32, "el tensor del renglon no tiene 32 filas");
+    Check(t.Shape()[3] % 4 == 0, "el ancho del tensor no es multiplo de 4");
+  }
+
+  // 6. Una imagen sin tinta no produce renglones ni revienta.
+  {
+    const Bitmap vacia = lienzo(50, 50, 255);
+    Check(DetectarRenglones(vacia).empty(), "encontro renglones en una imagen en blanco");
+    Bitmap nada;
+    Check(DetectarRenglones(nada).empty(), "no soporto una imagen vacia");
+  }
+
+  std::cout << "PASADO ✅ (6 casos: posición, acentos, motas, bajo contraste, proporción)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -2889,6 +2998,7 @@ int main() {
   TestJpegDecoding();
   TestConv2DRapidaContraReferencia();
   TestLstmRapidaContraReferencia();
+  TestSeparacionEnRenglones();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

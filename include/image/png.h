@@ -32,25 +32,11 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "bitmap.h"
 #include "inflate.h"
 
 namespace neuralsuite {
 namespace image {
-
-/**
- * @struct Bitmap
- * @brief Imagen decodificada: 8 bits por canal, filas contiguas.
- *
- * `channels` es 1 (gris), 2 (gris + alfa), 3 (RGB) o 4 (RGBA).
- */
-struct Bitmap {
-  int width = 0;
-  int height = 0;
-  int channels = 0;
-  std::vector<uint8_t> pixels;
-
-  [[nodiscard]] bool Empty() const { return pixels.empty(); }
-};
 
 namespace detail {
 

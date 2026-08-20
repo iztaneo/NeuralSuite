@@ -53,7 +53,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
-#include "png.h"  // por la definicion de Bitmap
+#include "bitmap.h"
 
 namespace neuralsuite {
 namespace image {

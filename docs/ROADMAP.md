@@ -465,11 +465,15 @@ arquitectura no es la que declara. La referencia es
       resto del canal —encontrar dónde hay texto y separarlo en renglones— no
       existe. Son tres piezas, y el orden importa porque cada una depende de la
       anterior:
-      - **Cortador de renglones** por proyección horizontal de tinta.
-        Comprobado sobre las dos imágenes del repositorio antes de escribirlo:
-        encuentra 19 bandas en la página de la Ilíada (los 19 renglones, de
-        11–14 px) y 4 en el logotipo de Mitsubishi (dos del dibujo, de 187 y 94
-        px, y dos del texto, de 59). Generaliza; no hay que ajustarlo por caso.
+      - [x] **Cortador de renglones** (`include/image/renglones.h`, `ocr_cli
+        --renglones`). Proyección horizontal con umbral de Otsu, que sale del
+        histograma en vez de ser una constante. Encuentra los 18 renglones de la
+        Ilíada y separa el logotipo de Mitsubishi de sus dos palabras. El
+        recorte no es al ras: se calcula el margen que deja la tinta ocupando el
+        72% del alto, que es la proporción medida sobre 800 imágenes del corpus
+        — al ras, cada letra abarca más pasos de los que el modelo vio y aparecen
+        caracteres insertados. `MITSUBISHI` pasó de `MIlT5SUBlISHI` a
+        `MITPSUBISHI` y `MOTORS` de `M0OTO0O0RS` a `MOT0RS` solo con eso.
       - **Decidir qué banda es texto.** Filtrar por altura funcionaría en el
         logotipo y sería tropicalizar. La salida general es que lo decida el
         propio reconocedor por su confianza, lo que exige **ejemplos negativos
