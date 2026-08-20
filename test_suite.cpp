@@ -2594,6 +2594,100 @@ void TestJpegDecoding() {
             << std::flush;
 }
 
+/**
+ * @brief Conv2D rapida contra Conv2D de referencia.
+ *
+ * `Conv2D` reformula la convolucion como una multiplicacion de matrices, lo que
+ * la hace 55 veces mas rapida y, de paso, mucho mas facil de equivocar: hay
+ * indices calculados y reordenaciones de memoria donde antes solo habia bucles.
+ * `Conv2DReference` conserva la version literal, que se lee al lado de la
+ * formula, y aqui se contrastan.
+ *
+ * El criterio es el error relativo a la magnitud del tensor entero, no elemento
+ * a elemento. Dividir por un elemento que la cancelacion dejo casi en cero no
+ * mide el error, mide la cancelacion: con esa medida salian discrepancias de
+ * 9e-03 que resultaron no ser nada. Comprobado calculando la convolucion en
+ * doble precision: las dos implementaciones en float32 se apartan de ese valor
+ * por igual —2.3e-07 la de referencia y 2.0e-07 la rapida—, de modo que lo que
+ * las separa es el orden de las sumas y no un defecto.
+ */
+void TestConv2DRapidaContraReferencia() {
+  std::cout << "🧪 [Test 30] Conv2D por im2col contra la implementación literal... " << std::flush;
+
+  struct Caso { int b, ic, oc, h, w, k, s, p; const char* nota; };
+  const Caso casos[] = {
+      {2, 1, 16, 32, 128, 3, 1, 1, "conv1 del CRNN"},
+      {2, 16, 32, 16, 64, 3, 1, 1, "conv2 del CRNN"},
+      {2, 32, 64, 8, 32, 3, 1, 1, "conv3 del CRNN"},
+      {1, 3, 8, 12, 12, 3, 1, 0, "sin relleno"},
+      {2, 2, 4, 9, 11, 3, 2, 1, "paso 2"},
+      {1, 2, 3, 7, 7, 5, 1, 2, "nucleo 5x5"},
+      {3, 1, 2, 5, 5, 1, 1, 0, "nucleo 1x1"},
+      {1, 4, 4, 6, 6, 3, 3, 0, "paso igual al nucleo"},
+  };
+
+  // Error cuadratico medio de la diferencia, en proporcion a la magnitud del
+  // tensor de referencia.
+  auto error = [](const Tensor& a, const Tensor& b) {
+    double suma_err = 0.0, suma_ref = 0.0;
+    for (size_t i = 0; i < a.TotalSize(); ++i) {
+      const double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+      suma_err += d * d;
+      suma_ref += static_cast<double>(b[i]) * static_cast<double>(b[i]);
+    }
+    return std::sqrt(suma_err) / std::max(std::sqrt(suma_ref), 1e-12);
+  };
+
+  double peor = 0.0;
+  for (const Caso& c : casos) {
+    // La misma semilla antes de cada una: comparten pesos iniciales.
+    ManualSeed(99);
+    Conv2D rapida(c.ic, c.oc, c.k, c.s, c.p);
+    ManualSeed(99);
+    Conv2DReference referencia(c.ic, c.oc, c.k, c.s, c.p);
+
+    // Los sesgos nacen a cero en ambas; sin darles valor, la prueba no
+    // distinguiria una capa que los ignorase.
+    for (int i = 0; i < c.oc; ++i) {
+      const float v = 0.1f * (i % 5) - 0.2f;
+      (*rapida.GetParameters()[1])[i] = v;
+      (*referencia.GetParameters()[1])[i] = v;
+    }
+
+    Tensor x({c.b, c.ic, c.h, c.w});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.6f * std::sin(0.31f * static_cast<float>(i)) + 0.1f;
+    }
+
+    const Tensor y_rapida = rapida.Forward(x);
+    const Tensor y_ref = referencia.Forward(x);
+    Check(y_rapida.Shape() == y_ref.Shape(),
+          std::string(c.nota) + ": las dos convoluciones dan formas distintas");
+
+    Tensor dout(y_ref.Shape());
+    for (size_t i = 0; i < dout.TotalSize(); ++i) {
+      dout[i] = 0.4f * std::cos(0.17f * static_cast<float>(i));
+    }
+    const Tensor dx_rapida = rapida.Backward(dout);
+    const Tensor dx_ref = referencia.Backward(dout);
+
+    const double e_salida = error(y_rapida, y_ref);
+    const double e_peso = error(*rapida.GetGradients()[0], *referencia.GetGradients()[0]);
+    const double e_sesgo = error(*rapida.GetGradients()[1], *referencia.GetGradients()[1]);
+    const double e_entrada = error(dx_rapida, dx_ref);
+
+    Check(e_salida < 1e-5, std::string(c.nota) + ": la salida difiere en " + std::to_string(e_salida));
+    Check(e_peso < 1e-5, std::string(c.nota) + ": dW difiere en " + std::to_string(e_peso));
+    Check(e_sesgo < 1e-5, std::string(c.nota) + ": db difiere en " + std::to_string(e_sesgo));
+    Check(e_entrada < 1e-5, std::string(c.nota) + ": dx difiere en " + std::to_string(e_entrada));
+    peor = std::max({peor, e_salida, e_peso, e_sesgo, e_entrada});
+  }
+
+  std::cout << "PASADO ✅ (" << (sizeof(casos) / sizeof(casos[0]))
+            << " configuraciones; peor error relativo: " << peor << ")\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -2628,6 +2722,7 @@ int main() {
   TestCrnnOcr();
   TestImageDecoding();
   TestJpegDecoding();
+  TestConv2DRapidaContraReferencia();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

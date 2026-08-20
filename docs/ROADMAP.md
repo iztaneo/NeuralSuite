@@ -26,6 +26,7 @@ que ordena el trabajo, más que el número de fase.
 | | Fase | Nota |
 | --- | --- | --- |
 | `gather` y convolución como primitivas de autograd | 05 | Continúa el motor; trabajo de tamaño propio. |
+| Kernel optimizado del `BiLSTM` | 09 | Es el nuevo cuello: el 82.8% del paso, ahora que la convolución bajó al 8.9%. Sus puertas se calculan unidad a unidad y son cuatro multiplicaciones de matrices. |
 | Migrar las capas al autograd | 05 | Sustituiría código verificado contra PyTorch por código sin comprobar. El cambio más grande y el más arriesgado. |
 | BPE propio | 08 | Reduciría la longitud de las secuencias; hoy un carácter no ASCII ocupa varios tokens. |
 | Estado del generador por hilo | 07 | El RNG es global; no es seguro usarlo desde varios hilos. Hoy nadie lo hace. |
@@ -349,11 +350,14 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       **El bloqueo de cache no aportó nada** (a veces empeoraba): las matrices
       de estos tamaños ya caben, y lo que faltaba era reutilizar los datos ya
       cargados, no traerlos mejor.
-- [ ] Kernel optimizado de Conv2D, conservando el actual como oráculo. **Ya no
-      es especulativo: medido, las tres convoluciones son el 85.7% de un paso
-      de entrenamiento del CRNN** (16→32 el 44%, 32→64 el 35%), y el bucle no
-      usa el pool de hilos — corre en uno teniendo diez. `MatMul` va a 232
-      GFLOP/s; esta convolución, a 1.5.
+- [x] **Kernel optimizado de Conv2D**, con el literal conservado como
+      `Conv2DReference` en el mismo archivo. Medido antes: las tres
+      convoluciones eran el 85.7% de un paso de entrenamiento del CRNN y
+      corrían en un solo hilo teniendo diez. Reformuladas como `im2col` +
+      `MatMul` —que ya estaba paralelizado y con bloqueo de registros— van
+      **54.8× más rápido** ellas solas y el paso completo **6.2×**: de 1213 ms
+      a 195 ms, de 6.6 a 41 imágenes por segundo. La convolución pasa del 85.7%
+      al 8.9% del paso.
 - [ ] Intrínsecos SIMD por arquitectura. Hoy el bucle interno lo autovectoriza
       el compilador.
 - [ ] KV cache contiguo (hoy `vector<vector<float>>`).
@@ -438,9 +442,9 @@ arquitectura no es la que declara. La referencia es
       sobreajustar ocho imágenes: la pérdida baja de 4.14 a 0.13 en 400 pasos.
       Sin CTC: como el corpus lo dibujamos nosotros, se conoce en qué columnas
       cae cada letra y basta `CrossEntropyLoss`.
-- [ ] **Entrenamiento largo hasta converger.** Bloqueado por el rendimiento, no
-      por el método: a 1.2 s por paso, un entrenamiento serio son entre 5 y 15
-      horas. Ver el punto de `Conv2D` en la fase 09.
+- [ ] **Entrenamiento largo hasta converger.** Ya no lo bloquea el
+      rendimiento: a 195 ms por paso son unos 73 s por época sobre 3000
+      imágenes.
 - [x] **JPEG**, secuencial de línea base y progresivo. Huffman, cuantización,
       transformada inversa e interpolación de crominancia. Es el único formato
       cuya salida **no está especificada bit a bit**: la norma fija requisitos
