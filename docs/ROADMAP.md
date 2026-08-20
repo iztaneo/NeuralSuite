@@ -349,7 +349,11 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       **El bloqueo de cache no aportó nada** (a veces empeoraba): las matrices
       de estos tamaños ya caben, y lo que faltaba era reutilizar los datos ya
       cargados, no traerlos mejor.
-- [ ] Kernel optimizado de Conv2D, conservando el actual como oráculo.
+- [ ] Kernel optimizado de Conv2D, conservando el actual como oráculo. **Ya no
+      es especulativo: medido, las tres convoluciones son el 85.7% de un paso
+      de entrenamiento del CRNN** (16→32 el 44%, 32→64 el 35%), y el bucle no
+      usa el pool de hilos — corre en uno teniendo diez. `MatMul` va a 232
+      GFLOP/s; esta convolución, a 1.5.
 - [ ] Intrínsecos SIMD por arquitectura. Hoy el bucle interno lo autovectoriza
       el compilador.
 - [ ] KV cache contiguo (hoy `vector<vector<float>>`).
@@ -427,10 +431,16 @@ arquitectura no es la que declara. La referencia es
       `tRNS` y entrelazado Adam7. Los 46 archivos del banco se decodifican byte
       a byte igual que Pillow, incluidos los tres PNG que ya estaban en el
       repositorio. `ocr_cli --image` ya lee de verdad el archivo que se le pasa.
-- [ ] **Entrenar sobre texto real.** Es lo único que queda para que la
-      transcripción de una foto signifique algo: el camino completo funciona
-      —archivo, píxeles, tensor, red, texto— pero el modelo no tiene pesos
-      ajustados sobre tipografías reales.
+- [x] **Tubería de entrenamiento sobre texto real.** `tools/ocr/` genera un
+      corpus con tipografías del sistema y `train_ocr` lo entrena leyendo las
+      imágenes con el decodificador propio: entrenar no necesita Python.
+      Comprobado que la maquinaria es correcta con la prueba que lo decide —
+      sobreajustar ocho imágenes: la pérdida baja de 4.14 a 0.13 en 400 pasos.
+      Sin CTC: como el corpus lo dibujamos nosotros, se conoce en qué columnas
+      cae cada letra y basta `CrossEntropyLoss`.
+- [ ] **Entrenamiento largo hasta converger.** Bloqueado por el rendimiento, no
+      por el método: a 1.2 s por paso, un entrenamiento serio son entre 5 y 15
+      horas. Ver el punto de `Conv2D` en la fase 09.
 - [x] **JPEG**, secuencial de línea base y progresivo. Huffman, cuantización,
       transformada inversa e interpolación de crominancia. Es el único formato
       cuya salida **no está especificada bit a bit**: la norma fija requisitos

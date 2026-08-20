@@ -48,9 +48,12 @@ class GPTBlock : public Layer {
       : ln_1_(config.n_embd),
         attn_(config.n_embd, config.n_head),
         ln_2_(config.n_embd),
-        mlp_fc_(config.n_embd, 4 * config.n_embd),
+        // 0.02 es la convencion de GPT-2 para todas sus densas, y se mantiene
+        // aqui de forma explicita: desde que `Linear` usa Xavier por defecto,
+        // dejarlo implicito cambiaria la inicializacion del modelo.
+        mlp_fc_(config.n_embd, 4 * config.n_embd, /*init_std=*/0.02f),
         mlp_gelu_(ActivationType::kGelu),
-        mlp_proj_(4 * config.n_embd, config.n_embd) {
+        mlp_proj_(4 * config.n_embd, config.n_embd, /*init_std=*/0.02f) {
     // El orden de registro fija el orden de los parametros. Antes esta misma
     // secuencia se repetia a mano en dos metodos que debian coincidir entre si.
     Register(&ln_1_, "ln_1");
