@@ -41,6 +41,16 @@ vocab_cpp.txt
 release/*
 !release/README.md
 
+# Corpus de entrenamiento del OCR. Son decenas de miles de imagenes generadas
+# por tools/ocr/generar_dataset.py: no se versionan porque git no olvida, y 52
+# MB de datos derivados quedarian en el historial para siempre. Viven en la
+# maquina; si hay que compartir uno, va como release de GitHub.
+#
+# Ojo con reproducirlo: el generador acepta --seed, pero dibuja con las
+# tipografias del sistema. La misma semilla en Linux da otras imagenes.
+corpus/*
+!corpus/README.md
+
 # Salidas generadas por las demos
 resultado*.txt
 
