@@ -6,7 +6,7 @@
 # binarios equivalentes, asi que las banderas se mantienen alineadas.
 
 CXX ?= g++
-CXXFLAGS ?= -O3 -std=c++17 -Wall -fPIC -Iinclude -Wl,-rpath,'$$ORIGIN'
+CXXFLAGS ?= -O3 -std=c++17 -Wall -fPIC -Iinclude
 
 # El paralelismo lo aporta include/parallel.h con std::thread, asi que aqui solo
 # hace falta -pthread. Antes esta seccion anadia -fopenmp, y en macOS la linea
@@ -74,12 +74,21 @@ $(LIB_SHARED): $(OBJS)
 
 # Una sola regla para todos: el patron cubre los demos, las herramientas y la
 # suite de pruebas, que se compilan exactamente igual.
+#
+# Se enlaza la biblioteca estatica por su ruta, y no con `-L. -lneuralsuite`.
+# Con las dos versiones presentes el enlazador prefiere la dinamica, y entonces
+# el binario deja de funcionar en cuanto se ejecuta desde otro directorio: no
+# encuentra el .dylib. Habia un -Wl,-rpath,'$$ORIGIN' que pretendia evitarlo,
+# pero `$$ORIGIN` es sintaxis de Linux y en macOS no significa nada -alli se
+# escribe @loader_path-, de modo que no servia en la unica plataforma donde el
+# problema se daba. Enlazando en estatico el binario no depende de nada y se
+# puede copiar a cualquier sitio.
 %: %.cpp $(LIB_STATIC)
-	$(CXX) $(CXXFLAGS) -o $@ $< -L. -lneuralsuite
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LIB_STATIC)
 
 # Fuera de `all`: medir con -O3 generico no dice mucho, conviene NATIVE=1.
 benchmark: benchmarks/benchmark.cpp $(LIB_STATIC)
-	$(CXX) $(CXXFLAGS) -o $(BENCHMARK) $< -L. -lneuralsuite
+	$(CXX) $(CXXFLAGS) -o $(BENCHMARK) $< $(LIB_STATIC)
 
 test: test_suite
 	./test_suite

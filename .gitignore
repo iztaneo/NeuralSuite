@@ -11,8 +11,8 @@ bin/
 demo_*
 !demo_*.cpp
 test_suite
-train_llm
-train_llm_debug
+train_*
+!train_*.cpp
 generate_llm
 ocr_cli
 benchmarks/benchmark

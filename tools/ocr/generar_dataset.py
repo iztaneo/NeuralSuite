@@ -51,6 +51,35 @@ PREFERIDAS = ["Helvetica", "Arial", "Verdana", "Tahoma", "DejaVuSans", "Liberati
               "Times New Roman", "Georgia", "Courier", "Menlo", "Consolas", "FreeSans"]
 
 
+def dibuja_letras(fuente, minimo_distintos=8):
+    """¿La tipografía tiene glifos latinos de verdad?
+
+    Cuando a una fuente le falta un carácter dibuja *tofu*: un rectángulo vacío,
+    igual para todos. Y el tofu tiene caja delimitadora no nula, así que
+    comprobar `getbbox("Ag")` —que es lo que hacía este archivo— lo da por
+    bueno.
+
+    Costó caro descubrirlo. `ArialHB.ttc` (Arial Hebrew) pasaba el filtro y
+    dibujaba tofu para todo el alfabeto latino: como la tipografía se elige al
+    azar entre ocho, **una de cada ocho imágenes del corpus eran seis
+    rectángulos vacíos etiquetados con una palabra real**. No es ruido, es
+    supervisión contradictoria, y ponía el techo del entrenamiento en 87.5%
+    hiciera lo que hiciera el modelo. Aparecio como una lectura absurda —
+    'Nissan' transcrito como 'JPMoroesiononoe'— que al mirar la imagen resulto
+    no contener la palabra.
+
+    La prueba que sí distingue: dibujar varias letras distintas y exigir que los
+    mapas de bits difieran. Una fuente que dibuja tofu produce el mismo para
+    todas.
+    """
+    muestras = set()
+    for caracter in "AbcQ7zRm5W":
+        imagen = Image.new("L", (40, 40), 255)
+        ImageDraw.Draw(imagen).text((5, 5), caracter, fill=0, font=fuente)
+        muestras.add(imagen.tobytes())
+    return len(muestras) >= minimo_distintos
+
+
 def descubrir_fuentes(maximo=8):
     """Devuelve rutas de tipografías utilizables, las preferidas primero."""
     candidatas = []
@@ -88,8 +117,7 @@ def descubrir_fuentes(maximo=8):
             continue
         try:
             fuente = ImageFont.truetype(ruta, 20)
-            # Una tipografía de símbolos puede cargar y no tener letras latinas.
-            if fuente.getbbox("Ag")[2] == 0:
+            if not dibuja_letras(fuente):
                 continue
             elegidas.append(ruta)
             familias.append(familia)

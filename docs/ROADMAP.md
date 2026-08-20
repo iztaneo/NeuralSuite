@@ -26,7 +26,8 @@ que ordena el trabajo, más que el número de fase.
 | | Fase | Nota |
 | --- | --- | --- |
 | `gather` y convolución como primitivas de autograd | 05 | Continúa el motor; trabajo de tamaño propio. |
-| Kernel optimizado del `BiLSTM` | 09 | Es el nuevo cuello: el 82.8% del paso, ahora que la convolución bajó al 8.9%. Sus puertas se calculan unidad a unidad y son cuatro multiplicaciones de matrices. |
+| Kernel optimizado del `BiLSTM` | 09 | Es el nuevo cuello: **86.9%** del paso, ahora que la convolución bajó al 3.8%. Va a 1.27 GFLOP/s cuando `MatMul` alcanza 232. La proyección de la entrada es una sola multiplicación grande; la parte recurrente, 32 pequeñas que no se pueden solapar. Estimado: el paso de 183 a ~45 ms. |
+| Kernel optimizado de `MultiHeadAttention` | 09 | Mismo patrón, encontrado con un barrido de «capas con bucles profundos que no llaman a `MatMul`»: calcula `Q·Kᵀ` y `puntuaciones·V` con siete bucles anidados. **No medido**: se sabe que el patrón coincide, no cuánto pesa. Afecta a `train_llm`, que nadie ha ejecutado en volumen. |
 | Migrar las capas al autograd | 05 | Sustituiría código verificado contra PyTorch por código sin comprobar. El cambio más grande y el más arriesgado. |
 | BPE propio | 08 | Reduciría la longitud de las secuencias; hoy un carácter no ASCII ocupa varios tokens. |
 | Estado del generador por hilo | 07 | El RNG es global; no es seguro usarlo desde varios hilos. Hoy nadie lo hace. |
@@ -442,9 +443,31 @@ arquitectura no es la que declara. La referencia es
       sobreajustar ocho imágenes: la pérdida baja de 4.14 a 0.13 en 400 pasos.
       Sin CTC: como el corpus lo dibujamos nosotros, se conoce en qué columnas
       cae cada letra y basta `CrossEntropyLoss`.
-- [ ] **Entrenamiento largo hasta converger.** Ya no lo bloquea el
-      rendimiento: a 195 ms por paso son unos 73 s por época sobre 3000
-      imágenes.
+- [ ] **Entrenamiento largo hasta converger.** El primero dio 75.4% de acierto
+      por palabra, pero sobre un corpus contaminado (ver abajo). Pendiente de
+      repetir con el corpus limpio, después de acelerar el `BiLSTM`.
+- [ ] **Leer una página, no un renglón.** Hoy `ocr_cli` recibe una imagen y la
+      trata como una sola línea de texto: al darle una página entera la reduce a
+      una miniatura de 32×32 y devuelve basura. Un CRNN reconoce una línea; el
+      resto del canal —encontrar dónde hay texto y separarlo en renglones— no
+      existe. Son tres piezas, y el orden importa porque cada una depende de la
+      anterior:
+      - **Cortador de renglones** por proyección horizontal de tinta.
+        Comprobado sobre las dos imágenes del repositorio antes de escribirlo:
+        encuentra 19 bandas en la página de la Ilíada (los 19 renglones, de
+        11–14 px) y 4 en el logotipo de Mitsubishi (dos del dibujo, de 187 y 94
+        px, y dos del texto, de 59). Generaliza; no hay que ajustarlo por caso.
+      - **Decidir qué banda es texto.** Filtrar por altura funcionaría en el
+        logotipo y sería tropicalizar. La salida general es que lo decida el
+        propio reconocedor por su confianza, lo que exige **ejemplos negativos
+        en el generador**: bandas sin texto —manchas, líneas, fragmentos
+        gráficos— etiquetadas como vacías. Sin haber visto ninguna, el modelo
+        puede equivocarse con seguridad sobre un dibujo.
+      - **Vocabulario y forma de los datos.** Son 63 símbolos sin acentos, sin
+        `ñ` y sin signos de apertura: el modelo no puede emitir `á` aunque la
+        vea. Y se entrenó con palabras sueltas de ≤10 caracteres en sans-serif,
+        mientras que un renglón de libro son ~50 caracteres con espacios en
+        serif pequeña.
 - [x] **JPEG**, secuencial de línea base y progresivo. Huffman, cuantización,
       transformada inversa e interpolación de crominancia. Es el único formato
       cuya salida **no está especificada bit a bit**: la norma fija requisitos

@@ -33,6 +33,8 @@ void PrintUsage() {
             << "                 Sin este argumento se genera una linea sintetica.\n"
             << "  --out ruta     donde escribir el texto (por defecto resultado.txt).\n"
             << "  --len n        caracteres de la linea sintetica (por defecto 10).\n"
+            << "  --pesos ruta   archivo de pesos (por defecto release/ocr_texto.ns).\n"
+            << "  --oculto n     tamano oculto del modelo; debe coincidir con los pesos.\n"
             << "  --no-invertir  no invertir el gris. Por defecto se invierte, porque\n"
             << "                 un documento trae tinta oscura sobre papel claro y la\n"
             << "                 red espera trazo claro sobre fondo oscuro.\n";
@@ -45,6 +47,8 @@ int main(int argc, char* argv[]) {
   std::string out_path = "resultado.txt";
   int word_len = 10;
   bool invert = true;
+  int oculto = 64;
+  std::string pesos = ReleasePath("ocr_texto.ns");
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -54,6 +58,10 @@ int main(int argc, char* argv[]) {
       out_path = argv[++i];
     } else if (arg == "--len" && i + 1 < argc) {
       word_len = std::stoi(argv[++i]);
+    } else if (arg == "--pesos" && i + 1 < argc) {
+      pesos = argv[++i];
+    } else if (arg == "--oculto" && i + 1 < argc) {
+      oculto = std::stoi(argv[++i]);
     } else if (arg == "--no-invertir") {
       invert = false;
     } else if (arg == "--help") {
@@ -67,14 +75,15 @@ int main(int argc, char* argv[]) {
   std::cout << "============================================================\n" << std::flush;
 
   const std::vector<char> vocab = CRNNModel::DefaultVocab();
-  CRNNModel ocr_model(1, 16, static_cast<int>(vocab.size()));
+  CRNNModel ocr_model(1, oculto, static_cast<int>(vocab.size()));
 
-  const std::string weights_path = ReleasePath("ocr_model_mitsubishi_cpp.ns");
+  const std::string weights_path = pesos;
   const bool trained = ocr_model.Load(weights_path);
   if (!trained) {
-    std::cout << "AVISO: no se encontraron pesos entrenados en '" << weights_path << "';\n"
+    std::cout << "AVISO: no se pudieron cargar pesos de '" << weights_path << "';\n"
               << "       el modelo corre con inicializacion aleatoria y lo que salga\n"
-              << "       no significara nada.\n" << std::flush;
+              << "       no significara nada. Entrena con ./train_ocr o pasa --pesos.\n"
+              << std::flush;
   }
 
   Tensor input;
@@ -127,9 +136,9 @@ int main(int argc, char* argv[]) {
   std::cout << "------------------------------------------------------------\n" << std::flush;
 
   if (!trained && !image_path.empty()) {
-    std::cout << "\nLa imagen se ha leido y reescalado de verdad, pero el modelo no\n"
-              << "esta entrenado con tipografias reales: la transcripcion no es una\n"
-              << "lectura del texto, solo la salida de una red sin entrenar.\n" << std::flush;
+    std::cout << "\nLa imagen se ha leido y reescalado de verdad, pero sin pesos\n"
+              << "entrenados la transcripcion no es una lectura del texto, solo la\n"
+              << "salida de una red sin entrenar.\n" << std::flush;
   }
 
   std::ofstream out_file(out_path);
