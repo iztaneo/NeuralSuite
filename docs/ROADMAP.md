@@ -26,7 +26,7 @@ que ordena el trabajo, más que el número de fase.
 | | Fase | Nota |
 | --- | --- | --- |
 | `gather` y convolución como primitivas de autograd | 05 | Continúa el motor; trabajo de tamaño propio. |
-| Kernel optimizado del `BiLSTM` | 09 | Es el nuevo cuello: **86.9%** del paso, ahora que la convolución bajó al 3.8%. Va a 1.27 GFLOP/s cuando `MatMul` alcanza 232. La proyección de la entrada es una sola multiplicación grande; la parte recurrente, 32 pequeñas que no se pueden solapar. Estimado: el paso de 183 a ~45 ms. |
+| `ReLU` y `MaxPool2D` paralelizados | 09 | El cuello actual: 15.2 ms de un paso de 28.2, el **53.8%**. Son bucles elementales sin reparto entre hilos. |
 | Kernel optimizado de `MultiHeadAttention` | 09 | Mismo patrón, encontrado con un barrido de «capas con bucles profundos que no llaman a `MatMul`»: calcula `Q·Kᵀ` y `puntuaciones·V` con siete bucles anidados. **No medido**: se sabe que el patrón coincide, no cuánto pesa. Afecta a `train_llm`, que nadie ha ejecutado en volumen. |
 | Migrar las capas al autograd | 05 | Sustituiría código verificado contra PyTorch por código sin comprobar. El cambio más grande y el más arriesgado. |
 | BPE propio | 08 | Reduciría la longitud de las secuencias; hoy un carácter no ASCII ocupa varios tokens. |
@@ -351,6 +351,19 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       **El bloqueo de cache no aportó nada** (a veces empeoraba): las matrices
       de estos tamaños ya caben, y lo que faltaba era reutilizar los datos ya
       cargados, no traerlos mejor.
+- [x] **Kernel optimizado del LSTM**, con el literal conservado como
+      `LSTMReference`. La preactivación de las puertas es
+      `x_t·W_ihᵀ + h_{t-1}·W_hhᵀ`, dos multiplicaciones de matrices que estaban
+      escritas como productos escalares unidad por unidad: iba a 1.27 GFLOP/s
+      con `MatMul` a 232. La proyección de la entrada no depende del estado
+      anterior, así que los 32 pasos salen en una sola multiplicación; la parte
+      recurrente sigue siendo secuencial. En el backward la asimetría se
+      acentúa: solo `dpre` va paso a paso, y apilarlos convierte `dW_ih`,
+      `dW_hh` y `dx` en tres multiplicaciones grandes —el truco está en que
+      `dW_hh` suma sobre pasos y lote a la vez—. **El BiLSTM baja de 159 a 9.8
+      ms (16.2×) y el paso de entrenamiento de 183 a 28.2 ms.** Frente al
+      original de 1213 ms son **43×**, y 306 imágenes por segundo en vez de 6.6.
+      El cuello pasa a ser `ReLU` y `MaxPool2D`, con el 53.8%.
 - [x] **Kernel optimizado de Conv2D**, con el literal conservado como
       `Conv2DReference` en el mismo archivo. Medido antes: las tres
       convoluciones eran el 85.7% de un paso de entrenamiento del CRNN y

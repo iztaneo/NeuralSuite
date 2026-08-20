@@ -10,18 +10,25 @@
 #define NEURAL_SUITE_INCLUDE_LAYERS_LSTM_H_
 
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
 #include "../layer.h"
 #include "../parameter.h"
+#include "../tensor.h"
 
 namespace neuralsuite {
 
 /**
- * @class LSTM
- * @brief Long Short-Term Memory Recurrent Cell Layer.
+ * @class LSTMReference
+ * @brief La celda LSTM escrita como su definicion, unidad por unidad.
+ *
+ * Se conserva a proposito, igual que `Conv2DReference`: es lenta pero se lee al
+ * lado de las ecuaciones y no tiene ninguna reordenacion de memoria que pueda
+ * desalinearse. `LSTM`, que reformula lo mismo como multiplicaciones de
+ * matrices, se comprueba contra esta.
  *
  * Celda LSTM estándar sobre una secuencia de entrada `[seq_len, batch, input]`.
  * Para cada paso temporal se calcula la preactivación de las cuatro puertas
@@ -41,9 +48,9 @@ namespace neuralsuite {
  * El estado inicial `h_{-1}` y `c_{-1}` es cero. La salida es la secuencia
  * completa de estados ocultos, `[seq_len, batch, hidden]`.
  */
-class LSTM : public Layer {
+class LSTMReference : public Layer {
  public:
-  LSTM(int in_sz, int hid_sz)
+  LSTMReference(int in_sz, int hid_sz)
       : input_size_(in_sz),
         hidden_size_(hid_sz),
         weight_ih_({4 * hid_sz, in_sz}),
@@ -55,7 +62,7 @@ class LSTM : public Layer {
     Register(&bias_ih_, "bias_ih");
     Register(&bias_hh_, "bias_hh");
     if (in_sz <= 0 || hid_sz <= 0) {
-      throw std::invalid_argument("LSTM: input_size y hidden_size deben ser positivos.");
+      throw std::invalid_argument("LSTMReference: input_size y hidden_size deben ser positivos.");
     }
     weight_ih_.Value().XavierInit(in_sz, 4 * hid_sz);
     weight_hh_.Value().XavierInit(hid_sz, 4 * hid_sz);
@@ -65,11 +72,11 @@ class LSTM : public Layer {
 
   Tensor Forward(const Tensor& input) override {
     if (input.Shape().size() != 3) {
-      throw std::invalid_argument("LSTM: la entrada debe ser [seq_len, batch, input_size].");
+      throw std::invalid_argument("LSTMReference: la entrada debe ser [seq_len, batch, input_size].");
     }
     if (input.Shape()[2] != input_size_) {
       throw std::invalid_argument(
-          "LSTM: la ultima dimension de la entrada es " + std::to_string(input.Shape()[2]) +
+          "LSTMReference: la ultima dimension de la entrada es " + std::to_string(input.Shape()[2]) +
           " y se esperaba input_size = " + std::to_string(input_size_) + ".");
     }
 
@@ -156,7 +163,7 @@ class LSTM : public Layer {
 
     if (seq_len == 0) return Tensor();
     if (dout.TotalSize() != static_cast<size_t>(seq_len) * batch_size * H) {
-      throw std::invalid_argument("LSTM: dout no coincide con la forma de la salida.");
+      throw std::invalid_argument("LSTMReference: dout no coincide con la forma de la salida.");
     }
 
     Tensor& dweight_ih = weight_ih_.Grad();
@@ -261,6 +268,267 @@ class LSTM : public Layer {
   Tensor last_input_;
 
   // Activaciones por paso temporal necesarias para el BPTT.
+  Tensor i_cache_;
+  Tensor f_cache_;
+  Tensor g_cache_;
+  Tensor o_cache_;
+  Tensor c_cache_;
+  Tensor tanh_c_cache_;
+  Tensor h_cache_;
+};
+
+/**
+ * @class LSTM
+ * @brief La misma celda, reformulada como multiplicaciones de matrices.
+ *
+ * `LSTMReference` calcula la preactivacion de cada puerta con un producto
+ * escalar a mano: para cada paso de tiempo, cada muestra del lote, cada unidad
+ * oculta y cada una de las cuatro puertas. Medido sobre el CRNN de OCR eso
+ * daba 1.27 GFLOP/s, cuando `MatMul` en la misma maquina alcanza 232. Es el
+ * mismo sintoma que tenia la convolucion antes de reformularla.
+ *
+ * La preactivacion es
+ *
+ *     pre_t = x_t · W_ih^T  +  h_{t-1} · W_hh^T  +  sesgos
+ *
+ * o sea dos multiplicaciones de matrices que estaban escritas como bucles. Al
+ * reagruparlas, el trabajo se parte en dos mitades de naturaleza distinta:
+ *
+ *  - **La proyeccion de la entrada no depende del estado anterior**, asi que
+ *    los `T` pasos se calculan de una vez, en una sola multiplicacion grande.
+ *  - **La parte recurrente si depende**, y hay que recorrerla en orden. Pero
+ *    cada paso pasa de `B · H · 4` productos escalares a una multiplicacion
+ *    sobre todo el lote.
+ *
+ * Esa segunda mitad es el suelo: `h_t` necesita `h_{t-1}` y no hay forma de
+ * solapar los pasos. Son matrices pequenas y ningun GEMM rinde al maximo con
+ * ellas.
+ *
+ * En el paso hacia atras la asimetria se acentua. Solo el calculo de `dpre`
+ * es secuencial; con todos los `dpre` juntos, los tres gradientes que quedan
+ * salen de tres multiplicaciones grandes:
+ *
+ *     dW_ih = dpre^T · X        dW_hh = dpre^T · H_prev        dX = dpre · W_ih
+ *
+ * El truco esta en que `dW_hh` suma sobre todos los pasos y todo el lote, y
+ * apilar las matrices de cada paso convierte esa suma en un unico producto.
+ *
+ * No da los mismos bits que `LSTMReference`: las sumas van en otro orden. Debe
+ * coincidir dentro del redondeo, y de eso se encarga la prueba que las
+ * contrasta, ademas de la paridad contra `nn.LSTM` de PyTorch.
+ */
+class LSTM : public Layer {
+ public:
+  LSTM(int in_sz, int hid_sz)
+      : input_size_(in_sz),
+        hidden_size_(hid_sz),
+        weight_ih_({4 * hid_sz, in_sz}),
+        weight_hh_({4 * hid_sz, hid_sz}),
+        bias_ih_({4 * hid_sz}),
+        bias_hh_({4 * hid_sz}) {
+    Register(&weight_ih_, "weight_ih");
+    Register(&weight_hh_, "weight_hh");
+    Register(&bias_ih_, "bias_ih");
+    Register(&bias_hh_, "bias_hh");
+    if (in_sz <= 0 || hid_sz <= 0) {
+      throw std::invalid_argument("LSTM: input_size y hidden_size deben ser positivos.");
+    }
+    weight_ih_.Value().XavierInit(in_sz, 4 * hid_sz);
+    weight_hh_.Value().XavierInit(hid_sz, 4 * hid_sz);
+    bias_ih_.Value().Zeros();
+    bias_hh_.Value().Zeros();
+  }
+
+  Tensor Forward(const Tensor& input) override {
+    if (input.Shape().size() != 3) {
+      throw std::invalid_argument("LSTM: la entrada debe ser [seq_len, batch, input_size].");
+    }
+    if (input.Shape()[2] != input_size_) {
+      throw std::invalid_argument(
+          "LSTM: la ultima dimension de la entrada es " + std::to_string(input.Shape()[2]) +
+          " y se esperaba input_size = " + std::to_string(input_size_) + ".");
+    }
+
+    last_input_ = input;
+    const int T = input.Shape()[0];
+    const int B = input.Shape()[1];
+    const int H = hidden_size_;
+    const int G = 4 * H;
+    seq_len_ = T;
+    batch_size_ = B;
+
+    const std::vector<int> forma_puertas = {T, B, H};
+    i_cache_.Resize(forma_puertas);
+    f_cache_.Resize(forma_puertas);
+    g_cache_.Resize(forma_puertas);
+    o_cache_.Resize(forma_puertas);
+    c_cache_.Resize(forma_puertas);
+    tanh_c_cache_.Resize(forma_puertas);
+    h_cache_.Resize(forma_puertas);
+    // El estado que entra en cada paso, apilado. En el backward convierte la
+    // suma de dW_hh sobre todos los pasos en una sola multiplicacion.
+    h_prev_apilado_.Resize({T * B, H});
+    h_prev_apilado_.Zeros();
+
+    // Toda la proyeccion de la entrada de una vez: [T*B, IN] x [IN, 4H].
+    const Tensor entrada_2d = input.View({T * B, input_size_});
+    const Tensor w_ih_t = Transpose(weight_ih_.Value().View({G, input_size_}));
+    MatMul(entrada_2d, w_ih_t, pre_);
+
+    const Tensor w_hh_t = Transpose(weight_hh_.Value().View({G, H}));
+    Tensor h_prev({B, H});
+    h_prev.Zeros();
+    Tensor puertas_h;
+
+    Tensor output({T, B, H});
+    for (int t = 0; t < T; ++t) {
+      if (t > 0) {
+        MatMul(h_prev, w_hh_t, puertas_h);   // [B, H] x [H, 4H]
+      }
+      for (int b = 0; b < B; ++b) {
+        const size_t fila = static_cast<size_t>(t * B + b) * G;
+        const size_t estado = static_cast<size_t>(t * B + b) * H;
+        for (int k = 0; k < H; ++k) {
+          float pre[4];
+          for (int puerta = 0; puerta < 4; ++puerta) {
+            const int columna = puerta * H + k;
+            float valor = pre_[fila + columna] + bias_ih_.Value()[columna] +
+                          bias_hh_.Value()[columna];
+            if (t > 0) valor += puertas_h[static_cast<size_t>(b) * G + columna];
+            pre[puerta] = valor;
+          }
+
+          const float i_g = Sigmoid(pre[0]);
+          const float f_g = Sigmoid(pre[1]);
+          const float g_g = std::tanh(pre[2]);
+          const float o_g = Sigmoid(pre[3]);
+
+          const float c_prev =
+              (t > 0) ? c_cache_[static_cast<size_t>((t - 1) * B + b) * H + k] : 0.0f;
+          const float c_t = f_g * c_prev + i_g * g_g;
+          const float tanh_c = std::tanh(c_t);
+          const float h_t = o_g * tanh_c;
+
+          i_cache_[estado + k] = i_g;
+          f_cache_[estado + k] = f_g;
+          g_cache_[estado + k] = g_g;
+          o_cache_[estado + k] = o_g;
+          c_cache_[estado + k] = c_t;
+          tanh_c_cache_[estado + k] = tanh_c;
+          h_cache_[estado + k] = h_t;
+          output[estado + k] = h_t;
+          h_prev_apilado_[estado + k] = h_prev[static_cast<size_t>(b) * H + k];
+        }
+      }
+      // El estado que acaba de salir es el que entra en el paso siguiente.
+      std::memcpy(h_prev.Data(), h_cache_.Data() + static_cast<size_t>(t * B) * H,
+                  static_cast<size_t>(B) * H * sizeof(float));
+    }
+    return output;
+  }
+
+  Tensor Backward(const Tensor& dout) override {
+    const int T = seq_len_, B = batch_size_, H = hidden_size_, G = 4 * H;
+    if (T == 0) return Tensor();
+    if (dout.TotalSize() != static_cast<size_t>(T) * B * H) {
+      throw std::invalid_argument("LSTM: dout no coincide con la forma de la salida.");
+    }
+
+    dpre_.Resize({T * B, G});
+    Tensor dh_next({B, H});
+    dh_next.Zeros();
+    Tensor dc_next({B, H});
+    dc_next.Zeros();
+    Tensor dh_desde_siguiente;
+
+    const Tensor w_hh = weight_hh_.Value().View({G, H});
+
+    // Solo esto es secuencial: dpre de un paso necesita el gradiente que el
+    // paso siguiente devuelve por el estado oculto.
+    for (int t = T - 1; t >= 0; --t) {
+      for (int b = 0; b < B; ++b) {
+        const size_t estado = static_cast<size_t>(t * B + b) * H;
+        const size_t fila = static_cast<size_t>(t * B + b) * G;
+        const size_t previo = static_cast<size_t>(b) * H;
+
+        for (int k = 0; k < H; ++k) {
+          const float i_g = i_cache_[estado + k];
+          const float f_g = f_cache_[estado + k];
+          const float g_g = g_cache_[estado + k];
+          const float o_g = o_cache_[estado + k];
+          const float tanh_c = tanh_c_cache_[estado + k];
+          const float c_prev =
+              (t > 0) ? c_cache_[static_cast<size_t>((t - 1) * B + b) * H + k] : 0.0f;
+
+          // El estado oculto influye por dos caminos: la salida de este paso y
+          // el estado que recibe el siguiente.
+          const float dh = dout[estado + k] + dh_next[previo + k];
+          const float do_g = dh * tanh_c;
+          const float dc = dh * o_g * (1.0f - tanh_c * tanh_c) + dc_next[previo + k];
+
+          dpre_[fila + 0 * H + k] = dc * g_g * i_g * (1.0f - i_g);
+          dpre_[fila + 1 * H + k] = dc * c_prev * f_g * (1.0f - f_g);
+          dpre_[fila + 2 * H + k] = dc * i_g * (1.0f - g_g * g_g);
+          dpre_[fila + 3 * H + k] = do_g * o_g * (1.0f - o_g);
+
+          // La celda anterior recibe el gradiente atenuado por la puerta de olvido.
+          dc_next[previo + k] = dc * f_g;
+        }
+      }
+
+      // dh del paso anterior: [B, 4H] x [4H, H]. W_hh ya esta en esa forma.
+      const Tensor dpre_t = dpre_.View({T * B, G});
+      Tensor bloque({B, G});
+      std::memcpy(bloque.Data(), dpre_.Data() + static_cast<size_t>(t * B) * G,
+                  static_cast<size_t>(B) * G * sizeof(float));
+      MatMul(bloque, w_hh, dh_desde_siguiente);
+      std::memcpy(dh_next.Data(), dh_desde_siguiente.Data(),
+                  static_cast<size_t>(B) * H * sizeof(float));
+    }
+
+    // Con todos los dpre juntos, lo que queda son tres multiplicaciones
+    // grandes. dW_hh suma sobre pasos y lote a la vez, y apilar los estados
+    // convierte esa suma en un solo producto.
+    const Tensor dpre_t = Transpose(dpre_);                       // [4H, T*B]
+    const Tensor entrada_2d = last_input_.View({T * B, input_size_});
+    MatMul(dpre_t, entrada_2d, weight_ih_.Grad());                // [4H, IN]
+    MatMul(dpre_t, h_prev_apilado_, weight_hh_.Grad());           // [4H, H]
+
+    Tensor& dbias_ih = bias_ih_.Grad();
+    Tensor& dbias_hh = bias_hh_.Grad();
+    dbias_ih.Zeros();
+    for (int fila = 0; fila < T * B; ++fila) {
+      const float* origen = dpre_.Data() + static_cast<size_t>(fila) * G;
+      for (int c = 0; c < G; ++c) dbias_ih[c] += origen[c];
+    }
+    // Los dos sesgos reciben exactamente el mismo gradiente: entran sumados en
+    // la misma preactivacion. PyTorch los mantiene separados y aqui tambien.
+    std::memcpy(dbias_hh.Data(), dbias_ih.Data(), static_cast<size_t>(G) * sizeof(float));
+
+    Tensor dx_2d;
+    MatMul(dpre_, weight_ih_.Value().View({G, input_size_}), dx_2d);   // [T*B, IN]
+    dx_2d.Reshape(last_input_.Shape());
+    return dx_2d;
+  }
+
+ private:
+  static float Sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
+
+  int input_size_;
+  int hidden_size_;
+  int seq_len_ = 0;
+  int batch_size_ = 0;
+
+  Parameter weight_ih_;
+  Parameter weight_hh_;
+  Parameter bias_ih_;
+  Parameter bias_hh_;
+
+  Tensor last_input_;
+  Tensor pre_;               // proyeccion de la entrada, [T*B, 4H]
+  Tensor dpre_;              // gradiente de la preactivacion, [T*B, 4H]
+  Tensor h_prev_apilado_;    // el estado que entra en cada paso, [T*B, H]
+
   Tensor i_cache_;
   Tensor f_cache_;
   Tensor g_cache_;

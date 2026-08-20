@@ -2760,6 +2760,99 @@ void TestConv2DRapidaContraReferencia() {
             << std::flush;
 }
 
+/**
+ * @brief LSTM por multiplicacion de matrices contra la implementacion literal.
+ *
+ * `LSTM` reformula la celda como GEMM y va 16 veces mas rapida, a costa de
+ * reordenar la memoria: la proyeccion de la entrada se calcula para todos los
+ * pasos de golpe y los gradientes de los pesos salen de apilar los de cada
+ * paso. `LSTMReference` conserva la version que se lee al lado de las
+ * ecuaciones, y aqui se contrastan.
+ *
+ * El criterio es el error relativo a la magnitud del tensor, por la misma razon
+ * que en Conv2D: elemento a elemento, donde la cancelacion deja un valor casi
+ * nulo, se estaria midiendo la cancelacion y no el error.
+ *
+ * Los casos degenerados no son adorno. Un solo paso de tiempo desactiva toda la
+ * parte recurrente; un lote de uno y una sola unidad oculta dejan matrices de
+ * una fila o una columna, que es donde se equivoca un indice calculado.
+ */
+void TestLstmRapidaContraReferencia() {
+  std::cout << "🧪 [Test 31] LSTM por GEMM contra la implementación literal... " << std::flush;
+
+  struct Caso { int T, B, IN, H; const char* nota; };
+  const Caso casos[] = {
+      {32, 16, 64, 64, "el del CRNN"},
+      {4, 2, 3, 5, "minimo"},
+      {1, 1, 2, 2, "un solo paso"},
+      {8, 1, 7, 3, "lote de uno"},
+      {16, 4, 1, 8, "entrada de un canal"},
+      {5, 3, 9, 1, "una sola unidad"},
+      {2, 5, 4, 6, "mas lote que pasos"},
+  };
+
+  auto error = [](const Tensor& a, const Tensor& b) {
+    double suma_err = 0.0, suma_ref = 0.0;
+    for (size_t i = 0; i < a.TotalSize(); ++i) {
+      const double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+      suma_err += d * d;
+      suma_ref += static_cast<double>(b[i]) * static_cast<double>(b[i]);
+    }
+    return std::sqrt(suma_err) / std::max(std::sqrt(suma_ref), 1e-12);
+  };
+
+  double peor = 0.0;
+  for (const Caso& c : casos) {
+    ManualSeed(5);
+    LSTM rapida(c.IN, c.H);
+    ManualSeed(5);
+    LSTMReference referencia(c.IN, c.H);
+
+    // Los sesgos nacen a cero y ademas los dos entran sumados en la misma
+    // preactivacion: con valores distintos se comprueba que no se confunden.
+    for (int i = 0; i < 4 * c.H; ++i) {
+      const float v = 0.05f * ((i % 7) - 3);
+      (*rapida.GetParameters()[2])[i] = v;
+      (*referencia.GetParameters()[2])[i] = v;
+      (*rapida.GetParameters()[3])[i] = -v;
+      (*referencia.GetParameters()[3])[i] = -v;
+    }
+
+    Tensor x({c.T, c.B, c.IN});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.5f * std::sin(0.29f * static_cast<float>(i)) + 0.1f;
+    }
+    const Tensor y_rapida = rapida.Forward(x);
+    const Tensor y_ref = referencia.Forward(x);
+    Check(y_rapida.Shape() == y_ref.Shape(),
+          std::string(c.nota) + ": las dos LSTM dan formas distintas");
+
+    Tensor dout(y_ref.Shape());
+    for (size_t i = 0; i < dout.TotalSize(); ++i) {
+      dout[i] = 0.4f * std::cos(0.19f * static_cast<float>(i));
+    }
+    const Tensor dx_rapida = rapida.Backward(dout);
+    const Tensor dx_ref = referencia.Backward(dout);
+
+    const char* nombres[4] = {"weight_ih", "weight_hh", "bias_ih", "bias_hh"};
+    for (int p = 0; p < 4; ++p) {
+      const double e = error(*rapida.GetGradients()[p], *referencia.GetGradients()[p]);
+      Check(e < 1e-5, std::string(c.nota) + ": el gradiente de " + nombres[p] + " difiere en " +
+                          std::to_string(e));
+      peor = std::max(peor, e);
+    }
+    const double e_salida = error(y_rapida, y_ref);
+    const double e_entrada = error(dx_rapida, dx_ref);
+    Check(e_salida < 1e-5, std::string(c.nota) + ": la salida difiere en " + std::to_string(e_salida));
+    Check(e_entrada < 1e-5, std::string(c.nota) + ": dx difiere en " + std::to_string(e_entrada));
+    peor = std::max({peor, e_salida, e_entrada});
+  }
+
+  std::cout << "PASADO ✅ (" << (sizeof(casos) / sizeof(casos[0]))
+            << " configuraciones; peor error relativo: " << peor << ")\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -2795,6 +2888,7 @@ int main() {
   TestImageDecoding();
   TestJpegDecoding();
   TestConv2DRapidaContraReferencia();
+  TestLstmRapidaContraReferencia();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
