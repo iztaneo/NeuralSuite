@@ -97,12 +97,29 @@ inline int UmbralOtsu(const std::vector<float>& gris) {
  * @brief Encuentra los renglones de una imagen.
  *
  * `alto_minimo` descarta bandas de una o dos filas, que en un escaneo son
- * motas y no texto. `union_maxima` vuelve a juntar dos bandas separadas por
- * muy pocas filas: los acentos y los puntos de la i quedan despegados del
- * cuerpo de la letra y sin esto saldrian como renglones propios.
+ * motas y no texto.
+ *
+ * `union_maxima` y `proporcion_acento` vuelven a juntar los acentos y los
+ * puntos de la i, que quedan despegados del cuerpo de la letra y sin esto
+ * saldrian como renglones propios. Hacen falta las dos condiciones, y la
+ * segunda es la que importa.
+ *
+ * Al principio bastaba con el hueco: unir dos bandas separadas por dos filas o
+ * menos. Funcionaba en la pagina de la Iliada, donde los renglones miden 14
+ * pixeles... y fallaba en un abecedario manuscrito, donde miden 75 y dos
+ * renglones seguidos quedaban a dos filas uno de otro. Se fusionaban en uno de
+ * 159 pixeles. El umbral en pixeles absolutos estaba ajustado, sin quererlo, a
+ * la escala de una imagen concreta.
+ *
+ * Hacerlo relativo al alto tampoco sirve: dos pixeles sobre setenta y cinco es
+ * una proporcion aun mas pequena. Lo que separa un acento de un renglon no es
+ * la distancia, es el tamano: **un acento es una marca pequena junto a un
+ * cuerpo grande**, y dos renglones seguidos son dos bandas de altura parecida.
+ * Por eso solo se unen si una de las dos es mucho mas baja que la otra.
  */
 inline std::vector<Renglon> DetectarRenglones(const Bitmap& imagen, int alto_minimo = 4,
-                                              int union_maxima = 2) {
+                                              int union_maxima = 2,
+                                              float proporcion_acento = 0.4f) {
   std::vector<Renglon> renglones;
   if (imagen.Empty()) return renglones;
 
@@ -137,10 +154,20 @@ inline std::vector<Renglon> DetectarRenglones(const Bitmap& imagen, int alto_min
   }
   if (dentro) bandas.emplace_back(inicio, alto - 1);
 
-  // Unir las que estan casi pegadas: acentos, tildes y puntos.
+  // Unir acentos, tildes y puntos con el cuerpo de su letra.
   std::vector<std::pair<int, int>> unidas;
   for (const auto& banda : bandas) {
-    if (!unidas.empty() && banda.first - unidas.back().second - 1 <= union_maxima) {
+    bool unir = false;
+    if (!unidas.empty()) {
+      const int hueco = banda.first - unidas.back().second - 1;
+      const int alto_previo = unidas.back().second - unidas.back().first + 1;
+      const int alto_actual = banda.second - banda.first + 1;
+      const int menor = std::min(alto_previo, alto_actual);
+      const int mayor = std::max(alto_previo, alto_actual);
+      unir = hueco <= union_maxima &&
+             static_cast<float>(menor) <= proporcion_acento * static_cast<float>(mayor);
+    }
+    if (unir) {
       unidas.back().second = banda.second;
     } else {
       unidas.push_back(banda);

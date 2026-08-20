@@ -2908,7 +2908,23 @@ void TestSeparacionEnRenglones() {
     Check(r[0].y == 8 && r[0].alto == 17, "el renglon unido no abarca el acento y el cuerpo");
   }
 
-  // 3. Una mota de una fila no es un renglon.
+  // 3. Dos renglones seguidos NO se unen aunque casi se toquen. Al principio la
+  //    union miraba solo el hueco, y eso estaba ajustado sin querer a la escala
+  //    de una imagen: funcionaba con renglones de 14 px, y en un abecedario
+  //    manuscrito de 75 px dos renglones separados por dos filas se fusionaban
+  //    en uno de 159. Lo que separa un acento de un renglon no es la distancia
+  //    sino el tamano.
+  {
+    Bitmap imagen = lienzo(80, 120, 250);
+    banda(&imagen, 10, 49, 5, 70, 15);    // renglon alto
+    banda(&imagen, 52, 91, 5, 70, 15);    // otro igual de alto, a dos filas
+    const std::vector<Renglon> r = DetectarRenglones(imagen);
+    Check(r.size() == 2, "dos renglones de altura parecida se fusionaron en " +
+                             std::to_string(r.size()));
+    Check(r[0].alto == 40 && r[1].alto == 40, "los dos renglones no conservan su alto");
+  }
+
+  // 4. Una mota de una fila no es un renglon.
   {
     Bitmap imagen = lienzo(60, 40, 250);
     banda(&imagen, 5, 5, 30, 32, 10);     // mota
@@ -2918,7 +2934,7 @@ void TestSeparacionEnRenglones() {
     Check(r[0].y == 20, "se quedo con la mota en vez de con el renglon");
   }
 
-  // 4. El umbral sale del histograma, no de una constante. Con poco contraste
+  // 5. El umbral sale del histograma, no de una constante. Con poco contraste
   //    —un escaneo gris sobre gris— un valor fijo como 128 fallaria: aqui los
   //    dos niveles, 150 y 190, estan del mismo lado de ese corte.
   {
@@ -2929,7 +2945,7 @@ void TestSeparacionEnRenglones() {
     Check(r[0].y == 10 && r[0].alto == 10, "el renglon de bajo contraste salio mal delimitado");
   }
 
-  // 5. El recorte deja margen para que la tinta ocupe la proporcion con la que
+  // 6. El recorte deja margen para que la tinta ocupe la proporcion con la que
   //    se entreno. Al ras, cada letra abarca mas pasos de la secuencia de los
   //    que el modelo vio nunca, y aparecen caracteres insertados.
   {
@@ -2950,7 +2966,7 @@ void TestSeparacionEnRenglones() {
     Check(t.Shape()[3] % 4 == 0, "el ancho del tensor no es multiplo de 4");
   }
 
-  // 6. Una imagen sin tinta no produce renglones ni revienta.
+  // 7. Una imagen sin tinta no produce renglones ni revienta.
   {
     const Bitmap vacia = lienzo(50, 50, 255);
     Check(DetectarRenglones(vacia).empty(), "encontro renglones en una imagen en blanco");
@@ -2958,7 +2974,7 @@ void TestSeparacionEnRenglones() {
     Check(DetectarRenglones(nada).empty(), "no soporto una imagen vacia");
   }
 
-  std::cout << "PASADO ✅ (6 casos: posición, acentos, motas, bajo contraste, proporción)\n"
+  std::cout << "PASADO ✅ (7 casos: posición, acentos, renglones pegados, motas, bajo contraste, proporción)\n"
             << std::flush;
 }
 

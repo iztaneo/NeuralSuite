@@ -465,6 +465,15 @@ arquitectura no es la que declara. La referencia es
       resto del canal —encontrar dónde hay texto y separarlo en renglones— no
       existe. Son tres piezas, y el orden importa porque cada una depende de la
       anterior:
+      Cuánto se aleja cada caso de lo que el modelo sabe leer, medido en error
+      de carácter: **2.3%** en la validación sintética, **54%** en la página de
+      la Ilíada —impresa, pero en serif pequeña y con renglones cinco veces más
+      largos— y **160% en un abecedario manuscrito, frente al 157% que da
+      generar caracteres al azar**. Sobre manuscrito no hay señal ninguna.
+
+      De la Ilíada salió además una corrección: se atribuía el fallo a los
+      acentos y a los espacios, y son 3.5 puntos de 53.6. El grueso es el
+      modelo leyendo mal un régimen que no vio.
       - [x] **Cortador de renglones** (`include/image/renglones.h`, `ocr_cli
         --renglones`). Proyección horizontal con umbral de Otsu, que sale del
         histograma en vez de ser una constante. Encuentra los 18 renglones de la
