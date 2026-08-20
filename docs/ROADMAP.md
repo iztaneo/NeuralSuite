@@ -28,7 +28,6 @@ que ordena el trabajo, más que el número de fase.
 | `gather` y convolución como primitivas de autograd | 05 | Continúa el motor; trabajo de tamaño propio. |
 | `ReLU` y `MaxPool2D` paralelizados | 09 | El cuello actual: 15.2 ms de un paso de 28.2, el **53.8%**. Son bucles elementales sin reparto entre hilos. |
 | Tesseract como referencia en `tools/` | 10 | Mismo papel que PyTorch y Pillow: instrumento de medida, nunca dentro de la biblioteca. Sin él, «54% de error» no dice si estamos lejos o cerca. Ya está instalado en la máquina de desarrollo. |
-| Kernel optimizado de `MultiHeadAttention` | 09 | Mismo patrón, encontrado con un barrido de «capas con bucles profundos que no llaman a `MatMul`»: calcula `Q·Kᵀ` y `puntuaciones·V` con siete bucles anidados. **No medido**: se sabe que el patrón coincide, no cuánto pesa. Afecta a `train_llm`, que nadie ha ejecutado en volumen. |
 | Migrar las capas al autograd | 05 | Sustituiría código verificado contra PyTorch por código sin comprobar. El cambio más grande y el más arriesgado. |
 | BPE propio | 08 | Reduciría la longitud de las secuencias; hoy un carácter no ASCII ocupa varios tokens. |
 | Estado del generador por hilo | 07 | El RNG es global; no es seguro usarlo desde varios hilos. Hoy nadie lo hace. |
@@ -352,6 +351,36 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       **El bloqueo de cache no aportó nada** (a veces empeoraba): las matrices
       de estos tamaños ya caben, y lo que faltaba era reutilizar los datos ya
       cargados, no traerlos mejor.
+- [x] **Kernel optimizado de `MultiHeadAttention`**, el tercero y último del
+      mismo patrón, con el literal conservado como `MultiHeadAttentionReference`.
+      `Q·Kᵀ` y `P·V` son multiplicaciones de matrices escritas como bucles que
+      recorrían cada elemento, a 1.3 GFLOP/s y en un solo hilo. Hizo falta
+      reordenar memoria: `c_attn` entrega Q, K y V entrelazados en una fila de
+      `3·n_embd` y cada cabeza ocupa un tramo, así que hay que extraerlas como
+      matrices contiguas — el mismo trabajo que `im2col`. Se calcula el cuadrado
+      completo de puntuaciones, incluida la mitad que la máscara descarta: el
+      doble de operaciones que el bucle triangular, y aun así mucho más rápido.
+
+      Medido sobre un paso del GPT (lote 16, 4 capas, n_embd 128):
+
+      | Contexto | Antes | Después | |
+      | --- | --- | --- | --- |
+      | 64 | 483 ms | **126 ms** | 3.8× |
+      | 128 | 1669 ms | **258 ms** | 6.5× |
+      | 256 | 6034 ms | **556 ms** | 10.9× |
+      | 512 | 23410 ms | **1331 ms** | **17.6×** |
+
+      Lo que **no** cambia es que el coste crezca con el cuadrado del contexto:
+      esa es la definición del mecanismo. Lo que cambia es la constante, y con
+      ella el crecimiento observado pasa de 48.5× a **10.6×** al ir de contexto
+      64 a 512 — porque ahora la parte cuadrática ya no domina desde el primer
+      momento. Un entrenamiento de 1000 iteraciones con contexto 512 baja de
+      6 h 30 a 22 minutos.
+
+      El reparto va por pareja (muestra, cabeza) y cada cabeza escribe en un
+      tramo distinto de `dqkv`, así que no hay reducción y el resultado es
+      idéntico con uno o con diez hilos. El test 33 lo exige, junto con seis
+      configuraciones contra la referencia; cinco mutaciones lo ponen en rojo.
 - [x] **Kernel optimizado del LSTM**, con el literal conservado como
       `LSTMReference`. La preactivación de las puertas es
       `x_t·W_ihᵀ + h_{t-1}·W_hhᵀ`, dos multiplicaciones de matrices que estaban

@@ -2978,6 +2978,116 @@ void TestSeparacionEnRenglones() {
             << std::flush;
 }
 
+/**
+ * @brief Atención por multiplicación de matrices contra la implementación literal.
+ *
+ * `MultiHeadAttention` extrae cada cabeza como matriz contigua y resuelve
+ * `Q·Kᵀ` y `P·V` con `MatMul`. Eso implica reordenar memoria —los tres
+ * proyectados vienen entrelazados en una sola fila— y ahí es donde se
+ * desalinea un índice. `MultiHeadAttentionReference` conserva la versión que se
+ * lee al lado de las fórmulas.
+ *
+ * El caso de un solo token comprueba el camino degenerado donde la matriz de
+ * puntuaciones es 1×1 y la máscara causal no descarta nada.
+ */
+void TestAtencionRapidaContraReferencia() {
+  std::cout << "🧪 [Test 33] Atención por GEMM contra la implementación literal... " << std::flush;
+
+  struct Caso { int B, T, E, H; const char* nota; };
+  const Caso casos[] = {
+      {2, 64, 128, 4, "el del GPT"},
+      {1, 8, 16, 2, "minimo"},
+      {1, 1, 8, 2, "un solo token"},
+      {3, 16, 32, 8, "ocho cabezas"},
+      {2, 5, 4, 1, "una sola cabeza"},
+      {1, 32, 64, 4, "lote de uno"},
+  };
+
+  auto error = [](const Tensor& a, const Tensor& b) {
+    double suma_err = 0.0, suma_ref = 0.0;
+    for (size_t i = 0; i < a.TotalSize(); ++i) {
+      const double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+      suma_err += d * d;
+      suma_ref += static_cast<double>(b[i]) * static_cast<double>(b[i]);
+    }
+    return std::sqrt(suma_err) / std::max(std::sqrt(suma_ref), 1e-12);
+  };
+
+  double peor = 0.0;
+  for (const Caso& c : casos) {
+    ManualSeed(3);
+    MultiHeadAttention rapida(c.E, c.H);
+    ManualSeed(3);
+    MultiHeadAttentionReference referencia(c.E, c.H);
+
+    Tensor x({c.B, c.T, c.E});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.4f * std::sin(0.27f * static_cast<float>(i)) + 0.05f;
+    }
+    const Tensor y_rapida = rapida.Forward(x);
+    const Tensor y_ref = referencia.Forward(x);
+    Check(y_rapida.Shape() == y_ref.Shape(),
+          std::string(c.nota) + ": las dos atenciones dan formas distintas");
+
+    Tensor dout(y_ref.Shape());
+    for (size_t i = 0; i < dout.TotalSize(); ++i) {
+      dout[i] = 0.3f * std::cos(0.13f * static_cast<float>(i));
+    }
+    const Tensor dx_rapida = rapida.Backward(dout);
+    const Tensor dx_ref = referencia.Backward(dout);
+
+    const double e_salida = error(y_rapida, y_ref);
+    const double e_entrada = error(dx_rapida, dx_ref);
+    Check(e_salida < 1e-5, std::string(c.nota) + ": la salida difiere en " + std::to_string(e_salida));
+    Check(e_entrada < 1e-5, std::string(c.nota) + ": dx difiere en " + std::to_string(e_entrada));
+    peor = std::max({peor, e_salida, e_entrada});
+    for (size_t p = 0; p < rapida.GetGradients().size(); ++p) {
+      const double e = error(*rapida.GetGradients()[p], *referencia.GetGradients()[p]);
+      Check(e < 1e-5, std::string(c.nota) + ": el gradiente " + std::to_string(p) +
+                          " difiere en " + std::to_string(e));
+      peor = std::max(peor, e);
+    }
+  }
+
+  // El reparto va por pareja (muestra, cabeza), y cada cabeza escribe en un
+  // tramo distinto de dqkv, así que no hay reducción y el resultado no puede
+  // depender del número de hilos. Si alguien reorganiza eso y mete una suma
+  // compartida, la comparación contra la referencia seguiría pasando —el error
+  // seguiría siendo de redondeo— pero el entrenamiento dejaría de ser
+  // reproducible.
+  {
+    const int hilos = parallel::ThreadCount();
+    MultiHeadAttention capa(64, 8);
+    Tensor x({4, 24, 64});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.3f * std::sin(0.19f * static_cast<float>(i));
+    }
+    Tensor dout({4, 24, 64});
+    for (size_t i = 0; i < dout.TotalSize(); ++i) {
+      dout[i] = 0.2f * std::cos(0.23f * static_cast<float>(i));
+    }
+
+    parallel::ThreadCount() = 1;
+    const Tensor y_serie = capa.Forward(x);
+    const Tensor dx_serie = capa.Backward(dout);
+    parallel::ThreadCount() = std::max(4, hilos);
+    const Tensor y_hilos = capa.Forward(x);
+    const Tensor dx_hilos = capa.Backward(dout);
+    parallel::ThreadCount() = hilos;
+
+    bool iguales = true;
+    for (size_t i = 0; iguales && i < y_serie.TotalSize(); ++i) iguales = y_serie[i] == y_hilos[i];
+    Check(iguales, "la salida de la atencion cambia con el numero de hilos");
+    for (size_t i = 0; iguales && i < dx_serie.TotalSize(); ++i) iguales = dx_serie[i] == dx_hilos[i];
+    Check(iguales, "dx de la atencion cambia con el numero de hilos");
+  }
+
+  std::cout << "PASADO ✅ (" << (sizeof(casos) / sizeof(casos[0]))
+            << " configuraciones; peor error relativo: " << peor
+            << "; idéntico con 1 y con varios hilos)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3015,6 +3125,7 @@ int main() {
   TestConv2DRapidaContraReferencia();
   TestLstmRapidaContraReferencia();
   TestSeparacionEnRenglones();
+  TestAtencionRapidaContraReferencia();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
