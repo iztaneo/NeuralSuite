@@ -14,6 +14,14 @@ CXXFLAGS ?= -O3 -std=c++17 -Wall -fPIC -Iinclude -Wl,-rpath,'$$ORIGIN'
 # fueran ficheros: la compilacion no producia ningun objeto y `make` fallaba.
 CXXFLAGS += -pthread
 
+# -MMD -MP hace que el compilador escriba, junto a cada objeto, la lista de
+# cabeceras de las que depende. Sin esto `make` solo miraba el .cpp: tocar un
+# archivo de include/ no recompilaba nada y quedaba un binario construido con la
+# version anterior de la cabecera. Es un fallo especialmente traicionero porque
+# no da ningun error, solo resultados que no corresponden al codigo que se esta
+# leyendo.
+CXXFLAGS += -MMD -MP
+
 # Dos banderas que estaban siempre puestas y ahora hay que pedir:
 #
 #   NATIVE=1     -march=native, que produce binarios que pueden no arrancar en
@@ -76,7 +84,11 @@ benchmark: benchmarks/benchmark.cpp $(LIB_STATIC)
 test: test_suite
 	./test_suite
 
+# Las dependencias que genera el compilador se incluyen si existen. El guion
+# evita que `make` falle la primera vez, cuando todavia no hay ninguna.
+-include $(OBJS:.o=.d) $(PROGRAMS:=.d) $(BENCHMARK).d
+
 clean:
-	rm -f $(PROGRAMS) $(BENCHMARK) $(LIB_STATIC) $(LIB_SHARED) src/*.o
+	rm -f $(PROGRAMS) $(BENCHMARK) $(LIB_STATIC) $(LIB_SHARED) src/*.o src/*.d *.d benchmarks/*.d
 
 .PHONY: all clean test benchmark

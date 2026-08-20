@@ -2,23 +2,25 @@
 build/
 bin/
 
-# Ejecutables de demos y herramientas
+# Ejecutables de demos y herramientas.
+#
+# Por patron y no uno a uno: la lista escrita a mano se olvido de
+# `demo_autograd`, y el binario de 100 KB acabo versionado en el repositorio.
+# Es el mismo fallo que tenia el Makefile, que enumeraba los programas en tres
+# sitios distintos y los tres habian divergido.
+demo_*
+!demo_*.cpp
 test_suite
-demo_adaline
-demo_mlp
-demo_cnn
-demo_lstm
-demo_autoencoder
-demo_diffusion
-demo_gan
-demo_gnn
-demo_ocr
-demo_resnet
-demo_sequential
 train_llm
 train_llm_debug
 generate_llm
 ocr_cli
+benchmarks/benchmark
+benchmarks/compare_openmp
+benchmarks/compare_transpose
+
+# Dependencias que genera el compilador con -MMD.
+*.d
 
 # Objetos y bibliotecas compiladas
 *.o
