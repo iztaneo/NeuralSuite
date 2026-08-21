@@ -24,6 +24,19 @@
 namespace neuralsuite {
 
 /**
+ * @brief Pi, definido aqui y no tomado de `M_PI`.
+ *
+ * `M_PI` es una extension POSIX, no parte de C++ estandar. La glibc y la
+ * libc++ lo definen en `<cmath>` y por eso compilaba en Linux y en macOS; MSVC
+ * solo lo define si se pide antes `_USE_MATH_DEFINES`, de modo que la
+ * compilacion de Windows llevaba dias rota sin que se notara en local.
+ *
+ * Se define aqui en vez de activar esa macro: una constante `constexpr` no
+ * depende del orden de los `#include` ni de que nadie se acuerde de ponerla.
+ */
+constexpr double kPi = 3.14159265358979323846;
+
+/**
  * @class Tensor
  * @brief Multi-dimensional array storing floating point numbers in contiguous memory.
  * @details Conforms to Google C++ Style Guide: RAII memory management, explicit constructors,

@@ -2464,8 +2464,8 @@ void TestJpegDecoding() {
               const double cu = (u == 0) ? std::sqrt(0.5) : 1.0;
               const double cv = (v == 0) ? std::sqrt(0.5) : 1.0;
               sum += 0.25 * cu * cv * coefficients[v * 8 + u] *
-                     std::cos((2 * x + 1) * u * M_PI / 16.0) *
-                     std::cos((2 * y + 1) * v * M_PI / 16.0);
+                     std::cos((2 * x + 1) * u * kPi / 16.0) *
+                     std::cos((2 * y + 1) * v * kPi / 16.0);
             }
           }
           const double exact = sum + 128.0;

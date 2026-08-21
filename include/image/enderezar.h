@@ -133,7 +133,7 @@ inline double EstimarInclinacion(const Bitmap& imagen, double rango_grados = 8.0
     parallel::ParallelFor(n, /*min_per_thread=*/1, [&](int a, int b) {
       for (int i = a; i < b; ++i) {
         puntuacion[i] = NitidezProyeccion(tinta, ancho, alto,
-                                          (desde + i * paso) * M_PI / 180.0);
+                                          (desde + i * paso) * kPi / 180.0);
       }
     });
     int mejor = 0;
@@ -179,7 +179,7 @@ inline Bitmap Girar(const Bitmap& imagen, double grados) {
   }
 
   salida.pixels.assign(static_cast<size_t>(salida.width) * salida.height * C, 0);
-  const double radianes = grados * M_PI / 180.0;
+  const double radianes = grados * kPi / 180.0;
   const double sen = std::sin(radianes), cos_ = std::cos(radianes);
   const double cx = imagen.width * 0.5, cy = imagen.height * 0.5;
 

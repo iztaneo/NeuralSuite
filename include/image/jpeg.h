@@ -192,7 +192,7 @@ inline void InverseDct(const int32_t* input, uint8_t* output, int stride) {
     for (int x = 0; x < 8; ++x) {
       for (int u = 0; u < 8; ++u) {
         const double scale = (u == 0) ? std::sqrt(0.125) : 0.5;
-        table[x * 8 + u] = scale * std::cos((2 * x + 1) * u * M_PI / 16.0);
+        table[x * 8 + u] = scale * std::cos((2 * x + 1) * u * kPi / 16.0);
       }
     }
     return table;
