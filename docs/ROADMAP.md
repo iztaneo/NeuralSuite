@@ -19,7 +19,7 @@ que ordena el trabajo, más que el número de fase.
 
 | | Fase | Qué pasa |
 | --- | --- | --- |
-| **OCR** | aparte | En curso, y con lo grueso hecho: arquitectura correcta, lector de PNG/JPEG/BMP/Netpbm propio, corpus, entrenamiento (87.2% de acierto por palabra) y cortador de renglones. Lo que falta es leer un escaneo real: el preproceso —enderezado sobre todo— y datos de entrenamiento que cubran texto impreso de verdad. Ver [Pendiente aparte — OCR](#pendiente-aparte--ocr-). |
+| **OCR** | aparte | **Lee texto impreso real**: 8% de error de carácter sobre una página de libro que nunca vio, frente al 53% de hace dos días y al 0.1% de Tesseract. Lo que queda del error son sobre todo caracteres fuera del vocabulario —acentos y puntuación—. Ver [Pendiente aparte — OCR](#pendiente-aparte--ocr-). |
 
 ### Mejoras sobre lo verificado
 
