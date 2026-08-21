@@ -19,14 +19,13 @@ que ordena el trabajo, más que el número de fase.
 
 | | Fase | Qué pasa |
 | --- | --- | --- |
-| **OCR** | aparte | En curso. `CRNNModel` no decodifica imágenes y su arquitectura (Conv + Linear) no corresponde a la de referencia, que usa BiLSTM. La pieza que faltaba —la capa `BiLSTM`— ya está y verificada contra PyTorch; quedan la arquitectura y el lector de imagen. Ver [Pendiente aparte — OCR](#pendiente-aparte--ocr-). |
+| **OCR** | aparte | En curso, y con lo grueso hecho: arquitectura correcta, lector de PNG/JPEG/BMP/Netpbm propio, corpus, entrenamiento (87.2% de acierto por palabra) y cortador de renglones. Lo que falta es leer un escaneo real: el preproceso —enderezado sobre todo— y datos de entrenamiento que cubran texto impreso de verdad. Ver [Pendiente aparte — OCR](#pendiente-aparte--ocr-). |
 
 ### Mejoras sobre lo verificado
 
 | | Fase | Nota |
 | --- | --- | --- |
 | `gather` y convolución como primitivas de autograd | 05 | Continúa el motor; trabajo de tamaño propio. |
-| `ReLU` y `MaxPool2D` paralelizados | 09 | El cuello actual: 15.2 ms de un paso de 28.2, el **53.8%**. Son bucles elementales sin reparto entre hilos. |
 | Tesseract como referencia en `tools/` | 10 | Mismo papel que PyTorch y Pillow: instrumento de medida, nunca dentro de la biblioteca. Sin él, «54% de error» no dice si estamos lejos o cerca. Ya está instalado en la máquina de desarrollo. |
 | Migrar las capas al autograd | 05 | Sustituiría código verificado contra PyTorch por código sin comprobar. El cambio más grande y el más arriesgado. |
 | BPE propio | 08 | Reduciría la longitud de las secuencias; hoy un carácter no ASCII ocupa varios tokens. |
@@ -34,10 +33,15 @@ que ordena el trabajo, más que el número de fase.
 
 ### Rendimiento
 
+Las tres capas con bucles profundos que no llamaban a `MatMul` —`Conv2D`, la
+celda recurrente y la atención— ya están reformuladas, con **55×**, **16×** y
+**17.6×** respectivamente. El barrido está cerrado; lo que queda es de otra
+naturaleza.
+
 | | Fase | Nota |
 | --- | --- | --- |
+| `ReLU` y `MaxPool2D` paralelizados | 09 | El cuello actual del CRNN: **15.2 ms de un paso de 28.2, el 53.8%**. Son bucles elementales sin reparto entre hilos — no hay nada que reformular, solo repartir. |
 | Intrínsecos SIMD por arquitectura | 09 | Hoy el bucle interno lo autovectoriza el compilador. |
-| Kernel optimizado de Conv2D | 09 | Conservando el actual como oráculo de referencia. |
 | KV cache contiguo | 09 | Solo afecta a la generación token a token. |
 
 ---
