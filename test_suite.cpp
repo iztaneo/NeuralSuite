@@ -3136,6 +3136,96 @@ void TestAtencionRapidaContraReferencia() {
             << std::flush;
 }
 
+/**
+ * @brief Estimación y corrección de la inclinación.
+ *
+ * La verificación real son las rotaciones conocidas de la página de la Ilíada
+ * —ocho ángulos de -5° a +5°, todos recuperados con error 0.00°— pero esa
+ * imagen no puede vivir en la prueba: tiene que correr sin depender de archivos.
+ * Se construye una página sintética de renglones, se gira un ángulo conocido y
+ * se exige recuperarlo.
+ *
+ * Lo que se comprueba no es solo el ángulo sino la consecuencia: que la
+ * separación en renglones, que se desploma con la página torcida, vuelva a
+ * encontrar los que hay.
+ */
+void TestEnderezarPagina() {
+  std::cout << "🧪 [Test 34] Corrección de la inclinación de una página... " << std::flush;
+  using namespace neuralsuite::image;
+
+  // Página sintética: ocho renglones de trazos, con huecos entre ellos.
+  //
+  // El ancho no es arbitrario. La precisión del estimador depende de él: un
+  // grado décimo inclina la última columna respecto de la primera en
+  // `ancho * tan(0.1°)` píxeles, y por debajo de uno no hay nada que la
+  // proyección pueda distinguir. Medido sobre una página recta, el estimador
+  // devuelve -0.30° con 200 px de ancho, -0.10° con 400 y 0.00° a partir de
+  // 800. Se usan 600, que es del orden de un escaneo real.
+  const int W = 600, H = 480;
+  Bitmap pagina;
+  pagina.width = W; pagina.height = H; pagina.channels = 1;
+  pagina.pixels.assign(static_cast<size_t>(W) * H, 250);
+  const int kRenglones = 8;
+  for (int r = 0; r < kRenglones; ++r) {
+    const int y0 = 30 + r * 54;
+    for (int y = y0; y < y0 + 30; ++y) {
+      for (int x = 60; x < W - 60; ++x) {
+        // Trazos discontinuos, como letras, no una barra maciza.
+        if ((x / 3) % 2 == 0) pagina.pixels[static_cast<size_t>(y) * W + x] = 20;
+      }
+    }
+  }
+  Check(DetectarRenglones(pagina).size() == static_cast<size_t>(kRenglones),
+        "la pagina sintetica recta no da los renglones que se dibujaron");
+
+  // 1. La recta se reconoce como recta y no se toca.
+  {
+    const double grados = EstimarInclinacion(pagina);
+    Check(std::abs(grados) <= 0.11,
+          "una pagina recta se estimo inclinada " + std::to_string(grados) + " grados");
+  }
+
+  // 2. Ángulos conocidos, recuperados y corregidos.
+  //
+  // Ninguno es múltiplo del paso grueso de la búsqueda (0.5°) a propósito: con
+  // ángulos redondos, la primera pasada ya acierta y el afinado no se ejercita.
+  // Se comprobó: quitar el afinado no ponía nada en rojo hasta cambiar esto.
+  double peor = 0.0;
+  for (double angulo : {-3.7, -2.3, -1.2, 1.4, 2.8, 4.3}) {
+    const Bitmap torcida = Girar(pagina, angulo);
+    const double estimado = EstimarInclinacion(torcida);
+    const double error = std::abs(estimado - angulo);
+    peor = std::max(peor, error);
+    Check(error <= 0.11, "con " + std::to_string(angulo) + " grados se estimo " +
+                            std::to_string(estimado));
+
+    double aplicado = 0.0;
+    const Bitmap recta = Enderezar(torcida, &aplicado);
+    const size_t tras = DetectarRenglones(recta).size();
+    Check(tras == static_cast<size_t>(kRenglones),
+          "tras enderezar " + std::to_string(angulo) + " grados salen " +
+              std::to_string(tras) + " renglones y deberian ser " +
+              std::to_string(kRenglones));
+  }
+
+  // 3. El giro conserva el tamaño y rellena con el fondo, no con blanco puro:
+  //    un marco luminoso entraria en el histograma y falsearia el umbral.
+  {
+    const Bitmap girada = Girar(pagina, 3.0);
+    Check(girada.width == W && girada.height == H, "el giro cambio el tamano de la imagen");
+    Check(girada.pixels[0] >= 240 && girada.pixels[0] <= 255,
+          "la esquina, que queda fuera tras girar, no se relleno con el fondo");
+  }
+
+  // 4. Una imagen vacia no revienta.
+  {
+    Bitmap nada;
+    Check(EstimarInclinacion(nada) == 0.0, "no soporto una imagen vacia");
+  }
+
+  std::cout << "PASADO ✅ (6 ángulos; peor error " << peor << "°)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3174,6 +3264,7 @@ int main() {
   TestLstmRapidaContraReferencia();
   TestSeparacionEnRenglones();
   TestAtencionRapidaContraReferencia();
+  TestEnderezarPagina();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

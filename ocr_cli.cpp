@@ -35,6 +35,8 @@ void PrintUsage() {
             << "  --len n        caracteres de la linea sintetica (por defecto 10).\n"
             << "  --pesos ruta   archivo de pesos (por defecto release/ocr_texto.ns).\n"
             << "  --oculto n     tamano oculto del modelo; debe coincidir con los pesos.\n"
+            << "  --no-enderezar corregir la inclinacion antes de separar en renglones\n"
+            << "                 esta activado por defecto; esto lo desactiva.\n"
             << "  --renglones    separar la imagen en renglones y transcribir cada uno.\n"
             << "                 Necesario para una pagina: sin esto la imagen entera se\n"
             << "                 trata como una sola linea y se reduce a una miniatura.\n"
@@ -52,6 +54,7 @@ int main(int argc, char* argv[]) {
   bool invert = true;
   int oculto = 64;
   bool por_renglones = false;
+  bool enderezar = true;
   std::string pesos = ReleasePath("ocr_texto.ns");
 
   for (int i = 1; i < argc; ++i) {
@@ -68,6 +71,8 @@ int main(int argc, char* argv[]) {
       oculto = std::stoi(argv[++i]);
     } else if (arg == "--renglones") {
       por_renglones = true;
+    } else if (arg == "--no-enderezar") {
+      enderezar = false;
     } else if (arg == "--no-invertir") {
       invert = false;
     } else if (arg == "--help") {
@@ -138,6 +143,21 @@ int main(int argc, char* argv[]) {
       std::cerr << "ERROR: " << error << "\n";
       return 1;
     }
+    // Enderezar antes de proyectar. Con la pagina inclinada, una fila de
+    // pixeles atraviesa varios renglones y las filas vacias que los separan
+    // desaparecen: medido, dos grados bajan la deteccion de 18 renglones a 4.
+    double inclinacion = 0.0;
+    if (enderezar) {
+      const image::Bitmap recta = image::Enderezar(pagina, &inclinacion);
+      if (std::abs(inclinacion) >= 0.15) {
+        std::printf("Inclinacion: %+.2f grados, corregida\n", inclinacion);
+        pagina = recta;
+      } else {
+        std::printf("Inclinacion: %+.2f grados, no hace falta corregir\n", inclinacion);
+      }
+      std::fflush(stdout);
+    }
+
     const std::vector<image::Renglon> renglones = image::DetectarRenglones(pagina);
     std::cout << "\n------------------------------------------------------------\n"
               << "   " << renglones.size() << " renglones detectados\n"

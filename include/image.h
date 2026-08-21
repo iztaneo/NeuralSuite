@@ -24,6 +24,7 @@
 #include <vector>
 #include "image/bitmap.h"
 #include "image/bmp.h"
+#include "image/enderezar.h"
 #include "image/jpeg.h"
 #include "image/netpbm.h"
 #include "image/png.h"
