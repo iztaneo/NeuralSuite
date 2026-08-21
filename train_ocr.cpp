@@ -44,6 +44,33 @@ struct Muestra {
 };
 
 /** @brief Carga una particion del corpus. Devuelve false si falta algo. */
+/**
+ * @brief Averigua el ancho de las imagenes de un corpus mirando la primera.
+ *
+ * El ancho no se pasa por argumento ni se da por supuesto: lo fija el corpus,
+ * y suponerlo cuesta caro. Estuvo fijo en 128 y al generar renglones largos
+ * —que necesitan 512 para caber— la carga fallaba con un mensaje sobre el
+ * tamano de un archivo, que apunta al sitio equivocado.
+ */
+bool AnchoDelCorpus(const std::string& raiz, const std::string& nombre, int* ancho,
+                    std::string* error) {
+  std::ifstream lista(raiz + "/" + nombre + ".txt");
+  std::string linea;
+  if (!lista || !std::getline(lista, linea)) {
+    *error = "no se pudo leer " + raiz + "/" + nombre + ".txt";
+    return false;
+  }
+  const size_t tab = linea.find('\t');
+  if (tab == std::string::npos) {
+    *error = "linea con formato inesperado en " + raiz + "/" + nombre + ".txt";
+    return false;
+  }
+  image::Bitmap mapa;
+  if (!image::Load(raiz + "/" + nombre + "/" + linea.substr(0, tab), &mapa, error)) return false;
+  *ancho = mapa.width;
+  return true;
+}
+
 bool CargarParticion(const std::string& raiz, const std::string& nombre, int alto, int ancho,
                      std::vector<Muestra>* salida, std::string* error) {
   const std::string lista = raiz + "/" + nombre + ".txt";
@@ -91,16 +118,14 @@ bool CargarParticion(const std::string& raiz, const std::string& nombre, int alt
   return true;
 }
 
-/** @brief Colapsa repeticiones y descarta espacios, igual que DecodeBatch. */
+/** @brief Colapsa repeticiones y descarta el blanco, igual que DecodeBatch. */
 std::string Colapsar(const std::vector<int>& clases, const std::string& vocabulario) {
+  const int clase_blanco = static_cast<int>(vocabulario.size()) - 1;
   std::string salida;
   int previo = -1;
   for (int clase : clases) {
     if (clase != previo) {
-      if (clase >= 0 && clase < static_cast<int>(vocabulario.size()) &&
-          vocabulario[clase] != ' ') {
-        salida += vocabulario[clase];
-      }
+      if (clase >= 0 && clase < clase_blanco) salida += vocabulario[clase];
       previo = clase;
     }
   }
@@ -131,6 +156,10 @@ struct Evaluacion {
 Evaluacion Evaluar(CRNNModel& modelo, const std::vector<Muestra>& datos, int alto, int ancho,
                    int lote, const std::string& vocabulario) {
   const std::vector<char> vocab(vocabulario.begin(), vocabulario.end());
+  // La ultima clase del vocabulario es el blanco: marca «aqui no hay letra» y
+  // el decodificado la descarta. El espacio entre palabras es otra clase y si
+  // se conserva.
+  const int clase_blanco = static_cast<int>(vocabulario.size()) - 1;
   long pasos_ok = 0, pasos_total = 0, palabras_ok = 0;
   long ediciones = 0, caracteres = 0;
 
@@ -142,7 +171,7 @@ Evaluacion Evaluar(CRNNModel& modelo, const std::vector<Muestra>& datos, int alt
                 x.Data() + static_cast<size_t>(b) * alto * ancho);
     }
     const Tensor logits = modelo.Forward(x);
-    const std::vector<std::string> leidas = modelo.DecodeBatch(logits, vocab);
+    const std::vector<std::string> leidas = modelo.DecodeBatch(logits, vocab, clase_blanco);
 
     const int T = logits.Shape()[1], C = logits.Shape()[2];
     for (int b = 0; b < n; ++b) {
@@ -175,7 +204,7 @@ Evaluacion Evaluar(CRNNModel& modelo, const std::vector<Muestra>& datos, int alt
 int main(int argc, char** argv) {
   std::string raiz = "/tmp/ocr_datos";
   std::string salida;
-  int epocas = 20, lote = 8, oculto = 64, alto = 32, ancho = 128, limite = 0;
+  int epocas = 20, lote = 8, oculto = 64, alto = 32, ancho = 0, limite = 0;
   float lr = 1e-3f;
 
   for (int i = 1; i < argc; ++i) {
@@ -212,6 +241,11 @@ int main(int argc, char** argv) {
   std::cout << "============================================================\n" << std::flush;
 
   std::string error;
+  if (!AnchoDelCorpus(raiz, "train", &ancho, &error)) {
+    std::cerr << "ERROR: " << error << "\n";
+    return 1;
+  }
+
   std::vector<Muestra> entrenamiento, validacion;
   std::printf("decodificando las imagenes del corpus...\n");
   std::fflush(stdout);
@@ -330,7 +364,9 @@ int main(int argc, char** argv) {
       std::copy(validacion[b].pixeles.begin(), validacion[b].pixeles.end(),
                 x.Data() + static_cast<size_t>(b) * alto * ancho);
     }
-    const std::vector<std::string> leidas = modelo.DecodeBatch(modelo.Forward(x), vocab);
+    const int clase_blanco = static_cast<int>(vocabulario.size()) - 1;
+    const std::vector<std::string> leidas =
+        modelo.DecodeBatch(modelo.Forward(x), vocab, clase_blanco);
     std::printf("\nLecturas de validacion:\n");
     for (int b = 0; b < n; ++b) {
       std::printf("  %s  leido '%s'   esperado '%s'\n",

@@ -61,13 +61,22 @@ class CRNNModel : public Layer {
   /** @brief Cuanto se reduce el ancho: dos pooling de 2, el tercero lo respeta. */
   static constexpr int kWidthReduction = 4;
 
-  /** @brief Vocabulario de la implementacion de referencia: 63 simbolos. */
+  /**
+   * @brief Vocabulario por defecto: 62 simbolos, el espacio y el blanco.
+   *
+   * La ultima clase es el blanco, que marca «aqui no hay letra» y el
+   * decodificado descarta. El espacio entre palabras es una clase aparte y si
+   * se conserva. Antes eran la misma, y por eso el modelo no podia leer una
+   * linea de varias palabras aunque acertara todos los caracteres: el
+   * decodificado se comia los espacios junto con el relleno.
+   */
   static std::vector<char> DefaultVocab() {
     std::vector<char> vocab;
     for (char c = 'A'; c <= 'Z'; ++c) vocab.push_back(c);
     for (char c = 'a'; c <= 'z'; ++c) vocab.push_back(c);
     for (char c = '0'; c <= '9'; ++c) vocab.push_back(c);
     vocab.push_back(' ');
+    vocab.push_back('\0');   // el blanco
     return vocab;
   }
 
@@ -155,13 +164,19 @@ class CRNNModel : public Layer {
   /**
    * @brief Convierte los logits en una cadena por cada imagen del lote.
    *
-   * Colapsa repeticiones consecutivas del mismo simbolo y descarta el espacio,
-   * igual que `decode_word` en la implementacion de referencia. Es un decodificado
-   * voraz: no busca la secuencia mas probable en conjunto, solo el mejor
-   * simbolo en cada paso.
+   * Colapsa repeticiones consecutivas del mismo simbolo y descarta el relleno.
+   * Es un decodificado voraz: no busca la secuencia mas probable en conjunto,
+   * solo el mejor simbolo en cada paso.
+   *
+   * `clase_blanco` dice cual es la clase de relleno. Con -1 se descarta el
+   * espacio, que es lo que hacia la implementacion de referencia y sigue
+   * valiendo para un vocabulario sin blanco. Con un vocabulario que lo tenga,
+   * hay que pasarlo: si no, los espacios entre palabras sobreviven —bien— pero
+   * el relleno tambien, y la salida se llena de basura.
    */
   [[nodiscard]] std::vector<std::string> DecodeBatch(const Tensor& logits,
-                                                     const std::vector<char>& vocab) const {
+                                                     const std::vector<char>& vocab,
+                                                     int clase_blanco = -1) const {
     const std::vector<int>& shape = logits.Shape();
     if (shape.size() != 3) {
       throw std::invalid_argument("DecodeBatch espera logits de rango 3 [batch, tiempo, clases]");
@@ -184,7 +199,10 @@ class CRNNModel : public Layer {
           }
         }
         if (best != prev) {
-          if (best < static_cast<int>(vocab.size()) && vocab[best] != ' ') word += vocab[best];
+          const bool relleno = (clase_blanco >= 0) ? (best == clase_blanco)
+                                                   : (best < static_cast<int>(vocab.size()) &&
+                                                      vocab[best] == ' ');
+          if (!relleno && best < static_cast<int>(vocab.size())) word += vocab[best];
           prev = best;
         }
       }
@@ -194,9 +212,9 @@ class CRNNModel : public Layer {
   }
 
   /** @brief La primera imagen del lote, para el caso de una sola linea. */
-  [[nodiscard]] std::string DecodeWord(const Tensor& logits,
-                                       const std::vector<char>& vocab) const {
-    const std::vector<std::string> words = DecodeBatch(logits, vocab);
+  [[nodiscard]] std::string DecodeWord(const Tensor& logits, const std::vector<char>& vocab,
+                                       int clase_blanco = -1) const {
+    const std::vector<std::string> words = DecodeBatch(logits, vocab, clase_blanco);
     return words.empty() ? std::string() : words.front();
   }
 

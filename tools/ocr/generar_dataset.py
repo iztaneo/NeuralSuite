@@ -29,10 +29,22 @@ import os
 import random
 import string
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-# Vocabulario de la implementación de referencia: 62 símbolos más el espacio.
-VOCAB = string.ascii_uppercase + string.ascii_lowercase + string.digits + " "
+# Vocabulario: 62 símbolos, el espacio, y una clase de blanco al final.
+#
+# El blanco es lo que CTC llama *blank* y aquí hacía falta por la misma razón.
+# Antes el espacio hacía dos trabajos a la vez: separar palabras y marcar «aquí
+# no hay letra», y el decodificado lo descartaba siempre. Con eso, un espacio
+# bien predicho se perdía igual y el modelo no podía leer una línea de varias
+# palabras aunque acertara todos los caracteres.
+#
+# Ahora son clases distintas: el blanco se descarta al decodificar y el espacio
+# se conserva. El blanco es además lo que se mete entre dos letras iguales para
+# que el colapso de repeticiones no las funda.
+VOCAB = string.ascii_uppercase + string.ascii_lowercase + string.digits + " " + "\x00"
+BLANCO = len(VOCAB) - 1     # la ultima clase; nunca se emite al decodificar
+ESPACIO = VOCAB.index(" ")
 
 # Directorios de tipografías de los tres sistemas. Se recorren todos: el corpus
 # debe poder generarse en la máquina de quien entrena y en la integración
@@ -47,8 +59,11 @@ DIRECTORIOS_FUENTES = [
 # Tipografías preferidas, por nombre. Se buscan por coincidencia parcial para no
 # depender de la ruta exacta, que cambia entre sistemas y versiones. Son de
 # ancho variable y sin adornos, que es lo que aparece en un documento impreso.
-PREFERIDAS = ["Helvetica", "Arial", "Verdana", "Tahoma", "DejaVuSans", "LiberationSans",
-              "Times New Roman", "Georgia", "Courier", "Menlo", "Consolas", "FreeSans"]
+# Ya no se filtra por nombre. Se usan todas las que tengan alfabeto latino
+# utilizable, que en un Mac son unas 177 de 120 familias. El filtro por nombre
+# dejaba ocho, todas sans-serif, y esa fue una de las causas medidas de que la
+# página de la Ilíada —impresa en serif— diera 54% de error de carácter.
+PREFERIDAS = []
 
 
 def dibuja_letras(fuente, minimo_distintos=8):
@@ -80,7 +95,7 @@ def dibuja_letras(fuente, minimo_distintos=8):
     return len(muestras) >= minimo_distintos
 
 
-def descubrir_fuentes(maximo=8):
+def descubrir_fuentes(maximo=180, por_familia=3):
     """Devuelve rutas de tipografías utilizables, las preferidas primero."""
     candidatas = []
     for base in DIRECTORIOS_FUENTES:
@@ -90,11 +105,7 @@ def descubrir_fuentes(maximo=8):
             candidatas.extend(glob.glob(os.path.join(base, "**", patron), recursive=True))
 
     def prioridad(ruta):
-        nombre = os.path.basename(ruta)
-        for i, pref in enumerate(PREFERIDAS):
-            if pref.lower().replace(" ", "") in nombre.lower().replace(" ", ""):
-                return i
-        return len(PREFERIDAS)
+        return 0
 
     # El recorrido recursivo pasa dos veces por los subdirectorios que ademas
     # estan listados aparte, asi que hay que quitar repetidos por ruta real.
@@ -108,12 +119,10 @@ def descubrir_fuentes(maximo=8):
 
     elegidas, familias = [], []
     for ruta in candidatas:
-        if prioridad(ruta) >= len(PREFERIDAS):
-            continue  # solo las preferidas: el resto son símbolos, emoji o alfabetos ajenos
-        # Como mucho dos variantes por familia: ocho pesos distintos de Arial
-        # dan menos variedad al modelo que cuatro tipografias diferentes.
+        # Se limita cuantas variantes por familia entran: ocho pesos de Arial
+        # aportan menos que ocho familias distintas.
         familia = os.path.basename(ruta).split()[0].split(".")[0].lower()
-        if sum(1 for f in familias if f == familia) >= 2:
+        if sum(1 for f in familias if f == familia) >= por_familia:
             continue
         try:
             fuente = ImageFont.truetype(ruta, 20)
@@ -154,8 +163,10 @@ def etiquetas_por_paso(texto, fuente, x0, ancho, pasos, indice):
     tener que implementar CTC, que es lo que hace falta cuando la alineacion se
     desconoce.
 
-    A un paso que no cae sobre ninguna letra se le asigna el espacio, que ya
-    forma parte del vocabulario y que el decodificado descarta.
+    A un paso que no cae sobre ninguna letra se le asigna la clase de blanco,
+    que el decodificado descarta. El espacio entre palabras es una clase
+    distinta y sí se conserva: son cosas diferentes y confundirlas impedía leer
+    una línea de varias palabras.
 
     Queda un problema, y es el mismo que resuelve CTC con su simbolo en blanco:
     el decodificado colapsa repeticiones consecutivas, asi que dos letras
@@ -176,14 +187,14 @@ def etiquetas_por_paso(texto, fuente, x0, ancho, pasos, indice):
     for i in range(1, len(texto) + 1):
         bordes.append(x0 + fuente.getlength(texto[:i]))
 
-    clase_espacio = indice[" "]
+    clase_blanco = BLANCO
     salida, procedencia = [], []   # procedencia: indice del caracter, o -1
     for paso in range(pasos):
         centro = (paso + 0.5) * ancho_paso
-        clase, origen = clase_espacio, -1
+        clase, origen = clase_blanco, -1
         for i, caracter in enumerate(texto):
             if bordes[i] <= centro < bordes[i + 1]:
-                clase, origen = indice.get(caracter, clase_espacio), i
+                clase, origen = indice.get(caracter, clase_blanco), i
                 break
         salida.append(clase)
         procedencia.append(origen)
@@ -197,7 +208,7 @@ def etiquetas_por_paso(texto, fuente, x0, ancho, pasos, indice):
             continue   # letras distintas: el colapso ya las separa
         # Solo si a la segunda le sobra algun paso.
         if sum(1 for o in procedencia if o == actual) > 1:
-            salida[paso] = clase_espacio
+            salida[paso] = clase_blanco
             procedencia[paso] = -1
     return salida
 
@@ -224,23 +235,66 @@ def renderizar(texto, ruta_fuente, ancho, alto, rng):
     x = rng.randint(0, holgura_x) - dx
     y = rng.randint(0, holgura_y) - dy
     dibujo.text((x, y), texto, fill=tinta, font=fuente)
+
+    # Degradación. Un renglón de un libro llega con 14 píxeles de alto y se
+    # amplía a 32: el modelo recibe trazos interpolados, no los glifos nítidos
+    # con los que se entrenaba. Se reproduce reduciendo y volviendo a ampliar.
+    # El desenfoque y el ruido cubren el escaneo y la foto.
+    if rng.random() < 0.5:
+        factor = rng.uniform(0.35, 0.8)
+        pequena = imagen.resize((max(8, int(ancho * factor)), max(8, int(alto * factor))),
+                                Image.BILINEAR)
+        imagen = pequena.resize((ancho, alto), Image.BILINEAR)
+    if rng.random() < 0.3:
+        imagen = imagen.filter(ImageFilter.GaussianBlur(rng.uniform(0.3, 1.0)))
+    if rng.random() < 0.4:
+        pixeles = imagen.load()
+        amplitud = rng.randint(4, 20)
+        for yy in range(alto):
+            for xx in range(ancho):
+                v = pixeles[xx, yy] + rng.randint(-amplitud, amplitud)
+                pixeles[xx, yy] = max(0, min(255, v))
+
     return imagen, fuente, x + dx
 
 
-def palabras(rng, n, longitud_min=3, longitud_max=10):
-    """Mezcla de palabras reales y cadenas aleatorias del vocabulario."""
-    reales = ["MITSUBISHI", "MOTORS", "Toyota", "Honda", "Nissan", "Engine", "Speed",
-              "Drive", "Japan", "Serie", "Modelo", "Placa", "Folio", "Factura",
-              "Total", "Fecha", "Cliente", "Producto", "Cantidad", "Precio"]
-    simbolos = VOCAB.replace(" ", "")
-    salida = []
-    for _ in range(n):
-        if rng.random() < 0.35:
-            salida.append(rng.choice(reales))
-        else:
-            largo = rng.randint(longitud_min, longitud_max)
-            salida.append("".join(rng.choice(simbolos) for _ in range(largo)))
-    return salida
+REALES = ["MITSUBISHI", "MOTORS", "Toyota", "Honda", "Nissan", "Engine", "Speed",
+          "Drive", "Japan", "Serie", "Modelo", "Placa", "Folio", "Factura",
+          "Total", "Fecha", "Cliente", "Producto", "Cantidad", "Precio",
+          "disputa", "entre", "guerra", "madre", "pedirle", "ayude", "los",
+          "que", "del", "para", "porque", "hijo", "sobre", "cuando", "desde",
+          "primero", "segundo", "tercero", "importe", "unidad", "descuento"]
+
+SIMBOLOS = string.ascii_uppercase + string.ascii_lowercase + string.digits
+
+
+def una_palabra(rng, largo_min=2, largo_max=11):
+    """Una palabra real o una cadena aleatoria."""
+    if rng.random() < 0.45:
+        return rng.choice(REALES)
+    return "".join(rng.choice(SIMBOLOS) for _ in range(rng.randint(largo_min, largo_max)))
+
+
+def renglon(rng, caracteres_min=6, caracteres_max=38):
+    """Una línea de varias palabras separadas por espacios.
+
+    Un renglón de libro son unos cincuenta caracteres con espacios, y el modelo
+    se entrenaba con palabras sueltas de hasta diez. Medido sobre la página de
+    la Ilíada, ese desajuste —junto con la tipografía— era el grueso del 54% de
+    error; los acentos, que era lo que se había culpado al principio, son el
+    4.1% del texto.
+
+    Se conservan también renglones de una sola palabra: un OCR recibe tanto
+    párrafos como campos sueltos de un formulario.
+    """
+    objetivo = rng.randint(caracteres_min, caracteres_max)
+    partes = []
+    largo = 0
+    while largo < objetivo:
+        w = una_palabra(rng)
+        partes.append(w)
+        largo += len(w) + 1
+    return " ".join(partes)
 
 
 INDICE = {c: i for i, c in enumerate(VOCAB)}
@@ -251,7 +305,10 @@ def main():
     ap.add_argument("--out", default="/tmp/ocr_datos")
     ap.add_argument("--n", type=int, default=4000, help="imagenes de entrenamiento")
     ap.add_argument("--n-val", type=int, default=400, help="imagenes de validacion")
-    ap.add_argument("--ancho", type=int, default=128)
+    # 512 px dan 128 pasos de secuencia, unos cuatro por caracter en un renglon
+    # de treinta: la misma densidad con la que ya funcionaba, pero con lineas de
+    # la longitud de las de un documento. En 128 px no caben.
+    ap.add_argument("--ancho", type=int, default=512)
     ap.add_argument("--alto", type=int, default=32)
     ap.add_argument("--seed", type=int, default=17)
     ap.add_argument("--listar-fuentes", action="store_true")
@@ -276,7 +333,7 @@ def main():
         descartadas = 0
         pasos = args.ancho // 4  # el CRNN da una prediccion por cada cuatro columnas
         while len(etiquetas) < cantidad:
-            texto = palabras(rng, 1)[0]
+            texto = renglon(rng)
             resultado = renderizar(texto, rng.choice(fuentes), args.ancho, args.alto, rng)
             if resultado is None:
                 descartadas += 1

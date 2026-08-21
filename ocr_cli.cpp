@@ -86,6 +86,9 @@ int main(int argc, char* argv[]) {
   std::cout << "============================================================\n" << std::flush;
 
   const std::vector<char> vocab = CRNNModel::DefaultVocab();
+  // La ultima clase es el blanco; el decodificado la descarta y conserva los
+  // espacios entre palabras.
+  const int clase_blanco = static_cast<int>(vocab.size()) - 1;
   CRNNModel ocr_model(1, oculto, static_cast<int>(vocab.size()));
 
   const std::string weights_path = pesos;
@@ -168,7 +171,7 @@ int main(int argc, char* argv[]) {
       const image::Bitmap recorte = image::RecortarRenglon(pagina, renglones[i]);
       const Tensor entrada = image::RenglonATensor(recorte, CRNNModel::kInputHeight,
                                                    CRNNModel::kWidthReduction, invert);
-      const std::string texto = ocr_model.DecodeWord(ocr_model.Forward(entrada), vocab);
+      const std::string texto = ocr_model.DecodeWord(ocr_model.Forward(entrada), vocab, clase_blanco);
       std::printf("  %2zu  %3dx%-3d px  '%s'\n", i + 1, renglones[i].ancho, renglones[i].alto,
                   texto.c_str());
       if (salida.is_open()) salida << texto << "\n";
@@ -180,7 +183,7 @@ int main(int argc, char* argv[]) {
   }
 
   const Tensor logits = ocr_model.Forward(input);
-  const std::string decoded_text = ocr_model.DecodeWord(logits, vocab);
+  const std::string decoded_text = ocr_model.DecodeWord(logits, vocab, clase_blanco);
 
   std::cout << "\n------------------------------------------------------------\n" << std::flush;
   std::cout << "   entrada al modelo : " << CRNNModel::kInputHeight << "x" << input.Shape()[3]
