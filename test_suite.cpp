@@ -3014,7 +3014,74 @@ void TestSeparacionEnRenglones() {
     Check(t.Shape()[3] % 4 == 0, "el ancho del tensor no es multiplo de 4");
   }
 
-  // 7. Una imagen sin tinta no produce renglones ni revienta.
+  // 7. Iluminacion desigual. Un umbral global no puede con esto: con un
+  //    degradado, medio folio cae entero por debajo del corte y se cuenta como
+  //    tinta. Es lo que hace falta el umbral por vecindad.
+  //
+  //    Y la eleccion entre uno y otro no puede ser fija: en el caso 5, de bajo
+  //    contraste, el adaptativo es el que falla, porque su umbral se apoya en
+  //    la desviacion local y ahi es pequena. La automatica prueba los dos y se
+  //    queda con el que deja la proyeccion mas nitida.
+  {
+    // Tinta gris, no negra: con tinta muy oscura ningún degradado razonable
+    // llega a solapar las dos poblaciones y un umbral global seguiría
+    // valiendo. El caso difícil es texto gris sobre papel iluminado de forma
+    // desigual, que es lo que produce una foto de un documento.
+    Bitmap imagen = lienzo(220, 130, 245);
+    for (int r = 0; r < 4; ++r) banda(&imagen, 12 + r * 30, 12 + r * 30 + 16, 15, 205, 130);
+    // Degradado lateral: el fondo del lado oscuro baja hasta 98, por debajo de
+    // la tinta del lado claro (130). Ahí ningún corte único separa las dos.
+    for (int y = 0; y < 130; ++y) {
+      for (int x = 0; x < 220; ++x) {
+        const float factor = 1.0f - 0.6f * static_cast<float>(x) / 219.0f;
+        uint8_t& p = imagen.pixels[static_cast<size_t>(y) * 220 + x];
+        p = static_cast<uint8_t>(p * factor);
+      }
+    }
+
+    const size_t global = DetectarRenglones(imagen, 4, 2, 0.4f, Binarizacion::kGlobal).size();
+    const size_t adaptativa =
+        DetectarRenglones(imagen, 4, 2, 0.4f, Binarizacion::kAdaptativa).size();
+    const size_t automatica =
+        DetectarRenglones(imagen, 4, 2, 0.4f, Binarizacion::kAutomatica).size();
+
+    Check(global != 4, "el umbral global aguanto el degradado: la prueba no mide lo que dice");
+    Check(adaptativa == 4, "el umbral por vecindad dio " + std::to_string(adaptativa) +
+                               " renglones con iluminacion desigual");
+    Check(automatica == 4, "la eleccion automatica dio " + std::to_string(automatica) +
+                               " renglones con iluminacion desigual");
+  }
+
+  // 8. Ruido de escaneo. Aquí es donde se ve para qué sirve normalizar la
+  //    nitidez por la tinta total: sin normalizar, el método que marca más
+  //    píxeles gana siempre, y el adaptativo marca de más sobre el grano. Se
+  //    comprobó mutando: quitar la normalización baja la página con ruido de
+  //    18 renglones a 16.
+  {
+    // Trazos finos y discontinuos, como letras: sobre bandas macizas el grano
+    // no llega a cerrar los huecos entre renglones y el efecto no aparece.
+    Bitmap imagen = lienzo(300, 180, 240);
+    for (int r = 0; r < 5; ++r) {
+      for (int y = 12 + r * 34; y < 12 + r * 34 + 12; ++y) {
+        for (int x = 20; x < 280; ++x) {
+          if ((x / 2) % 2 == 0) imagen.pixels[static_cast<size_t>(y) * 300 + x] = 40;
+        }
+      }
+    }
+    uint32_t estado = 991;
+    for (size_t i = 0; i < imagen.pixels.size(); ++i) {
+      estado ^= estado << 13; estado ^= estado >> 17; estado ^= estado << 5;
+      const int ruido = static_cast<int>(estado % 81) - 40;
+      const int v = static_cast<int>(imagen.pixels[i]) + ruido;
+      imagen.pixels[i] = static_cast<uint8_t>(std::max(0, std::min(255, v)));
+    }
+    const size_t automatica =
+        DetectarRenglones(imagen, 4, 2, 0.4f, Binarizacion::kAutomatica).size();
+    Check(automatica == 5,
+          "con ruido de escaneo salieron " + std::to_string(automatica) + " renglones de 5");
+  }
+
+  // 9. Una imagen sin tinta no produce renglones ni revienta.
   {
     const Bitmap vacia = lienzo(50, 50, 255);
     Check(DetectarRenglones(vacia).empty(), "encontro renglones en una imagen en blanco");
@@ -3022,7 +3089,7 @@ void TestSeparacionEnRenglones() {
     Check(DetectarRenglones(nada).empty(), "no soporto una imagen vacia");
   }
 
-  std::cout << "PASADO ✅ (7 casos: posición, acentos, renglones pegados, motas, bajo contraste, proporción)\n"
+  std::cout << "PASADO ✅ (9 casos: posición, acentos, renglones pegados, motas, contraste, proporción, iluminación desigual, ruido)\n"
             << std::flush;
 }
 

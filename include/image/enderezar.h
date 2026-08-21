@@ -54,6 +54,7 @@
 #include <vector>
 #include "../parallel.h"
 #include "bitmap.h"
+#include "binarizar.h"
 #include "renglones.h"
 
 namespace neuralsuite {
@@ -112,20 +113,16 @@ inline double NitidezProyeccion(const std::vector<uint8_t>& tinta, int ancho, in
  * veces mas evaluaciones para el mismo resultado.
  */
 inline double EstimarInclinacion(const Bitmap& imagen, double rango_grados = 8.0,
-                                 double paso_grueso = 0.5, double paso_fino = 0.1) {
+                                 double paso_grueso = 0.5, double paso_fino = 0.1,
+                                 Binarizacion metodo = Binarizacion::kAutomatica) {
   if (imagen.Empty()) return 0.0;
 
   std::vector<float> gris;
   ToGrayscale(imagen, &gris);
   const int ancho = imagen.width, alto = imagen.height;
-  const int umbral = UmbralOtsu(gris);
-
   // Se binariza una vez y se reutiliza en todas las pruebas: lo que cambia
   // entre angulos es donde cae cada pixel, no cual es tinta.
-  std::vector<uint8_t> tinta(static_cast<size_t>(ancho) * alto, 0);
-  for (size_t i = 0; i < tinta.size(); ++i) {
-    tinta[i] = static_cast<int>(gris[i] * 255.0f + 0.5f) <= umbral ? 1 : 0;
-  }
+  const std::vector<uint8_t> tinta = Binarizar(gris, ancho, alto, metodo);
 
   const auto buscar = [&](double desde, double hasta, double paso) {
     const int n = static_cast<int>(std::lround((hasta - desde) / paso)) + 1;

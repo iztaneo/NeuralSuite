@@ -39,6 +39,7 @@
 #include <vector>
 #include <cstring>
 #include "../tensor.h"
+#include "binarizar.h"
 #include "bitmap.h"
 
 namespace neuralsuite {
@@ -48,50 +49,6 @@ namespace image {
 struct Renglon {
   int x = 0, y = 0, ancho = 0, alto = 0;
 };
-
-/**
- * @brief Umbral que separa tinta de fondo, por el metodo de Otsu.
- *
- * Busca el corte que deja las dos poblaciones de pixeles —la clara y la
- * oscura— lo mas separadas posible entre si. Sale del histograma de la imagen,
- * de modo que se adapta a un escaneo gris igual que a un texto negro sobre
- * blanco, sin que haya que darle ningun numero.
- *
- * El umbral que devuelve es **inclusive**: la clase oscura es `[0, t]`. Con un
- * histograma continuo da lo mismo comparar con `<` o con `<=`, y por eso el
- * error no se veia en las imagenes reales; pero en una imagen de dos niveles
- * exactos —la que usa la prueba— Otsu devuelve justo el nivel de la tinta y
- * con `<` no se detecta ni un pixel.
- */
-inline int UmbralOtsu(const std::vector<float>& gris) {
-  int histograma[256] = {0};
-  for (float v : gris) {
-    int nivel = static_cast<int>(v * 255.0f + 0.5f);
-    histograma[std::max(0, std::min(255, nivel))]++;
-  }
-  const double total = static_cast<double>(gris.size());
-  double suma_total = 0.0;
-  for (int i = 0; i < 256; ++i) suma_total += i * histograma[i];
-
-  double suma_fondo = 0.0, peso_fondo = 0.0, mejor_varianza = -1.0;
-  int mejor = 128;
-  for (int t = 0; t < 256; ++t) {
-    peso_fondo += histograma[t];
-    if (peso_fondo == 0.0) continue;
-    const double peso_frente = total - peso_fondo;
-    if (peso_frente == 0.0) break;
-    suma_fondo += t * histograma[t];
-    const double media_fondo = suma_fondo / peso_fondo;
-    const double media_frente = (suma_total - suma_fondo) / peso_frente;
-    const double diferencia = media_fondo - media_frente;
-    const double varianza = peso_fondo * peso_frente * diferencia * diferencia;
-    if (varianza > mejor_varianza) {
-      mejor_varianza = varianza;
-      mejor = t;
-    }
-  }
-  return mejor;
-}
 
 /**
  * @brief Encuentra los renglones de una imagen.
@@ -119,23 +76,22 @@ inline int UmbralOtsu(const std::vector<float>& gris) {
  */
 inline std::vector<Renglon> DetectarRenglones(const Bitmap& imagen, int alto_minimo = 4,
                                               int union_maxima = 2,
-                                              float proporcion_acento = 0.4f) {
+                                              float proporcion_acento = 0.4f,
+                                              Binarizacion metodo = Binarizacion::kAutomatica) {
   std::vector<Renglon> renglones;
   if (imagen.Empty()) return renglones;
 
   std::vector<float> gris;
   ToGrayscale(imagen, &gris);
   const int ancho = imagen.width, alto = imagen.height;
-  const int umbral = UmbralOtsu(gris);
+  // Se da por supuesto texto oscuro sobre fondo claro, que es como llega un
+  // documento.
+  const std::vector<uint8_t> marca = Binarizar(gris, ancho, alto, metodo);
 
-  // Tinta por fila. Se considera tinta lo que queda por debajo del umbral, o
-  // sea lo mas oscuro: se da por supuesto texto oscuro sobre fondo claro, que
-  // es como llega un documento.
   std::vector<int> tinta(alto, 0);
   for (int y = 0; y < alto; ++y) {
     for (int x = 0; x < ancho; ++x) {
-      const int nivel = static_cast<int>(gris[static_cast<size_t>(y) * ancho + x] * 255.0f + 0.5f);
-      if (nivel <= umbral) ++tinta[y];
+      if (marca[static_cast<size_t>(y) * ancho + x]) ++tinta[y];
     }
   }
 
@@ -182,9 +138,7 @@ inline std::vector<Renglon> DetectarRenglones(const Bitmap& imagen, int alto_min
     int x0 = ancho, x1 = -1;
     for (int y = banda.first; y <= banda.second; ++y) {
       for (int x = 0; x < ancho; ++x) {
-        const int nivel =
-            static_cast<int>(gris[static_cast<size_t>(y) * ancho + x] * 255.0f + 0.5f);
-        if (nivel <= umbral) {
+        if (marca[static_cast<size_t>(y) * ancho + x]) {
           x0 = std::min(x0, x);
           x1 = std::max(x1, x);
         }

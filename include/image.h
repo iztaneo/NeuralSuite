@@ -22,6 +22,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include "image/binarizar.h"
 #include "image/bitmap.h"
 #include "image/bmp.h"
 #include "image/enderezar.h"
