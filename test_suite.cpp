@@ -2683,6 +2683,54 @@ void TestConv2DRapidaContraReferencia() {
     peor = std::max({peor, e_salida, e_peso, e_sesgo, e_entrada});
   }
 
+  // Las operaciones elementales y el pooling reparten su bucle entre hilos, y
+  // ninguna lleva reduccion, asi que el resultado tiene que ser identico bit a
+  // bit. En MaxPool2D el reparto va por plano y no por posicion de salida: dos
+  // ventanas solapadas pueden compartir maximo, de modo que repartir por
+  // posicion seria una carrera. Esto lo detectaria.
+  {
+    const int hilos = parallel::ThreadCount();
+    Tensor x({4, 6, 20, 24});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.7f * std::sin(0.31f * static_cast<float>(i)) - 0.2f;
+    }
+
+    auto ejecutar = [&](int n) {
+      parallel::ThreadCount() = n;
+      Tensor relu, sig, suma;
+      ReluForward(x, relu);
+      SigmoidForward(x, sig);
+      ElementwiseMul(relu, sig, suma);
+      // Ventana 3 con paso 2: las ventanas se solapan a proposito.
+      MaxPool2D pool(3, 3, 2, 2);
+      Tensor y = pool.Forward(suma);
+      Tensor d(y.Shape());
+      for (size_t i = 0; i < d.TotalSize(); ++i) {
+        d[i] = 0.4f * std::cos(0.17f * static_cast<float>(i));
+      }
+      Tensor dx = pool.Backward(d);
+      std::vector<Tensor> salida;
+      salida.push_back(suma);
+      salida.push_back(y);
+      salida.push_back(dx);
+      return salida;
+    };
+
+    const std::vector<Tensor> serie = ejecutar(1);
+    const std::vector<Tensor> varios = ejecutar(std::max(4, hilos));
+    parallel::ThreadCount() = hilos;
+
+    const char* nombres[3] = {"las operaciones elementales", "MaxPool2D hacia delante",
+                              "MaxPool2D hacia atras"};
+    for (int k = 0; k < 3; ++k) {
+      bool iguales = serie[k].TotalSize() == varios[k].TotalSize();
+      for (size_t i = 0; iguales && i < serie[k].TotalSize(); ++i) {
+        iguales = serie[k][i] == varios[k][i];
+      }
+      Check(iguales, std::string(nombres[k]) + " cambian con el numero de hilos");
+    }
+  }
+
   // Anidar reparto dentro de reparto. Conv2D reparte por imagen del lote y
   // dentro llama a MatMul, que reparte por filas. El guardia que evita volver a
   // pedir el pool estando dentro de el solo marcaba a los hilos trabajadores, y

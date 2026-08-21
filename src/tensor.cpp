@@ -460,72 +460,99 @@ void GeluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
   });
 }
 
+// Las operaciones elementales de este bloque reparten su bucle entre hilos.
+// Escribian una posicion de salida por cada posicion de entrada, sin ninguna
+// reduccion, asi que el reparto no cambia el orden de ninguna suma y el
+// resultado es identico bit a bit al de un solo hilo.
+//
+// Estaban sin repartir por omision, no por decision: GELU y softmax si lo
+// hacian desde el principio. Medido sobre un paso del CRNN de OCR, ReLU y
+// MaxPool2D juntos eran 15.2 ms de 28.2 -el 53.8%- una vez que la convolucion
+// y la celda recurrente dejaron de dominar.
 void ReluForward(const Tensor& input, Tensor& output) {
-  size_t sz = input.TotalSize();
+  const int sz = static_cast<int>(input.TotalSize());
   output.Resize(input.Shape());
-  for (size_t i = 0; i < sz; ++i) {
-    output[i] = (input[i] > 0.0f) ? input[i] : 0.0f;
-  }
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) {
+      output[i] = (input[i] > 0.0f) ? input[i] : 0.0f;
+    }
+  });
 }
 
 void ReluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
-  size_t sz = input.TotalSize();
+  const int sz = static_cast<int>(input.TotalSize());
   dx.Resize(input.Shape());
-  for (size_t i = 0; i < sz; ++i) {
-    dx[i] = (input[i] > 0.0f) ? dout[i] : 0.0f;
-  }
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) {
+      dx[i] = (input[i] > 0.0f) ? dout[i] : 0.0f;
+    }
+  });
 }
 
 void SigmoidForward(const Tensor& input, Tensor& output) {
-  size_t sz = input.TotalSize();
+  const int sz = static_cast<int>(input.TotalSize());
   output.Resize(input.Shape());
-  for (size_t i = 0; i < sz; ++i) {
-    output[i] = 1.0f / (1.0f + std::exp(-input[i]));
-  }
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) {
+      output[i] = 1.0f / (1.0f + std::exp(-input[i]));
+    }
+  });
 }
 
 void SigmoidBackward(const Tensor& dout, const Tensor& output, Tensor& dx) {
-  size_t sz = output.TotalSize();
+  const int sz = static_cast<int>(output.TotalSize());
   dx.Resize(output.Shape());
-  for (size_t i = 0; i < sz; ++i) {
-    float s = output[i];
-    dx[i] = dout[i] * s * (1.0f - s);
-  }
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) {
+      float s = output[i];
+      dx[i] = dout[i] * s * (1.0f - s);
+    }
+  });
 }
 
 void TanhForward(const Tensor& input, Tensor& output) {
-  size_t sz = input.TotalSize();
+  const int sz = static_cast<int>(input.TotalSize());
   output.Resize(input.Shape());
-  for (size_t i = 0; i < sz; ++i) {
-    output[i] = std::tanh(input[i]);
-  }
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) {
+      output[i] = std::tanh(input[i]);
+    }
+  });
 }
 
 void TanhBackward(const Tensor& dout, const Tensor& output, Tensor& dx) {
-  size_t sz = output.TotalSize();
+  const int sz = static_cast<int>(output.TotalSize());
   dx.Resize(output.Shape());
-  for (size_t i = 0; i < sz; ++i) {
-    float th = output[i];
-    dx[i] = dout[i] * (1.0f - th * th);
-  }
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) {
+      float th = output[i];
+      dx[i] = dout[i] * (1.0f - th * th);
+    }
+  });
 }
 
 void ElementwiseAdd(const Tensor& a, const Tensor& b, Tensor& out) {
-  size_t sz = a.TotalSize();
+  const int sz = static_cast<int>(a.TotalSize());
   out.Resize(a.Shape());
-  for (size_t i = 0; i < sz; ++i) out[i] = a[i] + b[i];
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) out[i] = a[i] + b[i];
+  });
 }
 
 void ElementwiseSub(const Tensor& a, const Tensor& b, Tensor& out) {
-  size_t sz = a.TotalSize();
+  const int sz = static_cast<int>(a.TotalSize());
   out.Resize(a.Shape());
-  for (size_t i = 0; i < sz; ++i) out[i] = a[i] - b[i];
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) out[i] = a[i] - b[i];
+  });
 }
 
 void ElementwiseMul(const Tensor& a, const Tensor& b, Tensor& out) {
-  size_t sz = a.TotalSize();
+  const int sz = static_cast<int>(a.TotalSize());
   out.Resize(a.Shape());
-  for (size_t i = 0; i < sz; ++i) out[i] = a[i] * b[i];
+  parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
+    for (int i = desde; i < hasta; ++i) out[i] = a[i] * b[i];
+  });
 }
 
 }  // namespace neuralsuite

@@ -40,7 +40,6 @@ naturaleza.
 
 | | Fase | Nota |
 | --- | --- | --- |
-| `ReLU` y `MaxPool2D` paralelizados | 09 | El cuello actual del CRNN: **15.2 ms de un paso de 28.2, el 53.8%**. Son bucles elementales sin reparto entre hilos — no hay nada que reformular, solo repartir. |
 | Intrínsecos SIMD por arquitectura | 09 | Hoy el bucle interno lo autovectoriza el compilador. |
 | KV cache contiguo | 09 | Solo afecta a la generación token a token. |
 
@@ -355,6 +354,21 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       **El bloqueo de cache no aportó nada** (a veces empeoraba): las matrices
       de estos tamaños ya caben, y lo que faltaba era reutilizar los datos ya
       cargados, no traerlos mejor.
+- [x] **Repartir entre hilos las operaciones elementales y el pooling.** No
+      había nada que reformular: `ReLU`, `Sigmoid`, `Tanh`, las tres
+      elementales y `MaxPool2D` simplemente no usaban el pool de hilos, por
+      omisión y no por decisión —`GELU` y el softmax sí lo hacían desde el
+      principio—. Una vez que la convolución y la celda recurrente dejaron de
+      dominar, eran **15.2 ms de un paso de 28.2, el 53.8%**. Ahora **4.6 ms**,
+      y el paso completo baja a **19.5 ms**: 486 imágenes por segundo frente a
+      las 6.6 del punto de partida, **62×**.
+
+      El detalle que importa está en el backward de `MaxPool2D`: el reparto va
+      por plano y no por posición de salida. Dos ventanas solapadas —cuando el
+      paso es menor que la ventana— pueden compartir máximo, de modo que dos
+      posiciones de salida suman sobre la misma de entrada; repartir por
+      posición sería una carrera. El test 30 lo comprueba con ventana 3 y paso
+      2, y esa mutación exacta lo pone en rojo.
 - [x] **Kernel optimizado de `MultiHeadAttention`**, el tercero y último del
       mismo patrón, con el literal conservado como `MultiHeadAttentionReference`.
       `Q·Kᵀ` y `P·V` son multiplicaciones de matrices escritas como bucles que

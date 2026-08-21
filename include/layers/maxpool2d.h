@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include "../layer.h"
+#include "../parallel.h"
 
 namespace neuralsuite {
 
@@ -58,8 +59,14 @@ class MaxPool2D : public Layer {
     Tensor output({batch_size, channels, out_h, out_w});
     max_indices_.resize(output.TotalSize());
 
-    for (int b = 0; b < batch_size; ++b) {
-      for (int c = 0; c < channels; ++c) {
+    // Reparto por plano (muestra, canal): cada uno escribe en su propia franja
+    // de la salida, sin reduccion, asi que el resultado es identico bit a bit
+    // al de un solo hilo.
+    parallel::ParallelFor(batch_size * channels, /*min_per_thread=*/1,
+                          [&](int desde, int hasta) {
+    for (int plano = desde; plano < hasta; ++plano) {
+      const int b = plano / channels, c = plano % channels;
+      {
         for (int oh = 0; oh < out_h; ++oh) {
           for (int ow = 0; ow < out_w; ++ow) {
             float max_val = -std::numeric_limits<float>::infinity();
@@ -84,18 +91,38 @@ class MaxPool2D : public Layer {
         }
       }
     }
+    });
     return output;
   }
 
+  /**
+   * @brief Devuelve el gradiente al maximo de cada ventana.
+   *
+   * El reparto va por plano y no por posicion de salida, y la diferencia
+   * importa. Dos ventanas que se solapan —lo que ocurre cuando el paso es menor
+   * que la ventana— pueden tener el mismo maximo, de modo que dos posiciones de
+   * salida suman sobre la misma de entrada: repartir por posicion seria una
+   * carrera. Por plano no puede haberla, porque planos distintos nunca
+   * comparten posiciones de entrada, y ademas la suma dentro de cada plano
+   * conserva su orden.
+   */
   Tensor Backward(const Tensor& dout) override {
     Tensor dx(last_input_.Shape());
     dx.Zeros();
 
-    size_t out_sz = dout.TotalSize();
-    for (size_t i = 0; i < out_sz; ++i) {
-      size_t max_idx = max_indices_[i];
-      dx[max_idx] += dout[i];
-    }
+    const int batch_size = last_input_.Shape()[0];
+    const int channels = last_input_.Shape()[1];
+    const int por_plano = static_cast<int>(dout.TotalSize()) / (batch_size * channels);
+
+    parallel::ParallelFor(batch_size * channels, /*min_per_thread=*/1,
+                          [&](int desde, int hasta) {
+      for (int plano = desde; plano < hasta; ++plano) {
+        const size_t inicio = static_cast<size_t>(plano) * por_plano;
+        for (int k = 0; k < por_plano; ++k) {
+          dx[max_indices_[inicio + k]] += dout[inicio + k];
+        }
+      }
+    });
     return dx;
   }
 
