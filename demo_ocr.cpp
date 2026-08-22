@@ -24,7 +24,7 @@ int main() {
   std::cout << "🔍 Demostración 9: OCR de una línea con CRNN\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
 
-  const std::vector<char> vocab = {'A', 'B', 'C', 'D', 'E', 'F'};
+  const std::vector<std::string> vocab = {"A", "B", "C", "D", "E", "F"};
   const int kBatch = 4, kWordLen = 6, kEpochs = 120;
 
   ManualSeed(7);

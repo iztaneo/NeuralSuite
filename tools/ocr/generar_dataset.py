@@ -42,8 +42,15 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 # Ahora son clases distintas: el blanco se descarta al decodificar y el espacio
 # se conserva. El blanco es además lo que se mete entre dos letras iguales para
 # que el colapso de repeticiones no las funda.
-VOCAB = string.ascii_uppercase + string.ascii_lowercase + string.digits + " " + "\x00"
-BLANCO = len(VOCAB) - 1     # la ultima clase; nunca se emite al decodificar
+VOCAB = (string.ascii_uppercase + string.ascii_lowercase + string.digits + " "
+         + "áéíóúüñÁÉÍÓÚÜÑ"
+         + ".,;:¿?¡!-—()'\"")
+
+# El blanco es la clase que sigue al último símbolo. No forma parte de VOCAB ni
+# se escribe en vocab.txt: representarlo obligaría a meter un carácter que no se
+# imprime en un archivo de texto, y un NUL ahí es una fuente de sorpresas. Como
+# es siempre el último, ambos lados lo deducen del tamaño del vocabulario.
+BLANCO = len(VOCAB)
 ESPACIO = VOCAB.index(" ")
 
 # Directorios de tipografías de los tres sistemas. Se recorren todos: el corpus
@@ -67,32 +74,47 @@ PREFERIDAS = []
 
 
 def dibuja_letras(fuente, minimo_distintos=8):
-    """¿La tipografía tiene glifos latinos de verdad?
+    """¿La tipografía tiene glifos para todo el vocabulario?
 
     Cuando a una fuente le falta un carácter dibuja *tofu*: un rectángulo vacío,
     igual para todos. Y el tofu tiene caja delimitadora no nula, así que
-    comprobar `getbbox("Ag")` —que es lo que hacía este archivo— lo da por
-    bueno.
+    comprobar `getbbox` lo da por bueno.
 
-    Costó caro descubrirlo. `ArialHB.ttc` (Arial Hebrew) pasaba el filtro y
+    Costó caro la primera vez. `ArialHB.ttc` (Arial Hebrew) pasaba el filtro y
     dibujaba tofu para todo el alfabeto latino: como la tipografía se elige al
-    azar entre ocho, **una de cada ocho imágenes del corpus eran seis
-    rectángulos vacíos etiquetados con una palabra real**. No es ruido, es
-    supervisión contradictoria, y ponía el techo del entrenamiento en 87.5%
-    hiciera lo que hiciera el modelo. Aparecio como una lectura absurda —
-    'Nissan' transcrito como 'JPMoroesiononoe'— que al mirar la imagen resulto
-    no contener la palabra.
+    azar, **una de cada ocho imágenes del corpus eran rectángulos vacíos
+    etiquetados con una palabra real**. No es ruido, es supervisión
+    contradictoria, y ponía un techo al entrenamiento hiciera lo que hiciera el
+    modelo.
 
-    La prueba que sí distingue: dibujar varias letras distintas y exigir que los
-    mapas de bits difieran. Una fuente que dibuja tofu produce el mismo para
-    todas.
+    Al añadir acentos y signos reapareció en su versión sutil: 31 de las 154
+    tipografías que pasaban el filtro —fuentes coreanas, bengalíes, de
+    símbolos— tienen las latinas básicas y **no** tienen `ñ`, `á` ni `¿`. Con
+    ellas dentro, cada palabra acentuada del corpus habría sido medio texto y
+    medio caja vacía.
+
+    El criterio es el mismo en los dos casos, y no es comparar contra el glifo
+    de reemplazo: se probó y no vale, porque cada fuente sustituye con lo que le
+    parece. `Apple Symbols` dibuja `á` y `ñ` con la misma caja de 42 píxeles y
+    ninguna de las dos coincide con U+FFFD.
+
+    Lo que sí distingue: **si la fuente tiene los caracteres, cada uno se dibuja
+    distinto; si no los tiene, todos salen iguales.** Se exige entonces que los
+    acentos y signos produzcan mapas de bits distintos entre sí.
     """
-    muestras = set()
-    for caracter in "AbcQ7zRm5W":
-        imagen = Image.new("L", (40, 40), 255)
-        ImageDraw.Draw(imagen).text((5, 5), caracter, fill=0, font=fuente)
-        muestras.add(imagen.tobytes())
-    return len(muestras) >= minimo_distintos
+    def mapa(caracter):
+        imagen = Image.new("L", (48, 48), 255)
+        ImageDraw.Draw(imagen).text((6, 6), caracter, fill=0, font=fuente)
+        return imagen.tobytes()
+
+    if len({mapa(c) for c in "AbcQ7zRm5W"}) < minimo_distintos:
+        return False
+
+    # Los no ASCII, que son los que faltan en las fuentes de otros alfabetos.
+    # Se admite alguna coincidencia: hay tipografías donde dos signos comparten
+    # glifo de verdad.
+    sondas = "áéíóúñÁÉÍÓÚÑ¿¡—"
+    return len({mapa(c) for c in sondas}) >= int(0.8 * len(sondas))
 
 
 def descubrir_fuentes(maximo=180, por_familia=3):
@@ -263,16 +285,43 @@ REALES = ["MITSUBISHI", "MOTORS", "Toyota", "Honda", "Nissan", "Engine", "Speed"
           "Total", "Fecha", "Cliente", "Producto", "Cantidad", "Precio",
           "disputa", "entre", "guerra", "madre", "pedirle", "ayude", "los",
           "que", "del", "para", "porque", "hijo", "sobre", "cuando", "desde",
-          "primero", "segundo", "tercero", "importe", "unidad", "descuento"]
+          "primero", "segundo", "tercero", "importe", "unidad", "descuento",
+          # Con acentos y eñe. No están por completitud: medido sobre la página
+          # de la Ilíada, los caracteres fuera del vocabulario eran el 4.0% de
+          # su texto, y sin ejemplos el modelo no puede aprender a emitirlos
+          # aunque la clase exista.
+          "envía", "envió", "número", "código", "artículo", "días", "está",
+          "también", "según", "año", "señor", "diseño", "más", "así", "aquí",
+          "después", "quién", "cómo", "página", "línea", "máquina", "última",
+          "método", "válido", "teléfono", "dirección", "impresión", "opción"]
+
+# Signos que se pegan a una palabra o cierran un renglón. Un OCR de documentos
+# los ve constantemente, y sin ellos en el entrenamiento las comas y los puntos
+# de la Ilíada desaparecían de la transcripción.
+SIGNOS_FINALES = [",", ".", ";", ":", "?", "!", "..."]
+SIGNOS_ENVOLVENTES = [("(", ")"), ("¿", "?"), ("¡", "!"), ("'", "'"), ('"', '"')]
 
 SIMBOLOS = string.ascii_uppercase + string.ascii_lowercase + string.digits
 
 
 def una_palabra(rng, largo_min=2, largo_max=11):
-    """Una palabra real o una cadena aleatoria."""
+    """Una palabra real o una cadena aleatoria, a veces con signos."""
     if rng.random() < 0.45:
-        return rng.choice(REALES)
-    return "".join(rng.choice(SIMBOLOS) for _ in range(rng.randint(largo_min, largo_max)))
+        palabra = rng.choice(REALES)
+    else:
+        palabra = "".join(rng.choice(SIMBOLOS)
+                          for _ in range(rng.randint(largo_min, largo_max)))
+
+    tirada = rng.random()
+    if tirada < 0.12:
+        palabra += rng.choice(SIGNOS_FINALES)
+    elif tirada < 0.17:
+        abre, cierra = rng.choice(SIGNOS_ENVOLVENTES)
+        palabra = abre + palabra + cierra
+    elif tirada < 0.20:
+        # La raya y el guion aparecen entre palabras, no sueltos.
+        palabra += rng.choice(["-", "—"])
+    return palabra
 
 
 def renglon(rng, caracteres_min=6, caracteres_max=38):

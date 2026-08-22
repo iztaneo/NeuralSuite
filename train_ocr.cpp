@@ -118,9 +118,17 @@ bool CargarParticion(const std::string& raiz, const std::string& nombre, int alt
   return true;
 }
 
-/** @brief Colapsa repeticiones y descarta el blanco, igual que DecodeBatch. */
-std::string Colapsar(const std::vector<int>& clases, const std::string& vocabulario) {
-  const int clase_blanco = static_cast<int>(vocabulario.size()) - 1;
+/**
+ * @brief Colapsa repeticiones y descarta el blanco, igual que DecodeBatch.
+ *
+ * El vocabulario llega ya partido en simbolos, no como cadena de bytes: con
+ * acentos, un simbolo ocupa dos bytes y `vocabulario[clase]` devolveria medio.
+ * El blanco es la clase que sigue al ultimo simbolo, no la ultima del archivo:
+ * no se guarda ahi porque seria escribir un caracter que no se imprime.
+ */
+std::string Colapsar(const std::vector<int>& clases,
+                     const std::vector<std::string>& vocabulario) {
+  const int clase_blanco = static_cast<int>(vocabulario.size());
   std::string salida;
   int previo = -1;
   for (int clase : clases) {
@@ -154,12 +162,11 @@ struct Evaluacion {
 };
 
 Evaluacion Evaluar(CRNNModel& modelo, const std::vector<Muestra>& datos, int alto, int ancho,
-                   int lote, const std::string& vocabulario) {
-  const std::vector<char> vocab(vocabulario.begin(), vocabulario.end());
+                   int lote, const std::vector<std::string>& vocab) {
   // La ultima clase del vocabulario es el blanco: marca «aqui no hay letra» y
   // el decodificado la descarta. El espacio entre palabras es otra clase y si
   // se conserva.
-  const int clase_blanco = static_cast<int>(vocabulario.size()) - 1;
+  const int clase_blanco = static_cast<int>(vocab.size());
   long pasos_ok = 0, pasos_total = 0, palabras_ok = 0;
   long ediciones = 0, caracteres = 0;
 
@@ -226,15 +233,20 @@ int main(int argc, char** argv) {
   }
   if (salida.empty()) salida = ReleasePath("ocr_texto.ns");
 
-  std::string vocabulario;
+  std::vector<std::string> vocabulario;
   {
     std::ifstream fichero(raiz + "/vocab.txt");
     if (!fichero) {
       std::cerr << "ERROR: no se pudo abrir " << raiz << "/vocab.txt\n";
       return 1;
     }
-    std::getline(fichero, vocabulario);
+    std::string linea;
+    std::getline(fichero, linea);
+    // El archivo viene en UTF-8 y un simbolo puede ocupar varios bytes.
+    vocabulario = CRNNModel::PartirUtf8(linea);
   }
+  // El modelo tiene una clase por simbolo mas una de blanco.
+  const int num_clases = static_cast<int>(vocabulario.size()) + 1;
 
   std::cout << "============================================================\n";
   std::cout << "Entrenamiento de OCR sobre texto renderizado\n";
@@ -264,12 +276,13 @@ int main(int argc, char** argv) {
   const int pasos = CRNNModel::TimestepsFor(ancho);
   std::printf("corpus      : %zu entrenamiento, %zu validacion  (%.1f s en decodificar)\n",
               entrenamiento.size(), validacion.size(), ms_carga / 1000.0);
-  std::printf("vocabulario : %zu simbolos\n", vocabulario.size());
+  std::printf("vocabulario : %zu simbolos + 1 de blanco = %d clases\n",
+              vocabulario.size(), num_clases);
   std::printf("imagen      : %dx%d  ->  %d pasos por linea\n", ancho, alto, pasos);
   std::printf("modelo      : oculto=%d, lote=%d, lr=%g, %d epocas\n\n", oculto, lote, lr, epocas);
 
   ManualSeed(1234);
-  CRNNModel modelo(1, oculto, static_cast<int>(vocabulario.size()));
+  CRNNModel modelo(1, oculto, num_clases);
   AdamW optimizador(modelo.Parameters(), lr);
   CrossEntropyLoss criterio;
 
@@ -315,7 +328,7 @@ int main(int argc, char** argv) {
 
       Tensor logits = modelo.Forward(x);
       Tensor plano = logits;
-      plano.Reshape({lote * pasos, static_cast<int>(vocabulario.size())});
+      plano.Reshape({lote * pasos, num_clases});
       perdida_total += criterio.Forward(plano, objetivos);
       ++lotes;
 
@@ -357,14 +370,14 @@ int main(int argc, char** argv) {
   // Unas cuantas lecturas concretas, que dicen mas que un porcentaje.
   if (!validacion.empty()) {
     modelo.Load(salida);
-    const std::vector<char> vocab(vocabulario.begin(), vocabulario.end());
+    const std::vector<std::string>& vocab = vocabulario;
     const int n = static_cast<int>(std::min<size_t>(8, validacion.size()));
     Tensor x({n, 1, alto, ancho});
     for (int b = 0; b < n; ++b) {
       std::copy(validacion[b].pixeles.begin(), validacion[b].pixeles.end(),
                 x.Data() + static_cast<size_t>(b) * alto * ancho);
     }
-    const int clase_blanco = static_cast<int>(vocabulario.size()) - 1;
+    const int clase_blanco = static_cast<int>(vocab.size());
     const std::vector<std::string> leidas =
         modelo.DecodeBatch(modelo.Forward(x), vocab, clase_blanco);
     std::printf("\nLecturas de validacion:\n");

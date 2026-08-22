@@ -85,7 +85,7 @@ int main(int argc, char* argv[]) {
   std::cout << "CRNN: Conv x3 -> BiLSTM -> Linear -> decode\n" << std::flush;
   std::cout << "============================================================\n" << std::flush;
 
-  const std::vector<char> vocab = CRNNModel::DefaultVocab();
+  const std::vector<std::string> vocab = CRNNModel::DefaultVocab();
   // La ultima clase es el blanco; el decodificado la descarta y conserva los
   // espacios entre palabras.
   const int clase_blanco = static_cast<int>(vocab.size()) - 1;

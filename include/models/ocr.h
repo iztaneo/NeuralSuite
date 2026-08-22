@@ -70,14 +70,55 @@ class CRNNModel : public Layer {
    * linea de varias palabras aunque acertara todos los caracteres: el
    * decodificado se comia los espacios junto con el relleno.
    */
-  static std::vector<char> DefaultVocab() {
-    std::vector<char> vocab;
-    for (char c = 'A'; c <= 'Z'; ++c) vocab.push_back(c);
-    for (char c = 'a'; c <= 'z'; ++c) vocab.push_back(c);
-    for (char c = '0'; c <= '9'; ++c) vocab.push_back(c);
-    vocab.push_back(' ');
-    vocab.push_back('\0');   // el blanco
-    return vocab;
+  /**
+   * @brief Parte una cadena UTF-8 en simbolos.
+   *
+   * Cada simbolo del vocabulario es una clase, pero en UTF-8 un simbolo no es
+   * un byte: `a` ocupa uno, `á` y `ñ` dos, la raya `—` tres. Indexar por byte
+   * —que es lo que hacia este codigo con `std::vector<char>`— convertia la
+   * clase 26 en medio simbolo en cuanto el vocabulario dejaba de ser ASCII.
+   *
+   * La longitud de cada secuencia esta en su primer byte; los que empiezan por
+   * `10` son continuacion y no abren simbolo.
+   */
+  static std::vector<std::string> PartirUtf8(const std::string& texto) {
+    std::vector<std::string> simbolos;
+    for (size_t i = 0; i < texto.size();) {
+      const unsigned char c = static_cast<unsigned char>(texto[i]);
+      size_t largo = 1;
+      if ((c & 0xE0) == 0xC0) largo = 2;
+      else if ((c & 0xF0) == 0xE0) largo = 3;
+      else if ((c & 0xF8) == 0xF0) largo = 4;
+      largo = std::min(largo, texto.size() - i);
+      simbolos.push_back(texto.substr(i, largo));
+      i += largo;
+    }
+    return simbolos;
+  }
+
+  /**
+   * @brief Vocabulario por defecto: letras, digitos, acentos y puntuacion.
+   *
+   * Los acentos y los signos no estan por completitud: medido sobre la pagina
+   * de la Iliada, eran el 4.0% de sus caracteres y el modelo no podia emitir
+   * ninguno. `ó` salia como `6`, `ú` como `i`, la raya como `rzu`, y las comas
+   * y los puntos desaparecian.
+   *
+   * La clase de blanco no aparece aqui ni en el archivo de vocabulario: es
+   * siempre la ultima, `vocab.size()`. Guardarla dentro obligaria a representar
+   * un caracter que no se imprime, y un NUL dentro de un archivo de texto es
+   * una fuente de sorpresas.
+   */
+  static std::vector<std::string> DefaultVocab() {
+    std::string texto;
+    for (char c = 'A'; c <= 'Z'; ++c) texto += c;
+    for (char c = 'a'; c <= 'z'; ++c) texto += c;
+    for (char c = '0'; c <= '9'; ++c) texto += c;
+    texto += " ";
+    texto += "\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1";
+    texto += "\u00c1\u00c9\u00cd\u00d3\u00da\u00dc\u00d1";
+    texto += ".,;:\u00bf?\u00a1!-\u2014()\'\"";
+    return PartirUtf8(texto);
   }
 
   CRNNModel(int in_channels, int hidden_dim, int num_classes)
@@ -175,7 +216,7 @@ class CRNNModel : public Layer {
    * el relleno tambien, y la salida se llena de basura.
    */
   [[nodiscard]] std::vector<std::string> DecodeBatch(const Tensor& logits,
-                                                     const std::vector<char>& vocab,
+                                                     const std::vector<std::string>& vocab,
                                                      int clase_blanco = -1) const {
     const std::vector<int>& shape = logits.Shape();
     if (shape.size() != 3) {
@@ -201,7 +242,7 @@ class CRNNModel : public Layer {
         if (best != prev) {
           const bool relleno = (clase_blanco >= 0) ? (best == clase_blanco)
                                                    : (best < static_cast<int>(vocab.size()) &&
-                                                      vocab[best] == ' ');
+                                                      vocab[best] == " ");
           if (!relleno && best < static_cast<int>(vocab.size())) word += vocab[best];
           prev = best;
         }
@@ -212,7 +253,7 @@ class CRNNModel : public Layer {
   }
 
   /** @brief La primera imagen del lote, para el caso de una sola linea. */
-  [[nodiscard]] std::string DecodeWord(const Tensor& logits, const std::vector<char>& vocab,
+  [[nodiscard]] std::string DecodeWord(const Tensor& logits, const std::vector<std::string>& vocab,
                                        int clase_blanco = -1) const {
     const std::vector<std::string> words = DecodeBatch(logits, vocab, clase_blanco);
     return words.empty() ? std::string() : words.front();
