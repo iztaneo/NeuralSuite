@@ -504,15 +504,35 @@ arquitectura no es la que declara. La referencia es
       sobreajustar ocho imágenes: la pérdida baja de 4.14 a 0.13 en 400 pasos.
       Sin CTC: como el corpus lo dibujamos nosotros, se conoce en qué columnas
       cae cada letra y basta `CrossEntropyLoss`.
-- [ ] **Entrenamiento largo hasta converger.** El primero dio 75.4% de acierto
-      por palabra, pero sobre un corpus contaminado (ver abajo). Pendiente de
-      repetir con el corpus limpio, después de acelerar el `BiLSTM`.
-- [ ] **Leer una página, no un renglón.** Hoy `ocr_cli` recibe una imagen y la
-      trata como una sola línea de texto: al darle una página entera la reduce a
-      una miniatura de 32×32 y devuelve basura. Un CRNN reconoce una línea; el
-      resto del canal —encontrar dónde hay texto y separarlo en renglones— no
-      existe. Son tres piezas, y el orden importa porque cada una depende de la
-      anterior:
+- [x] **Entrenamiento largo: hecho, y con un límite encontrado.** La pérdida
+      seguía bajando en la época 30, así que se entrenó hasta 60. **Todas las
+      cifras de validación mejoraron** —pérdida 0.150 → 0.113, acierto por
+      palabra 37.7% → 41.6%, error de carácter 0.122 → 0.112— y sobre imágenes
+      reales no ganó nada:
+
+      | | 30 épocas | 60 épocas |
+      | --- | --- | --- |
+      | Ilíada | 3.5% | 3.4% |
+      | Mitsubishi | **0.0%** | **12.5%** |
+
+      `MITSUBISHI` pasó a leerse `MIlTSUBIlSHI`. Es la misma trampa que apareció
+      al cambiar la forma de los datos, y más afilada: **la validación sale del
+      mismo generador que el entrenamiento, así que mejora con él**. Un modelo
+      que se ajusta mejor a su propio corpus no lee mejor una página que nunca
+      vio.
+
+      Los pesos publicados son los de 30 épocas. La conclusión es negativa y por
+      eso conviene anotarla: el camino para bajar del 3.4% no es entrenar más.
+- [x] **Leer una página, no un renglón.** `ocr_cli --renglones` corta la página
+      y transcribe cada línea. Estado actual, medido con
+      `tools/ocr/evaluar.py`:
+
+      | | NeuralSuite | Tesseract |
+      | --- | --- | --- |
+      | Página de libro (Ilíada) | **3.4%** | 0.1% |
+      | Logotipo (`MITSUBISHI`, `MOTORS`) | **0.0%** | 0.0% |
+
+      Las tres piezas de las que dependía, y cómo quedaron:
       La vara de medir es Tesseract, que sobre la página original da **0.1%**
       frente a nuestro **54%**. Esa es la distancia real a un OCR maduro, y
       conviene tenerla delante.
@@ -544,17 +564,53 @@ arquitectura no es la que declara. La referencia es
         — al ras, cada letra abarca más pasos de los que el modelo vio y aparecen
         caracteres insertados. `MITSUBISHI` pasó de `MIlT5SUBlISHI` a
         `MITPSUBISHI` y `MOTORS` de `M0OTO0O0RS` a `MOT0RS` solo con eso.
-      - **Decidir qué banda es texto.** Filtrar por altura funcionaría en el
-        logotipo y sería tropicalizar. La salida general es que lo decida el
-        propio reconocedor por su confianza, lo que exige **ejemplos negativos
-        en el generador**: bandas sin texto —manchas, líneas, fragmentos
-        gráficos— etiquetadas como vacías. Sin haber visto ninguna, el modelo
-        puede equivocarse con seguridad sobre un dibujo.
-      - **Vocabulario y forma de los datos.** Son 63 símbolos sin acentos, sin
-        `ñ` y sin signos de apertura: el modelo no puede emitir `á` aunque la
-        vea. Y se entrenó con palabras sueltas de ≤10 caracteres en sans-serif,
-        mientras que un renglón de libro son ~50 caracteres con espacios en
-        serif pequeña.
+      - [x] **Forma de los datos** (corpus `ocr_v2`). El modelo se entrenaba con
+        palabras sueltas de ≤10 caracteres en ocho tipografías sans-serif, y se
+        le pedía leer renglones de libro de ~50 en serif pequeña. Cuatro
+        cambios: 154 tipografías en vez de 8, renglones de varias palabras,
+        512 px de ancho, y degradación (reducir y reampliar, desenfoque, ruido).
+
+        El cambio de fondo fue la **clase de blanco**: la clase 62 hacía de
+        espacio real y de marca «aquí no hay letra» a la vez, y el decodificado
+        la descartaba siempre. Por construcción, el modelo no podía leer una
+        línea de varias palabras. **53% → 7.6%.**
+      - [x] **Vocabulario con acentos y puntuación** (corpus `ocr_v3`). De 63 a
+        91 símbolos más el blanco. **7.6% → 3.4%.**
+
+        Obligó a cambiar la indexación: el vocabulario se leía como
+        `std::vector<char>` —un byte por clase— y en UTF-8 `á` ocupa dos bytes y
+        `—` tres, así que la clase 26 habría dejado de ser una letra. Ahora es
+        `std::vector<std::string>` con un partidor de UTF-8.
+
+        El *tofu* reapareció en versión sutil: 31 de las 154 tipografías dibujan
+        cajas vacías para los acentos —coreanas, bengalíes, de símbolos, con las
+        latinas básicas pero sin `ñ`—. El primer detector tampoco valió, porque
+        comparaba contra el glifo U+FFFD y cada fuente sustituye con lo que le
+        parece. El criterio bueno es el de siempre: si la fuente tiene los
+        caracteres, cada uno se dibuja distinto. Quedan 122 verificadas.
+      - [x] **Herramienta de medida** (`tools/ocr/evaluar.py`), que comprueba
+        **antes de medir**. Existe por un fallo: una medición ejecutó `ocr_cli`
+        con `2>/dev/null`, tiró el aviso de que los pesos no habían cargado, y
+        midió una red sin entrenar como si fuera un resultado —98% de error—.
+        La conclusión que casi se reporta era que los acentos habían empeorado
+        el modelo doce veces. Ahora verifica código de salida y avisos de carga,
+        y aborta con código 1 en vez de dar una cifra. Pone al lado la de
+        Tesseract, que era otro punto del backlog.
+      - [ ] **Decidir qué banda es texto.** Es lo único que queda de esta parte.
+        El cortador entrega también las bandas del dibujo de un logotipo, y el
+        reconocedor devuelve basura sobre ellas porque nunca vio ejemplos
+        negativos. Filtrar por altura funcionaría en ese logotipo y sería
+        tropicalizar; la salida general es que lo decida el propio reconocedor
+        por su confianza, lo que exige **bandas sin texto en el generador**
+        —manchas, líneas, fragmentos gráficos— etiquetadas como vacías.
+
+        Mientras tanto, `evaluar.py` marca ese caso con `solo_texto` para no
+        mezclar el fallo de detección con el de reconocimiento en una sola
+        cifra.
+      - [ ] **Columnas.** Bloqueado: hace falta un documento real a dos
+        columnas. La prueba sintética que se hizo comprimía la página a la mitad
+        de ancho, deformando las letras, así que medía dos cosas a la vez.
+
 - [x] **JPEG**, secuencial de línea base y progresivo. Huffman, cuantización,
       transformada inversa e interpolación de crominancia. Es el único formato
       cuya salida **no está especificada bit a bit**: la norma fija requisitos
