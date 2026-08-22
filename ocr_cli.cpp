@@ -88,8 +88,11 @@ int main(int argc, char* argv[]) {
   const std::vector<std::string> vocab = CRNNModel::DefaultVocab();
   // La ultima clase es el blanco; el decodificado la descarta y conserva los
   // espacios entre palabras.
-  const int clase_blanco = static_cast<int>(vocab.size()) - 1;
-  CRNNModel ocr_model(1, oculto, static_cast<int>(vocab.size()));
+  // El blanco es la clase que sigue al ultimo simbolo: no esta en el
+  // vocabulario, y por tanto el modelo tiene un salida mas que simbolos.
+  const int num_clases = static_cast<int>(vocab.size()) + 1;
+  const int clase_blanco = static_cast<int>(vocab.size());
+  CRNNModel ocr_model(1, oculto, num_clases);
 
   const std::string weights_path = pesos;
   const bool trained = ocr_model.Load(weights_path);
@@ -132,7 +135,7 @@ int main(int argc, char* argv[]) {
               << std::flush;
     Tensor targets;
     SynthTextGenerator::Generate(input, targets, /*batch=*/1, word_len,
-                                 static_cast<int>(vocab.size()));
+                                 num_clases);
   }
 
   if (por_renglones) {

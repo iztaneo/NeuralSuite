@@ -19,7 +19,7 @@ que ordena el trabajo, más que el número de fase.
 
 | | Fase | Qué pasa |
 | --- | --- | --- |
-| **OCR** | aparte | **Lee texto impreso real**: 8% de error de carácter sobre una página de libro que nunca vio, frente al 53% de hace dos días y al 0.1% de Tesseract. Lo que queda del error son sobre todo caracteres fuera del vocabulario —acentos y puntuación—. Ver [Pendiente aparte — OCR](#pendiente-aparte--ocr-). |
+| **OCR** | aparte | **Lee texto impreso real**: 3.4% de error de carácter sobre una página de libro que nunca vio, frente al 53% de hace dos días y al 0.1% de Tesseract. Lo que queda del error son sobre todo caracteres fuera del vocabulario —acentos y puntuación—. Ver [Pendiente aparte — OCR](#pendiente-aparte--ocr-). |
 
 ### Mejoras sobre lo verificado
 
