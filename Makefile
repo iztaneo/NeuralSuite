@@ -46,7 +46,10 @@ else
     LIB_EXT := .so
 endif
 
-SRCS = src/tensor.cpp src/tokenizer.cpp
+# Los fuentes salen de un patron, no de una lista escrita a mano. Esa lista ya
+# se olvido de demo_autograd y de train_ocr, las dos veces por lo mismo: hay que
+# acordarse de tocarla. CMake usa GLOB_RECURSE por la misma razon.
+SRCS = $(wildcard src/*.cpp) $(wildcard src/*/*.cpp)
 OBJS = $(SRCS:.cpp=.o)
 
 LIB_STATIC = libneuralsuite.a
