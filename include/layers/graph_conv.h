@@ -37,43 +37,11 @@ class GraphConv : public Layer {
    * @param input Node features matrix H_in [Num_Nodes, In_Features]
    * @param adj_norm Normalized adjacency matrix A_norm [Num_Nodes, Num_Nodes]
    */
-  Tensor ForwardWithAdj(const Tensor& input, const Tensor& adj_norm) {
-    last_input_ = input;
-    last_adj_norm_ = adj_norm;
+  Tensor ForwardWithAdj(const Tensor& input, const Tensor& adj_norm);
 
-    // 1. Transformación de características por nodo: H_linear = H_in * W
-    Tensor H_linear = linear_.Forward(input);
+  Tensor Forward(const Tensor& input) override;
 
-    // 2. Agregación de vecinos por grafo: H_agg = A_norm * H_linear
-    int num_nodes = input.Shape()[0];
-    int out_feat = H_linear.Shape()[1];
-
-    Tensor H_agg({num_nodes, out_feat});
-    MatMul(adj_norm, H_linear, H_agg);
-
-    // 3. Activación no lineal
-    return relu_.Forward(H_agg);
-  }
-
-  Tensor Forward(const Tensor& input) override {
-    // Implementación estándar de capa usando matriz identidad como grafo por defecto
-    int num_nodes = input.Shape()[0];
-    Tensor eye({num_nodes, num_nodes});
-    eye.Zeros();
-    for (int i = 0; i < num_nodes; ++i) eye[i * num_nodes + i] = 1.0f;
-    return ForwardWithAdj(input, eye);
-  }
-
-  Tensor Backward(const Tensor& dout) override {
-    Tensor dH_agg = relu_.Backward(dout);
-
-    // Backward de agregación de grafo: dH_linear = A_norm^T * dH_agg
-    Tensor adj_T = Transpose(last_adj_norm_);
-    Tensor dH_linear({dH_agg.Shape()[0], dH_agg.Shape()[1]});
-    MatMul(adj_T, dH_agg, dH_linear);
-
-    return linear_.Backward(dH_linear);
-  }
+  Tensor Backward(const Tensor& dout) override;
 
  private:
   Linear linear_;
