@@ -27,7 +27,11 @@ if [[ ! -x "${PY}" ]]; then
 fi
 
 mkdir -p "${WORK}"
-g++ -std=c++17 -O2 -I"${REPO}/include" "${HERE}/imgdump.cpp" -o "${WORK}/imgdump"
+# Se enlaza la biblioteca, no solo la cabecera: desde que las implementaciones
+# viven en src/, compilar imgdump.cpp suelto deja los simbolos sin definir.
+make -C "${REPO}" libneuralsuite.a >/dev/null
+g++ -std=c++17 -O2 -pthread -I"${REPO}/include" "${HERE}/imgdump.cpp" \
+    "${REPO}/libneuralsuite.a" -o "${WORK}/imgdump"
 
 "${PY}" "${HERE}/generar_casos.py" --out "${WORK}"
 

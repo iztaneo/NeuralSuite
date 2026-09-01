@@ -32,19 +32,9 @@ class LayerNormLayer : public Layer {
     beta_.Value().Zeros();
   }
 
-  Tensor Forward(const Tensor& input) override {
-    last_input_ = input;
-    Tensor output(input.Shape());
-    LayerNormForward(input, gamma_.Value(), beta_.Value(), output, mean_cache_, rstd_cache_, eps_);
-    return output;
-  }
+  Tensor Forward(const Tensor& input) override;
 
-  Tensor Backward(const Tensor& dout) override {
-    Tensor dx(last_input_.Shape());
-    LayerNormBackward(dout, last_input_, gamma_.Value(), mean_cache_, rstd_cache_, dx,
-                      gamma_.Grad(), beta_.Grad());
-    return dx;
-  }
+  Tensor Backward(const Tensor& dout) override;
 
  private:
   int normalized_shape_;

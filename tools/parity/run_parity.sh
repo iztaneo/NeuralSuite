@@ -31,8 +31,12 @@ if [[ ! -x "${PY}" ]]; then
 fi
 
 mkdir -p "${WORK}"
-CXXFLAGS=(-std=c++17 -I"${REPO}/include" -O2 -DNDEBUG)
-SRC=("${REPO}/src/tensor.cpp" "${REPO}/src/tokenizer.cpp")
+CXXFLAGS=(-std=c++17 -pthread -I"${REPO}/include" -O2 -DNDEBUG)
+# Se enlaza la biblioteca en vez de enumerar los fuentes. La lista escrita a
+# mano se quedo corta en cuanto las implementaciones salieron de las cabeceras,
+# y es la cuarta vez que pasa lo mismo en este proyecto.
+make -C "${REPO}" libneuralsuite.a >/dev/null
+SRC=("${REPO}/libneuralsuite.a")
 
 status=0
 
