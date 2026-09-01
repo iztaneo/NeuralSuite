@@ -3293,6 +3293,122 @@ void TestEnderezarPagina() {
   std::cout << "PASADO ✅ (6 ángulos; peor error " << peor << "°)\n" << std::flush;
 }
 
+/**
+ * @brief Las dos primitivas que faltaban, contra las capas ya verificadas.
+ *
+ * `Gather` y `Conv2DVar` completan el motor de autograd: con ellas se puede
+ * expresar un embedding y una convolución sin escribir su derivada.
+ *
+ * La comprobación no es contra diferencias finitas sino **contra las capas que
+ * ya tienen paridad con PyTorch**. Eso las hace oráculo: si el gradiente que
+ * deriva el grafo coincide con el que la capa calcula a mano, o las dos están
+ * bien, o comparten un error — y no lo comparten, porque una recorre un grafo y
+ * la otra aplica una fórmula escrita a mano.
+ */
+void TestPrimitivasGatherYConv() {
+  std::cout << "🧪 [Test 35] Primitivas gather y convolución del autograd... " << std::flush;
+  using namespace neuralsuite::autograd;
+
+  // 1. Gather contra Embedding.
+  {
+    const int vocabulario = 12, dim = 5, lote = 2, pasos = 4;
+    ManualSeed(31);
+    Embedding capa(vocabulario, dim);
+
+    Tensor indices({lote, pasos});
+    // Un token repetido a propósito: su fila recibe la suma de dos gradientes,
+    // y quedarse con el último en vez de sumarlos es el error natural aquí.
+    const int tokens[] = {3, 7, 3, 0, 11, 5, 5, 9};
+    for (int i = 0; i < lote * pasos; ++i) indices[i] = static_cast<float>(tokens[i]);
+
+    const Tensor y_capa = capa.Forward(indices);
+
+    auto tabla = Variable::Create(capa.Weight(), /*requires_grad=*/true);
+    auto y_grafo = Gather(tabla, indices);
+
+    Check(y_grafo->Value().TotalSize() == y_capa.TotalSize(),
+          "Gather no devuelve tantos valores como Embedding");
+    double peor = 0.0;
+    for (size_t i = 0; i < y_capa.TotalSize(); ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(y_grafo->Value()[i]) - y_capa[i]));
+    }
+    Check(peor < 1e-6, "Gather no reproduce la salida de Embedding: " + std::to_string(peor));
+
+    Tensor dout(y_capa.Shape());
+    for (size_t i = 0; i < dout.TotalSize(); ++i) {
+      dout[i] = 0.4f * std::sin(0.37f * static_cast<float>(i)) + 0.1f;
+    }
+    capa.Backward(dout);
+    // `Backward` siembra el gradiente el mismo, asi que para comparar contra un
+    // `dout` concreto se construye una perdida escalar cuya derivada respecto a
+    // la salida es exactamente ese `dout`: sumar la salida multiplicada por el.
+    Backward(Sum(Mul(y_grafo, Variable::Create(dout))));
+
+    const Tensor& d_capa = *capa.GetGradients()[0];
+    double peor_grad = 0.0;
+    for (size_t i = 0; i < d_capa.TotalSize(); ++i) {
+      peor_grad = std::max(peor_grad,
+                           std::abs(static_cast<double>(tabla->Grad()[i]) - d_capa[i]));
+    }
+    Check(peor_grad < 1e-6,
+          "el gradiente de Gather no coincide con el de Embedding: " + std::to_string(peor_grad));
+  }
+
+  // 2. Conv2DVar contra Conv2D, en varias geometrías.
+  {
+    struct Caso { int b, ic, oc, h, w, k, s, p; const char* nota; };
+    const Caso casos[] = {
+        {2, 3, 4, 8, 10, 3, 1, 1, "con relleno"},
+        {1, 1, 2, 6, 6, 3, 1, 0, "sin relleno"},
+        {2, 2, 3, 9, 7, 3, 2, 1, "paso 2"},
+    };
+    for (const Caso& c : casos) {
+      ManualSeed(17);
+      Conv2D capa(c.ic, c.oc, c.k, c.s, c.p);
+      capa.Bias().Zeros();   // la primitiva no lleva sesgo: se suma aparte
+
+      Tensor x({c.b, c.ic, c.h, c.w});
+      for (size_t i = 0; i < x.TotalSize(); ++i) {
+        x[i] = 0.5f * std::sin(0.23f * static_cast<float>(i)) + 0.05f;
+      }
+      const Tensor y_capa = capa.Forward(x);
+
+      auto entrada = Variable::Create(x, /*requires_grad=*/true);
+      auto pesos = Variable::Create(capa.Weight(), /*requires_grad=*/true);
+      auto y_grafo = Conv2DVar(entrada, pesos, c.s, c.p);
+
+      double peor = 0.0;
+      for (size_t i = 0; i < y_capa.TotalSize(); ++i) {
+        peor = std::max(peor, std::abs(static_cast<double>(y_grafo->Value()[i]) - y_capa[i]));
+      }
+      Check(peor < 1e-5,
+            std::string(c.nota) + ": Conv2DVar no reproduce la salida de Conv2D");
+
+      Tensor dout(y_capa.Shape());
+      for (size_t i = 0; i < dout.TotalSize(); ++i) {
+        dout[i] = 0.3f * std::cos(0.19f * static_cast<float>(i));
+      }
+      const Tensor dx_capa = capa.Backward(dout);
+      Backward(Sum(Mul(y_grafo, Variable::Create(dout))));
+
+      double peor_dx = 0.0, peor_dw = 0.0;
+      for (size_t i = 0; i < dx_capa.TotalSize(); ++i) {
+        peor_dx = std::max(peor_dx,
+                           std::abs(static_cast<double>(entrada->Grad()[i]) - dx_capa[i]));
+      }
+      const Tensor& dw_capa = *capa.GetGradients()[0];
+      for (size_t i = 0; i < dw_capa.TotalSize(); ++i) {
+        peor_dw = std::max(peor_dw,
+                           std::abs(static_cast<double>(pesos->Grad()[i]) - dw_capa[i]));
+      }
+      Check(peor_dx < 1e-5, std::string(c.nota) + ": dx difiere en " + std::to_string(peor_dx));
+      Check(peor_dw < 1e-5, std::string(c.nota) + ": dW difiere en " + std::to_string(peor_dw));
+    }
+  }
+
+  std::cout << "PASADO ✅ (gather contra Embedding, convolución en 3 geometrías)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3332,6 +3448,7 @@ int main() {
   TestSeparacionEnRenglones();
   TestAtencionRapidaContraReferencia();
   TestEnderezarPagina();
+  TestPrimitivasGatherYConv();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

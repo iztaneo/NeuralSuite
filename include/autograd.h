@@ -36,6 +36,7 @@
 #define NEURAL_SUITE_INCLUDE_AUTOGRAD_H_
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -43,6 +44,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include "layers/conv2d.h"
 #include "tensor.h"
 
 namespace neuralsuite {
@@ -620,6 +622,93 @@ inline VarPtr Softmax(const VarPtr& a) {
     }
     a->AccumulateGrad(da);
   });
+}
+
+/**
+ * @brief Toma filas de una tabla por indice, que es lo que hace un embedding.
+ *
+ * `tabla` es `[vocabulario, dimension]` e `indices` un tensor de enteros
+ * guardados como float, con la forma que se quiera; la salida anade la
+ * dimension del embedding al final. Es la operacion que `Embedding` hace a
+ * mano.
+ *
+ * Hacia atras, cada fila recibe la suma de los gradientes de todas las
+ * posiciones que la usaron. Esa suma es la razon de que no se pueda escribir
+ * como una copia: en una secuencia el mismo token aparece muchas veces, y
+ * quedarse con el ultimo gradiente en vez de sumarlos da un resultado que
+ * parece razonable y esta mal.
+ */
+inline VarPtr Gather(const VarPtr& tabla, const Tensor& indices) {
+  const std::vector<int>& forma_tabla = tabla->Shape();
+  if (forma_tabla.size() != 2) {
+    throw std::invalid_argument("Gather: la tabla debe ser [filas, dimension].");
+  }
+  const int filas = forma_tabla[0], dim = forma_tabla[1];
+
+  std::vector<int> forma_salida = indices.Shape();
+  forma_salida.push_back(dim);
+  Tensor out(forma_salida);
+
+  const size_t n = indices.TotalSize();
+  for (size_t i = 0; i < n; ++i) {
+    const int fila = static_cast<int>(indices[i]);
+    if (fila < 0 || fila >= filas) {
+      throw std::out_of_range("Gather: indice " + std::to_string(fila) +
+                              " fuera de una tabla de " + std::to_string(filas) + " filas.");
+    }
+    std::memcpy(out.Data() + i * dim, tabla->Value().Data() + static_cast<size_t>(fila) * dim,
+                dim * sizeof(float));
+  }
+
+  // Copia de los indices: la lambda vive mas que la llamada.
+  Tensor guardados = indices;
+  return MakeOp(std::move(out), {tabla}, [tabla, guardados, dim, n](const Tensor& g) {
+    if (!tabla->RequiresGrad()) return;
+    Tensor dtabla(tabla->Shape());
+    dtabla.Zeros();
+    for (size_t i = 0; i < n; ++i) {
+      const size_t fila = static_cast<size_t>(guardados[i]);
+      for (int d = 0; d < dim; ++d) dtabla[fila * dim + d] += g[i * dim + d];
+    }
+    tabla->AccumulateGrad(dtabla);
+  });
+}
+
+/**
+ * @brief Convolucion 2D como primitiva derivable.
+ *
+ * `entrada` es `[lote, canales, alto, ancho]` y `pesos`
+ * `[canales_salida, canales_entrada, k, k]`. El sesgo va aparte porque sumarlo
+ * es una operacion que el motor ya sabe derivar.
+ *
+ * Por dentro reutiliza `Conv2D`, que es la version rapida y esta comprobada
+ * contra `Conv2DReference` y contra PyTorch. Envolver lo que ya funciona, en
+ * vez de reescribir la convolucion con primitivas mas pequenas, tiene dos
+ * ventajas: no se pierde el rendimiento —una convolucion compuesta de
+ * multiplicaciones y sumas elementales seria mucho mas lenta— y el gradiente
+ * sigue saliendo del mismo codigo verificado.
+ */
+inline VarPtr Conv2DVar(const VarPtr& entrada, const VarPtr& pesos, int stride = 1,
+                        int padding = 0) {
+  const std::vector<int>& fp = pesos->Shape();
+  if (fp.size() != 4 || fp[2] != fp[3]) {
+    throw std::invalid_argument("Conv2DVar: los pesos deben ser [salida, entrada, k, k].");
+  }
+
+  // La capa guarda los pesos como parametro propio; aqui se le inyectan los del
+  // grafo antes de cada pasada para que ambos vean lo mismo.
+  auto capa = std::make_shared<Conv2D>(fp[1], fp[0], fp[2], stride, padding);
+  std::memcpy(capa->Weight().Data(), pesos->Value().Data(),
+              pesos->Value().TotalSize() * sizeof(float));
+  capa->Bias().Zeros();
+
+  Tensor out = capa->Forward(entrada->Value());
+  return MakeOp(std::move(out), {entrada, pesos},
+                [entrada, pesos, capa](const Tensor& g) {
+                  const Tensor dx = capa->Backward(g);
+                  if (entrada->RequiresGrad()) entrada->AccumulateGrad(dx);
+                  if (pesos->RequiresGrad()) pesos->AccumulateGrad(*capa->GetGradients()[0]);
+                });
 }
 
 /**
