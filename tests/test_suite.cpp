@@ -3409,6 +3409,96 @@ void TestPrimitivasGatherYConv() {
   std::cout << "PASADO ✅ (gather contra Embedding, convolución en 3 geometrías)\n" << std::flush;
 }
 
+/** @brief La forma de entrada con la ultima dimension cambiada por `out`. */
+static std::vector<int> forma_esperada(std::vector<int> forma, int out) {
+  forma.back() = out;
+  return forma;
+}
+
+/**
+ * @brief `Linear` contra `LinearAutograd`: la misma capa por dos caminos.
+ *
+ * Una escribe su backward a mano; la otra lo obtiene recorriendo el grafo.
+ * Con los mismos pesos deben dar el mismo numero, salida y gradientes.
+ *
+ * Esto es lo que hace segura la duplicacion. El proyecto ya mantiene tres
+ * pares asi —Conv2D, LSTM, MultiHeadAttention— y ninguno ha divergido nunca,
+ * mientras que las seis listas que nadie comparaba divergieron todas. La
+ * diferencia no es la disciplina: es que exista esta prueba.
+ */
+void TestLinearContraAutograd() {
+  std::cout << "🧪 [Test 36] Linear contra su version en autograd... " << std::flush;
+
+  // Rangos distintos, para que un aplanado mal hecho no se salve por casualidad.
+  const std::vector<std::vector<int>> formas = {{5, 7}, {3, 4, 7}, {2, 3, 4, 7}};
+  const int in = 7, out = 6;
+
+  for (const std::vector<int>& forma : formas) {
+    ManualSeed(83);
+    Linear a_mano(in, out);
+    LinearAutograd por_grafo(in, out);
+
+    // Mismos pesos en las dos: cualquier diferencia sera del calculo.
+    por_grafo.Weight() = a_mano.Weight();
+    a_mano.Bias().RandomNormal(0.0f, 0.3f);   // un sesgo nulo no probaria db
+    por_grafo.Bias() = a_mano.Bias();
+
+    Tensor x(forma);
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.6f * std::sin(0.29f * static_cast<float>(i)) - 0.1f;
+    }
+
+    const Tensor y1 = a_mano.Forward(x);
+    const Tensor y2 = por_grafo.Forward(x);
+
+    Check(y1.Shape() == y2.Shape(), "las dos capas no devuelven la misma forma");
+    Check(y1.Shape() == forma_esperada(forma, out),
+          "la forma de salida no conserva el rango");
+
+    double peor = 0.0;
+    for (size_t i = 0; i < y1.TotalSize(); ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(y1[i]) - y2[i]));
+    }
+    Check(peor < 1e-5, "las salidas difieren en " + std::to_string(peor));
+
+    Tensor dout(y1.Shape());
+    for (size_t i = 0; i < dout.TotalSize(); ++i) {
+      dout[i] = 0.4f * std::cos(0.31f * static_cast<float>(i)) + 0.05f;
+    }
+    const Tensor dx1 = a_mano.Backward(dout);
+    const Tensor dx2 = por_grafo.Backward(dout);
+
+    Check(dx1.Shape() == forma, "dx no conserva la forma de la entrada");
+    Check(dx2.Shape() == forma, "dx del grafo no conserva la forma de la entrada");
+
+    double peor_dx = 0.0;
+    for (size_t i = 0; i < dx1.TotalSize(); ++i) {
+      peor_dx = std::max(peor_dx, std::abs(static_cast<double>(dx1[i]) - dx2[i]));
+    }
+    Check(peor_dx < 1e-5, "dx difiere en " + std::to_string(peor_dx));
+
+    // GetGradients() los expone en el mismo orden en las dos capas; recorrerlos
+    // asi comprueba de paso que ese orden coincide.
+    const std::vector<Tensor*> g1 = a_mano.GetGradients();
+    const std::vector<Tensor*> g2 = por_grafo.GetGradients();
+    Check(g1.size() == g2.size() && g1.size() == 2,
+          "las capas no exponen los mismos parametros");
+    for (size_t p = 0; p < g1.size(); ++p) {
+      Check(g1[p]->TotalSize() == g2[p]->TotalSize(),
+            "el parametro " + std::to_string(p) + " no tiene el mismo tamano");
+      double peor_g = 0.0;
+      for (size_t i = 0; i < g1[p]->TotalSize(); ++i) {
+        peor_g = std::max(peor_g,
+                          std::abs(static_cast<double>((*g1[p])[i]) - (*g2[p])[i]));
+      }
+      Check(peor_g < 1e-5, "el gradiente del parametro " + std::to_string(p) +
+                               " difiere en " + std::to_string(peor_g));
+    }
+  }
+
+  std::cout << "PASADO ✅ (salida y gradientes iguales en rangos 2, 3 y 4)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3449,6 +3539,7 @@ int main() {
   TestAtencionRapidaContraReferencia();
   TestEnderezarPagina();
   TestPrimitivasGatherYConv();
+  TestLinearContraAutograd();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

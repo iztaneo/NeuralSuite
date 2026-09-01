@@ -35,6 +35,7 @@
 #include "layers/embedding.h"
 #include "layers/graph_conv.h"
 #include "layers/linear.h"
+#include "layers/linear_autograd.h"
 #include "layers/lstm.h"
 #include "layers/maxpool2d.h"
 #include "layers/residual.h"
