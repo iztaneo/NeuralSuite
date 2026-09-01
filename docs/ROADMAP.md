@@ -245,9 +245,30 @@ Cada prueba lleva su calibración documentada en el código.
       diferencias finitas y validada por mutación.
 - [x] `demo_autograd` entrena XOR sin una sola derivada escrita a mano: la
       pérdida baja de 2.22 a 3e-05 y las cuatro predicciones son correctas.
-- [ ] Migrar las capas existentes a las primitivas. Deliberadamente aparte: el
-      motor debía estar verificado antes de reescribir sobre él nada que ya
-      funciona y está comprobado contra PyTorch.
+- [x] **`Gather` y `Conv2DVar`**, las dos primitivas que faltaban. Eran las
+      operaciones que el motor no sabía derivar solo, y por eso `Embedding` y
+      `Conv2D` sólo existían como capas con backward escrito a mano. Cada una se
+      verifica contra la capa equivalente, que ya tiene paridad con PyTorch. En
+      `Gather` el caso que importa es el token repetido: su fila debe recibir la
+      suma de todas las posiciones que lo usaron, y quedarse con la última en vez
+      de sumarlas pone la prueba en rojo.
+- [x] **`LinearAutograd`**, primera capa migrada. Misma interfaz que `Linear` y
+      mismos parámetros en el mismo orden, pero su `Backward` no lo escribió
+      nadie: sale de encadenar `MatMulVar` y `Add`. **Convive con `Linear` en vez
+      de sustituirla.** `Linear` sigue siendo la de entrenar —el grafo reserva los
+      intermedios de cada pasada—; la del grafo es la que dice si `Linear`
+      acierta, desde un camino que no puede repetir la clase de error de los dos
+      defectos P0, porque no aplica ninguna fórmula escrita a mano.
+- [ ] Migrar el resto de capas al mismo esquema de pareja. El orden natural es
+      `Embedding` (ya tiene su primitiva) y después `Conv2D`. Deliberadamente
+      gradual: el motor debía estar verificado antes de reescribir sobre él nada
+      que ya funciona y está comprobado contra PyTorch.
+
+  La duplicación sólo es segura porque hay una prueba que enfrenta a cada
+  pareja. Es la diferencia medida entre los tres pares que el proyecto ya
+  mantiene —`Conv2DReference`, `LSTMReference`, `MultiHeadAttentionReference`,
+  que no han divergido nunca— y las seis listas hechas a mano que nadie
+  comparaba, que divergieron todas.
 - [x] **Broadcasting** en las operaciones elemento a elemento, con la regla
       habitual de alinear por la derecha. Un eje que se repite en el forward
       recibe en el backward la suma de todas las posiciones que lo usaron. Sin
@@ -265,7 +286,8 @@ Cada prueba lleva su calibración documentada en el código.
       diferencias finitas a 4.7e-4.
 - [x] Reducciones por eje (`SumLastAxis`, `MeanLastAxis`), `Div`, `Sqrt` y
       `AddScalar`, que son las que permiten componer normalizaciones.
-- [ ] `gather` y convolución como primitivas.
+- [x] `gather` y convolución como primitivas, verificadas contra `Embedding`
+      y `Conv2D` como oráculo (detalle más arriba, en la Fase 05).
 
 Reduce la superficie de error: cada capa implementaba su backward a mano, que es
 exactamente donde aparecieron los dos defectos P0.
