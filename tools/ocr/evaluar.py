@@ -91,7 +91,7 @@ def tesseract(imagen):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pesos", default=os.path.join(RAIZ, "release/ocr_texto.ns"))
-    ap.add_argument("--binario", default=os.path.join(RAIZ, "ocr_cli"))
+    ap.add_argument("--binario", default=os.path.join(RAIZ, "bin/ocr_cli"))
     ap.add_argument("--oculto", type=int, default=64)
     ap.add_argument("--casos", help="archivo JSON con casos propios")
     ap.add_argument("--detalle", action="store_true", help="imprimir renglón a renglón")

@@ -61,12 +61,13 @@ jobs:
         run: |
           bin_dir="build"
           failed=0
-          for demo in demo_adaline demo_autograd demo_mlp demo_cnn demo_lstm demo_autoencoder \
-                      demo_diffusion demo_gan demo_gnn demo_ocr demo_resnet \
-                      demo_sequential ocr_cli; do
+          # Las demos salen del directorio, no de una lista escrita a mano:
+          # esa lista ya se olvido de train_ocr durante dias.
+          for src in demos/*.cpp; do
+            demo=$(basename "${src}" .cpp)
             if ! "./${bin_dir}/${demo}" > /dev/null 2>&1; then
-              echo "::error::La demo ${demo} termino con error"
-              failed=1
+              echo "FALLO la demo ${demo}"
+              exit 1
             fi
           done
           exit "${failed}"

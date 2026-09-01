@@ -11,7 +11,7 @@ Es totalmente **multiplataforma (Linux, macOS y Windows)** y paraleliza en CPU c
 ## ⚠️ Estado del proyecto: fase experimental 0.x
 
 Los dos defectos que invalidaban el entrenamiento del Transformer **están
-corregidos y cubiertos por pruebas de regresión** (`./test_suite`):
+corregidos y cubiertos por pruebas de regresión** (`./bin/test_suite`):
 
 - `MultiHeadAttention` no sobrescribía `GetGradients()`, así que heredaba una
   lista vacía: cada `GPTBlock` exponía 12 parámetros frente a 8 gradientes y el
@@ -68,7 +68,7 @@ Existe un **motor de diferenciación automática** (`include/autograd.h`) con do
 primitivas verificadas por diferencias finitas. Deduce los gradientes del paso
 hacia delante en vez de que cada capa escriba su `Backward()` a mano, que es
 donde aparecieron los dos defectos que invalidaban el entrenamiento.
-`./demo_autograd` entrena XOR sin una sola derivada escrita, y `LayerNorm` está
+`./bin/demo_autograd` entrena XOR sin una sola derivada escrita, y `LayerNorm` está
 compuesta de primitivas: su gradiente no lo escribió nadie y coincide con la
 implementación manual. Las capas
 existentes **todavía no están migradas**: el motor debía estar comprobado antes
@@ -215,7 +215,7 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Pruebas**
 
-- `./test_suite`: 19 pruebas numéricas — gradient checks por diferencias finitas
+- `./bin/test_suite`: 19 pruebas numéricas — gradient checks por diferencias finitas
   de las operaciones diferenciables (ver la sección de estado), invariantes de
   alineación entre parámetros y gradientes, semántica de `Tensor`, y validación
   de formas e índices. Devuelve un código de salida distinto de cero si alguna
@@ -223,32 +223,32 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
 
 **Redes densas, convolucionales y recurrentes**
 
-- `./demo_autograd`: entrenamiento de XOR con diferenciación automática,
+- `./bin/demo_autograd`: entrenamiento de XOR con diferenciación automática,
   sin derivadas escritas a mano.
-- `./demo_adaline`: Regla de aprendizaje Adaline / Widrow-Hoff.
-- `./demo_mlp`: Entrenamiento de un clasificador MLP (XOR).
-- `./demo_cnn`: Entrenamiento de una Red Convolucional (CNN 2D).
-- `./demo_lstm`: Entrenamiento de una Red Recurrente (LSTM).
-- `./demo_sequential`: Uso del contenedor `Sequential` para apilar capas.
-- `./demo_resnet`: Bloques residuales.
-- `./demo_gnn`: Convolución sobre grafos.
+- `./bin/demo_adaline`: Regla de aprendizaje Adaline / Widrow-Hoff.
+- `./bin/demo_mlp`: Entrenamiento de un clasificador MLP (XOR).
+- `./bin/demo_cnn`: Entrenamiento de una Red Convolucional (CNN 2D).
+- `./bin/demo_lstm`: Entrenamiento de una Red Recurrente (LSTM).
+- `./bin/demo_sequential`: Uso del contenedor `Sequential` para apilar capas.
+- `./bin/demo_resnet`: Bloques residuales.
+- `./bin/demo_gnn`: Convolución sobre grafos.
 
 **Modelos generativos**
 
-- `./demo_autoencoder`: Autoencoder encoder/decoder.
-- `./demo_gan`: Generador y discriminador adversarios.
-- `./demo_diffusion`: Denoiser de difusión.
+- `./bin/demo_autoencoder`: Autoencoder encoder/decoder.
+- `./bin/demo_gan`: Generador y discriminador adversarios.
+- `./bin/demo_diffusion`: Denoiser de difusión.
 
 **LLM / Transformer**
 
-- `./train_llm`: Entrenamiento del LLM Transformer sobre dataset de texto.
-- `./generate_llm`: Inferencia y generación de texto autorregresivo desde la consola C++.
+- `./bin/train_llm`: Entrenamiento del LLM Transformer sobre dataset de texto.
+- `./bin/generate_llm`: Inferencia y generación de texto autorregresivo desde la consola C++.
 
 **OCR**
 
-- `./demo_ocr`: Entrena el `CRNNModel` a transcribir líneas sintéticas y
+- `./bin/demo_ocr`: Entrena el `CRNNModel` a transcribir líneas sintéticas y
   comprueba, al final, cuántas lee exactamente.
-- `./ocr_cli --image foto.jpg`: Decodifica la imagen, la pasa a gris, la
+- `./bin/ocr_cli --image foto.jpg`: Decodifica la imagen, la pasa a gris, la
   reescala a 32 px de alto y ejecuta el `CRNNModel`. Admite PNG, JPEG, BMP y
   PBM/PGM/PPM; el formato se detecta por el contenido, no por la extensión.
 

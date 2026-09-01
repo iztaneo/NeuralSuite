@@ -55,29 +55,22 @@ set_target_properties(neuralsuite_static PROPERTIES OUTPUT_NAME "neuralsuite")
 target_link_libraries(neuralsuite_shared PRIVATE Threads::Threads)
 target_link_libraries(neuralsuite_static PRIVATE Threads::Threads)
 
-# Ejecutables: pruebas, demos y herramientas.
-# Toda fuente ejecutable del repositorio debe estar registrada aquí; CMake es la
-# única fuente de verdad del build. Nada debe compilarse a mano.
-set(NEURALSUITE_EXECUTABLES
-    test_suite
-    demo_adaline
-    demo_autograd
-    demo_mlp
-    demo_cnn
-    demo_lstm
-    demo_autoencoder
-    demo_diffusion
-    demo_gan
-    demo_gnn
-    demo_ocr
-    demo_resnet
-    demo_sequential
-    train_llm
-    generate_llm
-    ocr_cli)
+# Ejecutables: pruebas en tests/, demos en demos/, herramientas en apps/.
+#
+# Salen de un patron, no de una lista. La lista escrita a mano llevaba dias sin
+# `train_ocr`, y es la quinta vez en este proyecto que una enumeracion manual se
+# queda corta: antes fueron `demo_autograd` en el .gitignore, `train_ocr` otra
+# vez, los fuentes del Makefile y los de run_parity.sh. CMake desaconseja GLOB
+# porque no se entera de los archivos nuevos sin volver a configurar; aqui pesa
+# mas que nadie se acuerde de tocar la lista.
+file(GLOB NEURALSUITE_PROGRAM_SOURCES
+     "${CMAKE_SOURCE_DIR}/tests/*.cpp"
+     "${CMAKE_SOURCE_DIR}/demos/*.cpp"
+     "${CMAKE_SOURCE_DIR}/apps/*.cpp")
 
-foreach(exe ${NEURALSUITE_EXECUTABLES})
-  add_executable(${exe} ${exe}.cpp)
+foreach(src ${NEURALSUITE_PROGRAM_SOURCES})
+  get_filename_component(exe ${src} NAME_WE)
+  add_executable(${exe} ${src})
   target_link_libraries(${exe} PRIVATE neuralsuite_static)
 endforeach()
 

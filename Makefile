@@ -55,12 +55,16 @@ OBJS = $(SRCS:.cpp=.o)
 LIB_STATIC = libneuralsuite.a
 LIB_SHARED = libneuralsuite$(LIB_EXT)
 
-# Los ejecutables son todos los .cpp de la raiz, sin enumerarlos. Antes habia
-# tres listas que mantener a mano -la de objetivos, una regla por programa y la
-# de `clean`-, y las tres habian divergido: demo_autograd no se compilaba y
-# `clean` solo borraba cuatro de los quince binarios.
-PROGRAMS = $(patsubst %.cpp,%,$(wildcard *.cpp))
-BENCHMARK = benchmarks/benchmark
+# Los ejecutables salen de los .cpp de demos/, apps/ y tests/, sin enumerarlos.
+# Antes habia tres listas que mantener a mano -la de objetivos, una regla por
+# programa y la de `clean`- y las tres habian divergido: demo_autograd no se
+# compilaba y `clean` solo borraba cuatro de los quince binarios.
+#
+# Los binarios van todos a bin/, no junto a su fuente: asi el arbol de codigo
+# queda solo con codigo y basta borrar un directorio para limpiar.
+FUENTES_PROGRAMAS = $(wildcard demos/*.cpp) $(wildcard apps/*.cpp) $(wildcard tests/*.cpp)
+PROGRAMS = $(patsubst %.cpp,bin/%,$(notdir $(FUENTES_PROGRAMAS)))
+BENCHMARK = bin/benchmark
 
 TARGETS = $(LIB_STATIC) $(LIB_SHARED) $(PROGRAMS)
 
@@ -76,7 +80,8 @@ $(LIB_SHARED): $(OBJS)
 	$(CXX) -shared $(CXXFLAGS) -o $@ $^
 
 # Una sola regla para todos: el patron cubre los demos, las herramientas y la
-# suite de pruebas, que se compilan exactamente igual.
+# suite de pruebas, que se compilan exactamente igual. Hay una regla por directorio porque
+# make no sabe buscar el fuente en varios sitios con un solo patron.
 #
 # Se enlaza la biblioteca estatica por su ruta, y no con `-L. -lneuralsuite`.
 # Con las dos versiones presentes el enlazador prefiere la dinamica, y entonces
@@ -86,21 +91,34 @@ $(LIB_SHARED): $(OBJS)
 # escribe @loader_path-, de modo que no servia en la unica plataforma donde el
 # problema se daba. Enlazando en estatico el binario no depende de nada y se
 # puede copiar a cualquier sitio.
-%: %.cpp $(LIB_STATIC)
+bin:
+	@mkdir -p bin
+
+bin/%: demos/%.cpp $(LIB_STATIC) | bin
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LIB_STATIC)
+
+bin/%: apps/%.cpp $(LIB_STATIC) | bin
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LIB_STATIC)
+
+bin/%: tests/%.cpp $(LIB_STATIC) | bin
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIB_STATIC)
 
 # Fuera de `all`: medir con -O3 generico no dice mucho, conviene NATIVE=1.
-benchmark: benchmarks/benchmark.cpp $(LIB_STATIC)
+benchmark: benchmarks/benchmark.cpp $(LIB_STATIC) | bin
 	$(CXX) $(CXXFLAGS) -o $(BENCHMARK) $< $(LIB_STATIC)
 
-test: test_suite
-	./test_suite
+test: bin/test_suite
+	./bin/test_suite
 
 # Las dependencias que genera el compilador se incluyen si existen. El guion
 # evita que `make` falle la primera vez, cuando todavia no hay ninguna.
 -include $(OBJS:.o=.d) $(PROGRAMS:=.d) $(BENCHMARK).d
 
 clean:
-	rm -f $(PROGRAMS) $(BENCHMARK) $(LIB_STATIC) $(LIB_SHARED) src/*.o src/*.d *.d benchmarks/*.d
+	rm -rf bin
+	rm -f $(LIB_STATIC) $(LIB_SHARED) src/*.o src/*.d src/*/*.o src/*/*.d benchmarks/*.d
+	# Restos de cuando los binarios se construian en la raiz. Sin esto, quien
+	# actualice el repositorio se queda con ejecutables viejos junto al codigo.
+	rm -f demo_* train_llm train_ocr generate_llm ocr_cli test_suite *.d
 
 .PHONY: all clean test benchmark
