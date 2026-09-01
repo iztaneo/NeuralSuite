@@ -146,6 +146,30 @@ El repositorio incluye guías técnicas autónomas y exhaustivas:
 
 ---
 
+## 📁 Estructura del repositorio
+
+```
+include/          Cabeceras: la interfaz y el porqué del diseño
+  image/            Decodificadores y preproceso de imagen
+  layers/           Capas de la red
+  models/           GPT y CRNN
+src/              Implementaciones, con las mismas subcarpetas
+demos/            Doce programas de ejemplo, uno por técnica
+apps/             Herramientas: train_llm, train_ocr, generate_llm, ocr_cli
+tests/            La suite de pruebas
+tools/            Verificación contra PyTorch, Pillow y Tesseract
+benchmarks/       Mediciones de rendimiento
+bin/              Los binarios que produce la compilación
+corpus/           Corpus de entrenamiento del OCR (no se versiona)
+release/          Pesos entrenados (no se versionan)
+```
+
+La biblioteca **no** es de solo cabeceras: las declaraciones viven en
+`include/` y los cuerpos en `src/`. Tres archivos son la excepción y lo dicen en
+su propio comentario: `serialization.h` y `autograd.h` tienen plantillas, y
+`parallel.h` se mantiene junto porque lo que hay que entender de él es el
+protocolo entre hilos, que no se parte en dos archivos sin perderlo.
+
 ## 🚀 Compilación y Uso Multiplataforma
 
 ### En Linux y macOS (Usando `Makefile`)
@@ -153,11 +177,15 @@ El repositorio incluye guías técnicas autónomas y exhaustivas:
 make
 ```
 
+Los ejecutables quedan en `bin/`. `make test` compila y lanza la suite.
+
 ### En Windows, Linux y macOS (Usando `CMake`)
 ```bash
 cmake -B build
 cmake --build build
 ```
+
+Con CMake los ejecutables quedan en `build/` en vez de en `bin/`.
 
 El build por defecto es `Release` y es portable: no usa `-march=native`, así que
 el binario resultante funciona en otras máquinas. Para desarrollo conviene el
@@ -252,18 +280,30 @@ fuente de verdad del build: ninguna demo debe compilarse a mano.
   reescala a 32 px de alto y ejecuta el `CRNNModel`. Admite PNG, JPEG, BMP y
   PBM/PGM/PPM; el formato se detecta por el contenido, no por la extensión.
 
-> **Alcance del OCR.** `ocr_cli --image` sí lee el archivo: `include/image/`
-> decodifica PNG, JPEG, BMP y PBM/PGM/PPM sin depender de ninguna biblioteca
-> externa. Los 46 archivos sin pérdida del banco se decodifican byte a byte
-> igual que Pillow, y los 20 JPEG dentro del redondeo que la norma permite.
+> **Estado del OCR.** Lee texto impreso real. Medido con
+> `tools/ocr/evaluar.py` sobre imágenes que el modelo nunca vio, en error de
+> carácter:
 >
-> Lo que falta es el entrenamiento: el modelo no tiene pesos ajustados sobre
-> tipografías reales, así que la transcripción de una foto no será una lectura
-> del texto. `ocr_cli` lo dice explícitamente cuando corre sin pesos entrenados.
+> | | NeuralSuite | Tesseract |
+> | --- | --- | --- |
+> | Página de libro (serif pequeña, 18 renglones) | **3.4%** | 0.1% |
+> | Logotipo (`MITSUBISHI`, `MOTORS`) | **0.0%** | 0.0% |
 >
-> `demo_ocr` sí cierra el ciclo completo sobre datos sintéticos —glifos que son
-> patrones binarios derivados del índice de cada clase, no una tipografía— y
-> transcribe las 4 líneas del lote sin errores tras 120 épocas.
+> El canal completo es propio: decodifica la imagen (PNG, JPEG, BMP,
+> PBM/PGM/PPM, sin bibliotecas externas), endereza la página, la corta en
+> renglones y transcribe cada uno. Se entrena con `train_ocr` sobre un corpus
+> que genera `tools/ocr/`, y entrenar no necesita Python.
+>
+> Tres límites que conviene conocer:
+>
+> - **No lee manuscrito.** Medido: 160% de error de carácter, frente al 157%
+>   que da generar caracteres al azar. No hay señal; haría falta un corpus de
+>   escritura a mano, que no se puede generar renderizando tipografías.
+> - **No distingue texto de dibujo.** El cortador entrega también las bandas
+>   de un logotipo y el modelo devuelve basura sobre ellas, porque nunca vio
+>   ejemplos negativos.
+> - **No maneja varias columnas.** La proyección horizontal cruzaría el texto
+>   de una columna con el de la otra.
 
 ---
 

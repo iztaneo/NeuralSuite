@@ -11,15 +11,24 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
 ## Lo que falta
 
-Ocho frentes, y solo uno de ellos es algo que hoy esté **mal** —el OCR, ya en
-curso—; el resto son mejoras sobre código ya verificado. Esa distinción es la
-que ordena el trabajo, más que el número de fase.
+Nada de lo que queda está **mal**: son mejoras sobre código verificado, o
+límites conocidos del OCR con su causa medida. Esa distinción es la que ordena
+el trabajo, más que el número de fase.
 
-### Incorrecto hoy
+El recuento sale del propio documento con el comando que hay más abajo, no de un
+número escrito a mano —que ya divergió tres veces—.
 
-| | Fase | Qué pasa |
+### Límites conocidos del OCR, con la causa medida
+
+El OCR **funciona**: 3.4% de error de carácter sobre una página de libro que
+nunca vio, frente al 0.1% de Tesseract. Lo que queda son tres límites, y de cada
+uno se sabe por qué:
+
+| | Medido | Qué haría falta |
 | --- | --- | --- |
-| **OCR** | aparte | **Lee texto impreso real**: 3.4% de error de carácter sobre una página de libro que nunca vio, frente al 53% de hace dos días y al 0.1% de Tesseract. Lo que queda del error son sobre todo caracteres fuera del vocabulario —acentos y puntuación—. Ver [Pendiente aparte — OCR](#pendiente-aparte--ocr-). |
+| No lee manuscrito | **160%** de error, frente al 157% del azar puro: ninguna señal | Un corpus de escritura a mano. No se puede generar renderizando tipografías |
+| No distingue texto de dibujo | El logotipo de Mitsubishi da dos bandas de basura | Ejemplos negativos en el generador y un umbral de confianza |
+| No maneja varias columnas | Sin medir: la prueba sintética no valía | Un documento real a dos columnas, y corte vertical antes del horizontal |
 
 ### Mejoras sobre lo verificado
 
@@ -47,16 +56,19 @@ naturaleza.
 
 ## Estado por área
 
-| Área                              | Estado                                                        |
-| --------------------------------- | ------------------------------------------------------------- |
-| Corrección de gradientes          | ✅ verificada por diferencias finitas y contra PyTorch          |
-| Robustez de `Tensor`              | ✅ formas validadas, sin estados inválidos, vistas sin copia    |
-| Testing                           | ✅ 24 pruebas, validadas por mutación, con código de salida     |
-| Portabilidad                      | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release    |
-| Serialización                     | ✅ formato NSF con versión, metadatos y checksum                 |
-| API para terceros                 | ✅ `Parameter` y `Module` con registro automático                |
-| Autograd                          | ✅ motor, primitivas y LayerNorm compuesta; capas sin migrar     |
-| Rendimiento                       | ✅ 4.5x medido; falta SIMD explícito y kernel de Conv2D          |
+| Área | Estado |
+| --- | --- |
+| Corrección de gradientes | ✅ diferencias finitas, y paridad contra PyTorch en GPT, LSTM, BiLSTM y CRNN |
+| Robustez de `Tensor` | ✅ formas validadas, sin estados inválidos, vistas sin copia |
+| Testing | ✅ **34 pruebas**, validadas por mutación, con código de salida |
+| Portabilidad | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release, más ASan/UBSan |
+| Serialización | ✅ formato NSF con versión, metadatos y checksum |
+| API para terceros | ✅ `Parameter` y `Module` con registro automático |
+| Autograd | ✅ motor, primitivas y LayerNorm compuesta; capas sin migrar |
+| Rendimiento | ✅ **las tres capas con bucles escalares reformuladas**: Conv2D 55×, LSTM 16×, atención 17.6×. Falta SIMD explícito |
+| Lectura de imagen | ✅ PNG, JPEG, BMP y Netpbm propios; 64 archivos byte a byte como Pillow |
+| OCR | ✅ canal completo, **3.4%** de error sobre una página de libro (Tesseract 0.1%) |
+| Estructura | ✅ interfaz en `include/`, implementación en `src/`, programas en `demos/`, `apps/` y `tests/` |
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
@@ -65,7 +77,8 @@ naturaleza.
 | 02 Tensor Core             | ✅               | 08 Tokenizador    | ✅ parcial   |
 | 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ✅ parcial   |
 | 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅           |
-| 05 Autograd                | ✅ parcial       | OCR (aparte)      | 🔄 en curso  |
+| 05 Autograd                | ✅ parcial       | OCR (aparte)      | ✅ parcial   |
+| 11 Estructura              | ✅               |                   |              |
 
 El recuento sale del propio documento, no de un número escrito a mano —que ya
 divergió tres veces—:
@@ -618,6 +631,56 @@ arquitectura no es la que declara. La referencia es
       la comparación con libjpeg necesita un criterio estadístico y la
       transformada se verifica aparte contra su definición matemática. El modo
       aritmético, el sin pérdida y el de 12 bits se rechazan diciendo cuál es.
+
+---
+
+## Fase 11 — Estructura del repositorio ✅
+
+`v0.9.0` marca el estado anterior a este cambio, por si hay que volver.
+
+- [x] **Interfaz e implementación separadas.** La biblioteca era de solo
+      cabeceras: 34 archivos y 8356 líneas en `include/`, con 676 en `src/`.
+      Para saber qué ofrecía el `LSTM` había que atravesar 665 líneas cuando su
+      interfaz son 27. Los cuerpos pasan a `src/`, con las mismas subcarpetas.
+
+      | | Antes | Cabecera | Implementación |
+      | --- | --- | --- | --- |
+      | `jpeg.h` | 780 | 218 | 585 |
+      | `lstm.h` | 664 | 259 | 430 |
+      | `attention.h` | 592 | 199 | 422 |
+
+      En total, de 8356 a 4826 líneas de cabecera y de 676 a 4722 en `src/`,
+      repartidas en 25 archivos. Compilar todo baja de 7.9 a 5.3 segundos.
+
+      **Qué no se mueve, y por qué.** Los constructores se quedan: su lista de
+      inicialización dice en qué orden se construye la clase, que es diseño. Los
+      accesores de una línea, también: son interfaz. Y tres archivos enteros —
+      `serialization.h` y `autograd.h` por las plantillas, y `parallel.h` porque
+      lo que hay que entender ahí es el protocolo entre hilos y no se parte en
+      dos archivos sin perderlo. El motivo va escrito dentro de cada uno.
+
+      La transformación destapó una dependencia oculta: `jpeg.h` y `enderezar.h`
+      usaban `kPi` sin incluir `tensor.h`, y compilaban porque otro archivo lo
+      arrastraba antes.
+- [x] **Programas fuera de la raíz**, que tenía 17 `.cpp` mezclados. Van a
+      `demos/`, `apps/` y `tests/`, y los binarios a `bin/`.
+
+**Seis listas escritas a mano se quedaron cortas durante este trabajo**, y
+conviene tenerlas juntas porque es el error que más veces se ha repetido en el
+proyecto:
+
+| Dónde | Qué faltaba | Consecuencia |
+| --- | --- | --- |
+| `.gitignore` | `demo_autograd` | Un binario de 100 KB versionado |
+| `.gitignore` | `train_ocr` | Otro binario versionado |
+| `Makefile`, objetivos | `demo_autograd` | Solo se construía con CMake |
+| `Makefile`, fuentes | `src/image/`, `src/layers/` | No enlazaba |
+| `run_parity.sh` | `src/layers/` | Símbolos sin definir |
+| `CMakeLists.txt` | `train_ocr` | **Días sin construirse con CMake, ni en el CI** |
+
+Todas pasan a derivarse de un patrón. CMake desaconseja `GLOB` porque no se
+entera de los archivos nuevos sin reconfigurar; aquí pesa más que nadie se
+acuerde de tocar la lista.
 
 ---
 

@@ -7,7 +7,7 @@ Python interviene una sola vez, para fabricar el corpus.
 
 ```bash
 ../LLMRasec/venv/bin/python tools/ocr/generar_dataset.py --out /tmp/ocr_datos --n 4000
-make train_ocr && ./train_ocr --datos /tmp/ocr_datos --epocas 30
+make && ./bin/train_ocr --datos /tmp/ocr_datos --epocas 30
 ```
 
 Podría no ser Python, pero renderizar una tipografía TrueType exige un
