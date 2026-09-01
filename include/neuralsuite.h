@@ -33,6 +33,7 @@
 #include "layers/attention.h"
 #include "layers/conv2d.h"
 #include "layers/embedding.h"
+#include "layers/embedding_autograd.h"
 #include "layers/graph_conv.h"
 #include "layers/linear.h"
 #include "layers/linear_autograd.h"

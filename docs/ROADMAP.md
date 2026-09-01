@@ -259,10 +259,24 @@ Cada prueba lleva su calibración documentada en el código.
       intermedios de cada pasada—; la del grafo es la que dice si `Linear`
       acierta, desde un camino que no puede repetir la clase de error de los dos
       defectos P0, porque no aplica ninguna fórmula escrita a mano.
+- [x] **`EmbeddingAutograd`**, segunda capa migrada. Toda la capa es una llamada
+      a `Gather`. Resuelve sin codigo propio el caso que usa el GPT —el embedding
+      de posicion se calcula con forma `[1, T]` y su gradiente llega `[B, T, D]`,
+      asi que cada posicion suma las `B` contribuciones—: le sale del
+      broadcasting. `Embedding` lo consigue con un `% num_cached` que parece
+      defensivo y en realidad es carga estructural, cosa que ahora una prueba
+      unitaria fija.
 - [ ] Migrar el resto de capas al mismo esquema de pareja. El orden natural es
       `Embedding` (ya tiene su primitiva) y después `Conv2D`. Deliberadamente
       gradual: el motor debía estar verificado antes de reescribir sobre él nada
       que ya funciona y está comprobado contra PyTorch.
+
+  **Antes de seguir migrando, leer [AUTOGRAD_CAPAS.md](AUTOGRAD_CAPAS.md)**, que
+  recoge lo medido: las versiones del grafo son 2.7x y 20x mas lentas, no han
+  encontrado ni un defecto, y las tres capas que quedan ya tienen su pareja de
+  referencia, asi que el oraculo adicional aporta menos que en `Linear` y
+  `Embedding`. Ese documento tambien deja las cuatro mejoras concretas por si
+  se retoma.
 
   La duplicación sólo es segura porque hay una prueba que enfrenta a cada
   pareja. Es la diferencia medida entre los tres pares que el proyecto ya

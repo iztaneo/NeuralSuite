@@ -3499,6 +3499,134 @@ void TestLinearContraAutograd() {
   std::cout << "PASADO ✅ (salida y gradientes iguales en rangos 2, 3 y 4)\n" << std::flush;
 }
 
+/**
+ * @brief `Embedding` contra `EmbeddingAutograd`.
+ *
+ * Segunda pareja del esquema. El caso que decide la prueba es el token
+ * repetido: su fila debe recibir la suma de todas las posiciones que lo
+ * usaron. Una secuencia real repite tokens constantemente, asi que un error
+ * ahi no se manifiesta como un fallo sino como un modelo que aprende peor.
+ */
+void TestEmbeddingContraAutograd() {
+  std::cout << "🧪 [Test 37] Embedding contra su version en autograd... " << std::flush;
+
+  const int vocabulario = 15, dim = 6, lote = 3, pasos = 5;
+
+  ManualSeed(47);
+  Embedding a_mano(vocabulario, dim);
+  EmbeddingAutograd por_grafo(vocabulario, dim);
+  por_grafo.Weight() = a_mano.Weight();
+
+  Tensor indices({lote, pasos});
+  // Repeticiones a proposito, dentro de la misma fila y entre filas distintas,
+  // y una fila de la tabla (la 14) que no usa nadie: su gradiente debe quedar
+  // en cero, no en basura.
+  const int tokens[] = {2, 9, 2, 2, 0,
+                        7, 7, 3, 11, 7,
+                        0, 1, 9, 3, 2};
+  for (int i = 0; i < lote * pasos; ++i) indices[i] = static_cast<float>(tokens[i]);
+
+  const Tensor y1 = a_mano.Forward(indices);
+  const Tensor y2 = por_grafo.Forward(indices);
+
+  Check(y1.Shape() == y2.Shape(), "las dos capas no devuelven la misma forma");
+  Check(y1.Shape() == std::vector<int>({lote, pasos, dim}),
+        "la salida no es [lote, pasos, dimension]");
+
+  double peor = 0.0;
+  for (size_t i = 0; i < y1.TotalSize(); ++i) {
+    peor = std::max(peor, std::abs(static_cast<double>(y1[i]) - y2[i]));
+  }
+  Check(peor < 1e-6, "las salidas difieren en " + std::to_string(peor));
+
+  Tensor dout(y1.Shape());
+  for (size_t i = 0; i < dout.TotalSize(); ++i) {
+    dout[i] = 0.5f * std::sin(0.41f * static_cast<float>(i)) + 0.07f;
+  }
+  a_mano.Backward(dout);
+  por_grafo.Backward(dout);
+
+  const std::vector<Tensor*> g1 = a_mano.GetGradients();
+  const std::vector<Tensor*> g2 = por_grafo.GetGradients();
+  Check(g1.size() == g2.size() && g1.size() == 1,
+        "las capas no exponen los mismos parametros");
+
+  double peor_g = 0.0;
+  for (size_t i = 0; i < g1[0]->TotalSize(); ++i) {
+    peor_g = std::max(peor_g, std::abs(static_cast<double>((*g1[0])[i]) - (*g2[0])[i]));
+  }
+  Check(peor_g < 1e-6, "el gradiente de la tabla difiere en " + std::to_string(peor_g));
+
+  // Que las dos coincidan no basta si las dos se equivocan igual. El token 2
+  // aparece cuatro veces, asi que su fila tiene que valer la suma de esos
+  // cuatro gradientes, calculada aqui aparte a mano.
+  double esperado[16] = {0};
+  for (int p = 0; p < lote * pasos; ++p) {
+    if (tokens[p] != 2) continue;
+    for (int d = 0; d < dim; ++d) esperado[d] += dout[p * dim + d];
+  }
+  double peor_suma = 0.0;
+  for (int d = 0; d < dim; ++d) {
+    peor_suma = std::max(peor_suma, std::abs(esperado[d] - (*g2[0])[2 * dim + d]));
+  }
+  Check(peor_suma < 1e-5,
+        "la fila del token repetido no acumula sus cuatro gradientes: " +
+            std::to_string(peor_suma));
+
+  // La fila 14 no la usa ningun token: debe quedar exactamente en cero.
+  for (int d = 0; d < dim; ++d) {
+    Check((*g2[0])[14 * dim + d] == 0.0f,
+          "una fila que nadie uso recibio gradiente");
+  }
+
+  // El caso real de GPT, que ninguna prueba cubria: el embedding de posicion se
+  // calcula una vez con forma [1, T] y su gradiente llega para todo el lote,
+  // [B, T, D]. Cada posicion debe sumar las B contribuciones.
+  //
+  // `Embedding` lo resuelve con un `% num_cached` en su bucle, que a primera
+  // vista parece defensivo y en realidad es lo que sostiene este caso.
+  // `EmbeddingAutograd` no tiene nada equivalente escrito: le sale del
+  // broadcasting de `Mul` y la reduccion que hace el motor al propagar.
+  {
+    const int b_lote = 4, t_pasos = 5;
+    ManualSeed(9);
+    Embedding pos_a_mano(vocabulario, dim);
+    EmbeddingAutograd pos_por_grafo(vocabulario, dim);
+    pos_por_grafo.Weight() = pos_a_mano.Weight();
+
+    Tensor pos({1, t_pasos});
+    for (int t = 0; t < t_pasos; ++t) pos[t] = static_cast<float>(t);
+    pos_a_mano.Forward(pos);
+    pos_por_grafo.Forward(pos);
+
+    Tensor dx({b_lote, t_pasos, dim});
+    for (size_t i = 0; i < dx.TotalSize(); ++i) {
+      dx[i] = 0.3f * std::sin(0.37f * static_cast<float>(i)) + 0.2f;
+    }
+    pos_a_mano.Backward(dx);
+    pos_por_grafo.Backward(dx);
+
+    // La verdad se calcula aqui aparte, para que no baste con que coincidan.
+    double peor_a = 0.0, peor_b = 0.0;
+    for (int t = 0; t < t_pasos; ++t) {
+      for (int d = 0; d < dim; ++d) {
+        double esperado = 0.0;
+        for (int bb = 0; bb < b_lote; ++bb) esperado += dx[(bb * t_pasos + t) * dim + d];
+        peor_a = std::max(peor_a,
+                          std::abs(esperado - (*pos_a_mano.GetGradients()[0])[t * dim + d]));
+        peor_b = std::max(peor_b,
+                          std::abs(esperado - (*pos_por_grafo.GetGradients()[0])[t * dim + d]));
+      }
+    }
+    Check(peor_a < 1e-5, "Embedding no suma el lote en el embedding de posicion: " +
+                             std::to_string(peor_a));
+    Check(peor_b < 1e-5, "EmbeddingAutograd no suma el lote en el embedding de posicion: " +
+                             std::to_string(peor_b));
+  }
+
+  std::cout << "PASADO ✅ (repetidos, filas sin usar y posicion compartida)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3540,6 +3668,7 @@ int main() {
   TestEnderezarPagina();
   TestPrimitivasGatherYConv();
   TestLinearContraAutograd();
+  TestEmbeddingContraAutograd();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
