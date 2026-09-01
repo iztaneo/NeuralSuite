@@ -25,6 +25,11 @@
  * - Solo `float32`.
  * - El grafo se construye siempre; no hay todavia un modo de inferencia que lo
  *   omita.
+ *
+ * **Este archivo se queda en la cabecera**: tiene plantillas, y ademas es un
+ * motor de grafo donde cada primitiva se define junto a su derivada. Separarlas
+ * pondria la funcion en un archivo y su gradiente en otro, que es justo el par
+ * que hay que leer junto.
  */
 
 #ifndef NEURAL_SUITE_INCLUDE_AUTOGRAD_H_

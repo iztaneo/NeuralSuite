@@ -27,6 +27,9 @@
  * Los enteros van en little-endian, que es el orden nativo de las plataformas
  * que soporta el proyecto; un archivo escrito en una maquina big-endian se
  * detectaria por el numero magico.
+ *
+ * **Este archivo se queda en la cabecera**: tiene plantillas, y el compilador
+ * necesita su cuerpo alli donde se instancian.
  */
 
 #ifndef NEURAL_SUITE_INCLUDE_SERIALIZATION_H_

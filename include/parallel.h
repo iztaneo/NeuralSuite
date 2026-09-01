@@ -33,6 +33,16 @@
  * lleve una reduccion. Sobre todo, OpenMP falla en silencio cuando no esta: el
  * `pragma` se ignora y todo corre en un hilo sin ningun aviso, que es
  * exactamente como este proyecto llego a tener macOS sin paralelizar.
+ *
+ * **Este archivo se queda en la cabecera a proposito.** Se intento separar la
+ * implementacion como en el resto del proyecto y no salio: el pool tiene clases
+ * dentro de `namespace detail`, y la transformacion automatica las sacaba a un
+ * nivel donde el nombre de la clase ya no se encuentra. Se podria hacer a mano,
+ * pero aqui el argumento en contra pesa mas que en otros archivos: lo que hay
+ * que entender de este codigo es el protocolo entre hilos —quien espera a
+ * quien, que marca lleva cada uno— y esa explicacion no se puede partir en dos
+ * archivos sin perderla. El bloqueo que se corrigio en su dia estaba
+ * exactamente en la costura entre `Run` y el guardia de anidamiento.
  */
 
 #ifndef NEURAL_SUITE_INCLUDE_PARALLEL_H_
