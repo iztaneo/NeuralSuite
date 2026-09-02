@@ -38,6 +38,16 @@ release/*
 corpus/*
 !corpus/README.md
 
+# El corpus de espanol del LLM (corpus/es/) queda cubierto por la regla de
+# arriba. Son 7 MB descargados de Project Gutenberg mas las particiones que se
+# derivan de ellos: reproducibles con tools/corpus/preparar_corpus.py, asi que
+# no tienen por que vivir en el historial.
+#
+# La muestra de 64 KB tampoco se versiona todavia: ninguna prueba la lee aun, y
+# meter datos al historial "por si acaso" es como acabaron versionados los
+# binarios. Cuando exista la prueba que la use, se quita esta linea.
+sample_data/es_muestra.txt
+
 # Salidas generadas por las demos
 resultado*.txt
 
