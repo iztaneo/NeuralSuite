@@ -1,5 +1,26 @@
 # Plan de Implementación Unificado: Paridad Total en Ambos Proyectos
 
+> **Estado: 6 de 7 entregables hechos en C++. Sólo falta RoPE.**
+>
+> | | Entregable | C++ |
+> | --- | --- | --- |
+> | 1 | Autoencoders | ✅ `demos/demo_autoencoder.cpp` |
+> | 2 | Redes residuales | ✅ `include/layers/residual.h` |
+> | 3 | KV-Cache | ✅ medido: 9.6× más rápido, misma secuencia |
+> | 4 | **RoPE** | ❌ **lo único pendiente** |
+> | 5 | GAN | ✅ `demos/demo_gan.cpp` |
+> | 6 | GNN / GCN | ✅ `include/layers/graph_conv.h` |
+> | 7 | Difusión (toy DDPM) | ✅ `demos/demo_diffusion.cpp` |
+>
+> Lo que exige RoPE está detallado en
+> [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md), y ahora también
+> figura como pendiente abierto en [ROADMAP.md](ROADMAP.md), que es donde se
+> mira. Este documento describe el plan original y se conserva por eso; el
+> estado vigente está arriba.
+>
+> Nota: `generate_llm.cpp` se menciona más abajo en la raíz del repositorio;
+> hoy vive en `apps/`.
+
 Este plan establece la hoja de ruta para implementar cada una de las arquitecturas y optimizaciones **en AMBOS PROYECTOS en paralelo**:
 - **`NeuralSuite`** (C++17 puro desde cero).
 - **`LLMRasec`** (Python / PyTorch).

@@ -34,11 +34,9 @@ uno se sabe por qué:
 
 | | Fase | Nota |
 | --- | --- | --- |
-| `gather` y convolución como primitivas de autograd | 05 | Continúa el motor; trabajo de tamaño propio. |
-| Tesseract como referencia en `tools/` | 10 | Mismo papel que PyTorch y Pillow: instrumento de medida, nunca dentro de la biblioteca. Sin él, «54% de error» no dice si estamos lejos o cerca. Ya está instalado en la máquina de desarrollo. |
-| Migrar las capas al autograd | 05 | Sustituiría código verificado contra PyTorch por código sin comprobar. El cambio más grande y el más arriesgado. |
-| BPE propio | 08 | Reduciría la longitud de las secuencias; hoy un carácter no ASCII ocupa varios tokens. |
-| Estado del generador por hilo | 07 | El RNG es global; no es seguro usarlo desde varios hilos. Hoy nadie lo hace. |
+| BPE propio | 08 | El tokenizador de bytes gasta ~1 token por carácter; un BPE gasta ~0.25–0.3. Secuencias 3–4× más cortas, y la atención es cuadrática en la longitud. (Medido: español 1.08 tokens/carácter, inglés 1.00 — los acentos son sólo el 8% del problema, no el motivo principal.) |
+| Migrar el resto de capas al autograd | 05 | Quedan `Conv2D`, `LSTM` y `MultiHeadAttention`, y **las tres ya tienen su pareja `*Reference`**, así que el oráculo adicional aporta menos que en `Linear` y `Embedding`. Medido: cero defectos encontrados, ~200 líneas por capa. Antes de seguir, leer [AUTOGRAD_CAPAS.md](AUTOGRAD_CAPAS.md). |
+| Estado del generador por hilo | 07 | El RNG es global. **Verificado latente, no activo**: no hay `Dropout`, ninguna llamada aleatoria vive fuera de un constructor, y `RandomNormal`/`RandomUniform` son bucles secuenciales que ningún `ParallelFor` toca. Se vuelve defecto el día que se paralelice la generación de datos. |
 
 ### Rendimiento
 
@@ -50,7 +48,8 @@ naturaleza.
 | | Fase | Nota |
 | --- | --- | --- |
 | Intrínsecos SIMD por arquitectura | 09 | Hoy el bucle interno lo autovectoriza el compilador. |
-| KV cache contiguo | 09 | Solo afecta a la generación token a token. |
+| KV cache contiguo | 09 | Solo afecta a la generación token a token. Hoy es `vector<vector<float>>`. |
+| RoPE | 09 | Posición por rotación de Q y K. Detalle y requisitos en [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md). |
 
 ---
 
@@ -471,13 +470,25 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       al 8.9% del paso.
 - [ ] Intrínsecos SIMD por arquitectura. Hoy el bucle interno lo autovectoriza
       el compilador.
-- [ ] KV cache contiguo (hoy `vector<vector<float>>`).
-- [x] **RoPE decidido**: se retira `ApplyRoPE()`, que ningún forward llamaba y
-      sugería una capacidad que el modelo no tiene. La posición sigue llegando
-      por embeddings aprendidos. RoPE continúa planteado en
-      `FUTURE_PLAN_KVCACHE_ROPE.md`; implementarlo exige rotar Q y K, propagar
-      por esa rotación con su gradient check, y actualizar la implementación de
-      referencia en PyTorch para que la comparación siga siendo válida.
+- [x] **KV-Cache**, con `--no_cache` para contrastarlo. Medido con 4 capas y 64
+      tokens generados: **9.6× más rápido** (0.36 ms/token frente a 3.50), y las
+      dos rutas generan **exactamente la misma secuencia**, o sea que acelera sin
+      cambiar el resultado.
+- [ ] KV cache contiguo (hoy `vector<vector<float>>`: un vector por posición, con
+      su reserva propia).
+- [x] **Retirado el esbozo de RoPE.** `ApplyRoPE()` no lo llamaba ningún
+      forward: una función así sugiere una capacidad que el modelo no tiene, y es
+      peor que su ausencia porque nadie sabe que no hace nada. La posición sigue
+      llegando por embeddings aprendidos.
+- [ ] **RoPE de verdad.** Esta casilla estuvo mal cerrada: lo decidido fue
+      *retirar el esbozo*, no que la técnica estuviera resuelta, y con la
+      decisión marcada como hecha el trabajo dejó de aparecer en la lista de
+      pendientes. Exige rotar Q y K, propagar por la rotación con su gradient
+      check, decidir qué pasa con `wpe_` —que queda redundante, y retirarla rompe
+      los pesos guardados—, rotar con la posición absoluta al usar el KV-Cache, y
+      actualizar la referencia en PyTorch o la paridad deja de ser válida. Los
+      cinco pasos, en
+      [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md).
 
 ## Fase 10 — Ecosistema ✅
 
@@ -659,6 +670,12 @@ arquitectura no es la que declara. La referencia es
       - [ ] **Columnas.** Bloqueado: hace falta un documento real a dos
         columnas. La prueba sintética que se hizo comprimía la página a la mitad
         de ancho, deformando las letras, así que medía dos cosas a la vez.
+      - [ ] **Manuscrito.** Bloqueado por los datos, igual que las columnas, y
+        aparecía en la tabla de límites sin casilla propia. **160%** de error
+        frente al **157%** de generar caracteres al azar: no hay señal ninguna.
+        El corpus se genera renderizando tipografías, y eso no produce escritura
+        a mano. No es una mejora del modelo: es una fuente de datos que hoy no
+        existe.
 
 - [x] **JPEG**, secuencial de línea base y progresivo. Huffman, cuantización,
       transformada inversa e interpolación de crominancia. Es el único formato

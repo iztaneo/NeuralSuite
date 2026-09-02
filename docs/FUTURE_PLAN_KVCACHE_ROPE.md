@@ -1,39 +1,95 @@
-# Plan de Implementación Futuro: KV-Cache y RoPE (Rotary Position Embeddings)
+# KV-Cache y RoPE
 
-Este plan documenta la hoja de ruta para incorporar dos de las técnicas más importantes de los LLMs modernos (**RoPE** y **KV-Cache**) tanto en nuestra suite de C++ (`NeuralSuite`) como en Python (`LLMRasec`).
+Este documento cubría dos técnicas planteadas juntas. **Ya no están en el mismo
+estado**, así que conviene leerlas por separado:
 
-## 🎯 Objetivos de la Mejora
-1. **KV-Cache (Inferencia Ultrarrápida $O(1)$)**:
-   - Al generar texto token por token, evitar recalcular la atención de todo el contexto pasado.
-   - Reutilizar los tensores $K$ y $V$ calculados previamente en memoria.
-   - **Resultado**: Incremento de velocidad de generación autorregresiva de 10x a 50x.
-
-2. **RoPE (Rotary Position Embedding - Estilo LLaMA / Mistral / Gemma)**:
-   - Reemplazar la tabla posicional estática `wpe_` por rotaciones complejas sobre los tensores $Q$ y $K$.
-   - **Resultado**: Permitir extrapolación de la ventana de contexto a secuencias más largas sin degradación de atención.
+| | Estado |
+| --- | --- |
+| **KV-Cache** | **Hecho y medido.** Queda una mejora de almacenamiento. |
+| **RoPE** | **Pendiente de verdad.** Se retiró un esbozo que no hacía nada. |
 
 ---
 
-## 🛠️ Cambios Planeados
+## 1. KV-Cache — hecho
 
-### Componente 1: Suite C++ (`NeuralSuite`)
+Al generar texto token por token, la atención no recalcula el contexto pasado:
+reutiliza los tensores K y V ya calculados.
 
-#### [attention.h](file:///home/rasec/Documents/Proyectos/NeuralSuite/include/layers/attention.h)
-- **RoPE**: Añadir función `ApplyRoPE(Tensor& q, Tensor& k, int seq_offset)` que aplica la matriz de rotación 2D sobre pares de canales de cada cabeza.
-- **KV-Cache**: Agregar tensores `k_cache_` y `v_cache_` dentro de `MultiHeadAttention` para almacenar los estados pasados durante la inferencia (`is_generation = true`).
+Está implementado en `MultiHeadAttention` (`k_cache_`, `v_cache_`), expuesto por
+`GPTModel::ForwardWithKVCache(token, pos)` y `ClearKVCache()`, y conectado en
+[apps/generate_llm.cpp](../apps/generate_llm.cpp), que además acepta
+`--no_cache` para desactivarlo.
 
-#### [gpt.h](file:///home/rasec/Documents/Proyectos/NeuralSuite/include/gpt.h)
-- Actualizar `GPTModel::Forward` para aceptar una bandera opcional `use_cache` y devolver el token predicho reutilizando la caché posicional sin recalcular el pasado.
+**Medido** con 4 capas, 4 cabezas, `n_embd` 128, generando 64 tokens tras un
+prompt de 16:
 
-#### [generate_llm.cpp](file:///home/rasec/Documents/Proyectos/NeuralSuite/generate_llm.cpp)
-- Conectar el bucle de generación para usar `use_cache = true`, acelerando la salida de texto en tiempo real.
+| | Total | Por token |
+| --- | --- | --- |
+| Con KV-Cache | 23.3 ms | 0.36 ms |
+| Sin KV-Cache | 224.2 ms | 3.50 ms |
+| | | **9.6× más rápido** |
+
+Y —lo que importa tanto como la velocidad— **las dos rutas generan exactamente la
+misma secuencia**. La caché acelera sin cambiar el resultado. La aceleración
+crece con la longitud del contexto, porque la ruta sin caché es cuadrática.
+
+### Lo que queda del KV-Cache
+
+- [ ] **Almacenamiento contiguo.** Hoy es `std::vector<std::vector<float>>`: un
+      vector por posición, cada uno con su propia reserva. Un único bloque
+      contiguo evitaría los saltos de memoria y las reservas por token. Es la
+      única tarea abierta de esta parte, y está en el roadmap como *KV cache
+      contiguo* (Fase 09).
 
 ---
 
-### Componente 2: Proyecto Python (`LLMRasec`)
+## 2. RoPE — pendiente
 
-#### [model.py](file:///home/rasec/Documents/Proyectos/LLM-rasec/src/model.py)
-- Implementar la función `apply_rotary_emb(q, k, freqs_cis)` y la gestión del búfer `past_key_values` en `CausalSelfAttention` y `GPT`.
+**Rotary Position Embedding**: en vez de sumar una tabla posicional aprendida,
+se rotan los pares de canales de Q y K en función de la posición. Es lo que usan
+LLaMA, Mistral y Gemma. La ventaja no es velocidad sino **extrapolación**: el
+modelo tolera secuencias más largas que las vistas en entrenamiento, porque la
+posición entra como una relación entre pares y no como una fila de una tabla que
+nunca se entrenó.
 
-#### [generate.py](file:///home/rasec/Documents/Proyectos/LLM-rasec/generate.py)
-- Actualizar la llamada de generación para reutilizar la caché de PyTorch.
+### Por qué no está
+
+Existió aquí un `ApplyRoPE()` que **ningún forward llamaba**. Se retiró en vez de
+dejarlo: una función así sugiere una capacidad que el modelo no tiene, y es peor
+que su ausencia porque nadie sabe que no hace nada. La posición sigue llegando
+por embeddings aprendidos (`wpe_`).
+
+### Lo que exige implementarlo
+
+- [ ] Rotar Q y K por posición dentro de `MultiHeadAttention`, **antes** del
+      producto de atención y **después** de la proyección `c_attn_`.
+- [ ] Propagar por esa rotación en el backward, con su comprobación por
+      diferencias finitas. La rotación es lineal, así que su gradiente es la
+      rotación inversa; no es difícil, pero sin gradient check no vale.
+- [ ] Decidir qué pasa con `wpe_`. RoPE la hace redundante: mantener las dos es
+      sumar dos señales de posición distintas. Retirarla cambia el número de
+      parámetros y **rompe la compatibilidad de los pesos guardados**, así que
+      hay que versionar el formato `.nsf` o convertir.
+- [ ] Encajarlo con el KV-Cache. La rotación depende de la posición absoluta, de
+      modo que `ForwardWithKVCache(token, pos)` debe rotar con el `pos` real y no
+      con el índice dentro de la caché. Es el error clásico de esta combinación.
+- [ ] Actualizar la referencia en PyTorch (`LLMRasec`), o la paridad deja de ser
+      válida: si el C++ rota y el oráculo no, la comparación falla por diseño y
+      no por defecto.
+
+### Nota sobre el orden
+
+RoPE **no** debería hacerse antes que el BPE. Ambos tocan la longitud de
+secuencia, pero el BPE la reduce 3–4× de entrada, mientras que RoPE sólo ayuda a
+extrapolar más allá de lo entrenado — un problema que aún no tenemos.
+
+---
+
+## Historial
+
+La versión anterior de este documento presentaba las dos técnicas como trabajo
+futuro y apuntaba a rutas de otra máquina (`/home/rasec/...`) y a un
+`generate_llm.cpp` en la raíz que hoy vive en `apps/`. El KV-Cache llevaba
+tiempo hecho sin que el documento lo dijera, y RoPE no aparecía como pendiente
+abierto en el roadmap, sólo como una decisión ya tomada — que es justo lo que lo
+hacía invisible.
