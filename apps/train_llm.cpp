@@ -50,6 +50,7 @@ void PrintUsage(const char* prog_name) {
             << "  --n_embd <int>          Dimensión del embedding (default: 64)\n"
             << "  --learning_rate <float> Tasa de aprendizaje inicial (default: 0.003)\n"
             << "  --out_file <path>       Ruta de guardado del modelo (default: release/model_cpp.bin)\n"
+            << "  --vocab_file <path>     Ruta de guardado del vocabulario (default: release/vocab_cpp.txt)\n"
             << "  --help                  Muestra este mensaje de ayuda\n";
 }
 
@@ -78,6 +79,12 @@ TrainArgs ParseTrainArgs(int argc, char** argv) {
       args.learning_rate = std::stof(argv[++i]);
     } else if (arg == "--out_file" && i + 1 < argc) {
       args.out_file = argv[++i];
+    } else if (arg == "--vocab_file" && i + 1 < argc) {
+      // Sin esta opcion no se podia entrenar un segundo modelo sin destruir el
+      // primero: el vocabulario se escribia siempre en release/vocab_cpp.txt,
+      // asi que entrenar con otro corpus dejaba al modelo anterior cargando con
+      // una tabla que no era la suya. No fallaba: decodificaba mal.
+      args.vocab_file = argv[++i];
     } else if (i == 1 && arg[0] != '-') {
       // Positional argument fallback
       args.data_path = arg;

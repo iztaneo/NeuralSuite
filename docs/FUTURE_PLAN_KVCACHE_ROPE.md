@@ -29,9 +29,19 @@ prompt de 16:
 | Sin KV-Cache | 224.2 ms | 3.50 ms |
 | | | **9.6× más rápido** |
 
-Y —lo que importa tanto como la velocidad— **las dos rutas generan exactamente la
-misma secuencia**. La caché acelera sin cambiar el resultado. La aceleración
-crece con la longitud del contexto, porque la ruta sin caché es cuadrática.
+Esa cifra es **dentro de la ventana**. Dos correcciones importantes que
+aparecieron al comprobarlo a fondo:
+
+- La afirmación anterior —«las dos rutas generan exactamente la misma
+  secuencia»— era una comprobación **demasiado débil**: el argmax absorbe
+  diferencias pequeñas. Comparando *logits* apareció un defecto real:
+  `generate_llm` reinyectaba el último token del prompt y lo metía dos veces en
+  la caché, con 0.056 de diferencia frente a la ruta de referencia. Ya está
+  arreglado y el test 38 compara logits paso a paso.
+- **Pasada la ventana, la caché deja de acelerar**: 1.29 ms/token frente a 0.13
+  dentro, con 73 reconstrucciones en 100 tokens. Con posiciones aprendidas y
+  absolutas, deslizar cambia la posición de cada token y las K y V guardadas
+  dejan de valer. Es el argumento más fuerte a favor de RoPE.
 
 ### Lo que queda del KV-Cache
 

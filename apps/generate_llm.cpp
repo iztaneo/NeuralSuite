@@ -7,6 +7,7 @@
  */
 
 #include <cmath>
+#include <algorithm>
 #include <iostream>
 #include <random>
 #include <string>
@@ -142,21 +143,61 @@ int main(int argc, char** argv) {
   int newline_token = tokenizer.Encode("\n")[0];
 
   if (args.use_cache) {
-    // 1. Inicializar la caché con los tokens del Prompt inicial
-    model.ClearKVCache();
-    for (size_t pos = 0; pos < tokens.size(); ++pos) {
-      model.ForwardWithKVCache(tokens[pos], static_cast<int>(pos));
-    }
+    // La caché guarda K y V de cada posición ya vista, así que sólo hace falta
+    // alimentar el token nuevo. Dos cosas hay que respetar, y ninguna es obvia:
+    //
+    //  - No reinyectar. Cada token entra en la caché UNA vez. Alimentar otra vez
+    //    el último token del prompt lo duplicaba dentro de la caché, y los
+    //    logits salían distintos de los de la ruta sin caché: medido, 0.056 de
+    //    diferencia, frente a 0.000000 sin reinyectar. No se veía porque
+    //    comparar la secuencia generada no basta —el argmax absorbe una
+    //    diferencia pequeña— y hay que comparar los logits.
+    //
+    //  - Deslizar la ventana. `wpe_` sólo tiene `block_size` posiciones, así que
+    //    pasado ese punto la posición se sale de la tabla y antes reventaba con
+    //    `Embedding: token N fuera del rango`. La caché se reconstruye con los
+    //    últimos `block_size` tokens, que es justo lo que hace la ruta sin caché
+    //    al recortar el contexto.
+    //
+    // El precio de deslizar hay que decirlo: **pasada la ventana, la caché deja
+    // de acelerar**. Medido con `block_size` 32: 0.13 ms/token dentro de la
+    // ventana y 1.29 ms/token al cruzarla, con 73 reconstrucciones en 100
+    // tokens, o sea casi una por paso.
+    //
+    // No es un descuido del código sino una consecuencia de usar posiciones
+    // **aprendidas y absolutas**: al deslizar, cada token cambia de posición, y
+    // las K y V guardadas llevan la posición dentro, así que dejan de valer.
+    // Reconstruir menos a menudo —tirando media ventana en vez de una posición—
+    // sería más rápido, pero acortaría el contexto y las dos rutas dejarían de
+    // dar el mismo resultado, que es justo lo que fija el test 38.
+    //
+    // La solución de fondo es RoPE, donde la posición es relativa y deslizar no
+    // invalida nada. Es un argumento concreto a favor de la Fase 15 del roadmap.
+    auto sembrar_cache = [&](int desde, int hasta) {
+      Tensor ultimo;
+      model.ClearKVCache();
+      for (int i = desde; i < hasta; ++i) {
+        ultimo = model.ForwardWithKVCache(tokens[i], i - desde);
+      }
+      return ultimo;
+    };
 
-    // 2. Generación rápida token por token reutilizando la memoria KV-Cache
+    int inicio = std::max(0, static_cast<int>(tokens.size()) - config.block_size);
+    Tensor logits = sembrar_cache(inicio, static_cast<int>(tokens.size()));
+
     for (int step = 0; step < args.max_new_tokens; ++step) {
-      int prev_token = tokens.back();
-      int current_pos = static_cast<int>(tokens.size()) - 1;
-
-      Tensor logits = model.ForwardWithKVCache(prev_token, current_pos);
-
-      int sampled_token = SampleToken(logits.Data(), config.vocab_size, args.temperature, prev_token, newline_token);
+      const int prev_token = tokens.empty() ? -1 : tokens.back();
+      const int sampled_token = SampleToken(logits.Data(), config.vocab_size,
+                                            args.temperature, prev_token, newline_token);
       tokens.push_back(sampled_token);
+
+      const int seq_len = static_cast<int>(tokens.size());
+      if (seq_len - inicio > config.block_size) {
+        inicio = seq_len - config.block_size;
+        logits = sembrar_cache(inicio, seq_len);
+      } else {
+        logits = model.ForwardWithKVCache(sampled_token, seq_len - 1 - inicio);
+      }
     }
   } else {
     // Modo tradicional sin caché

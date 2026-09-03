@@ -3627,6 +3627,88 @@ void TestEmbeddingContraAutograd() {
   std::cout << "PASADO ✅ (repetidos, filas sin usar y posicion compartida)\n" << std::flush;
 }
 
+/**
+ * @brief El KV-Cache debe dar los MISMOS logits que recalcular todo el contexto.
+ *
+ * La prueba que existía comparaba las secuencias generadas, y eso no basta: el
+ * argmax absorbe una diferencia pequeña. Con esa comprobación pasó inadvertido
+ * que `generate_llm` reinyectaba el último token del prompt —lo metía dos veces
+ * en la caché— y producía logits distintos: 0.056 de diferencia con la ruta de
+ * referencia. La secuencia salía igual, así que nadie lo vio.
+ *
+ * Aquí se comparan los logits en cada paso, y se generan bastantes más tokens
+ * que `block_size` para cruzar la ventana varias veces. Cruzarla no es un
+ * detalle: `wpe_` sólo tiene `block_size` posiciones, así que pasado ese punto
+ * hay que reconstruir la caché con los últimos `block_size` tokens. Antes eso
+ * abortaba con `Embedding: token N fuera del rango`.
+ */
+void TestKVCacheCoincideConRecalculo() {
+  std::cout << "🧪 [Test 38] KV-Cache frente a recalcular el contexto... " << std::flush;
+
+  GPTConfig cfg;
+  cfg.vocab_size = 64;
+  cfg.block_size = 12;          // ventana corta a proposito, para cruzarla pronto
+  cfg.n_layer = 2;
+  cfg.n_head = 2;
+  cfg.n_embd = 64;
+  ManualSeed(23);
+  GPTModel modelo(cfg);
+
+  std::vector<int> tokens = {3, 9, 14, 2, 7};
+  const int nuevos = 40;
+
+  auto sembrar = [&](int desde, int hasta) {
+    Tensor ultimo;
+    modelo.ClearKVCache();
+    for (int i = desde; i < hasta; ++i) {
+      ultimo = modelo.ForwardWithKVCache(tokens[i], i - desde);
+    }
+    return ultimo;
+  };
+
+  int inicio = std::max(0, static_cast<int>(tokens.size()) - cfg.block_size);
+  Tensor logits = sembrar(inicio, static_cast<int>(tokens.size()));
+
+  double peor = 0.0;
+  int reconstrucciones = 0;
+  for (int paso = 0; paso < nuevos; ++paso) {
+    // La verdad: recalcular el contexto recortado, que es la ruta sin cache.
+    const int n = static_cast<int>(tokens.size());
+    const int ini_ref = std::max(0, n - cfg.block_size);
+    Tensor idx({1, n - ini_ref});
+    for (int i = ini_ref; i < n; ++i) idx[i - ini_ref] = static_cast<float>(tokens[i]);
+    const Tensor logits_ref = modelo.Forward(idx);
+    const int off = (n - ini_ref - 1) * cfg.vocab_size;
+
+    for (int v = 0; v < cfg.vocab_size; ++v) {
+      peor = std::max(peor, std::abs(static_cast<double>(logits[v]) - logits_ref[off + v]));
+    }
+
+    int mejor = 0;
+    for (int v = 1; v < cfg.vocab_size; ++v) {
+      if (logits_ref[off + v] > logits_ref[off + mejor]) mejor = v;
+    }
+    tokens.push_back(mejor);
+
+    const int sl = static_cast<int>(tokens.size());
+    if (sl - inicio > cfg.block_size) {
+      inicio = sl - cfg.block_size;
+      logits = sembrar(inicio, sl);
+      ++reconstrucciones;
+    } else {
+      logits = modelo.ForwardWithKVCache(mejor, sl - 1 - inicio);
+    }
+  }
+
+  Check(reconstrucciones > 0,
+        "la prueba no llego a cruzar block_size: no comprueba la ventana deslizante");
+  Check(peor < 1e-4,
+        "el KV-Cache no coincide con recalcular el contexto: " + std::to_string(peor));
+
+  std::cout << "PASADO ✅ (" << nuevos << " tokens, " << reconstrucciones
+            << " cruces de ventana, peor diferencia " << peor << ")\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3669,6 +3751,7 @@ int main() {
   TestPrimitivasGatherYConv();
   TestLinearContraAutograd();
   TestEmbeddingContraAutograd();
+  TestKVCacheCoincideConRecalculo();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

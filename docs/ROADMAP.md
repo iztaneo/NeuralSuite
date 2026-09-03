@@ -517,9 +517,26 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
 - [ ] Intrínsecos SIMD por arquitectura. Hoy el bucle interno lo autovectoriza
       el compilador.
 - [x] **KV-Cache**, con `--no_cache` para contrastarlo. Medido con 4 capas y 64
-      tokens generados: **9.6× más rápido** (0.36 ms/token frente a 3.50), y las
-      dos rutas generan **exactamente la misma secuencia**, o sea que acelera sin
-      cambiar el resultado.
+      tokens generados **dentro de la ventana**: **9.6× más rápido** (0.36
+      ms/token frente a 3.50).
+
+      Dos matices que se añadieron al comprobarlo a fondo, y que corrigen lo que
+      este documento afirmaba antes:
+
+      - Se decía que «las dos rutas generan exactamente la misma secuencia, o
+        sea que acelera sin cambiar el resultado». **Comparar secuencias era
+        demasiado débil**: el argmax absorbe diferencias pequeñas. Comparando
+        *logits* apareció un defecto real —`generate_llm` reinyectaba el último
+        token del prompt, metiéndolo dos veces en la caché— con 0.056 de
+        diferencia frente a la ruta de referencia. Arreglado, y ahora el test 38
+        compara logits en cada paso, no secuencias.
+      - **Pasada la ventana, la caché deja de acelerar.** Medido con
+        `block_size` 32: 0.13 ms/token dentro, 1.29 ms/token al cruzarla, con 73
+        reconstrucciones en 100 tokens. Es consecuencia de usar posiciones
+        aprendidas y absolutas: al deslizar, cada token cambia de posición y las
+        K y V guardadas dejan de valer. **RoPE lo resuelve de raíz**, porque la
+        posición pasa a ser relativa; es el argumento más concreto a favor de la
+        Fase 15.
 - [ ] KV cache contiguo (hoy `vector<vector<float>>`: un vector por posición, con
       su reserva propia).
 - [x] **Retirado el esbozo de RoPE.** `ApplyRoPE()` no lo llamaba ningún
@@ -861,6 +878,11 @@ con PyTorch y ahora corpus en español.
       [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md). Ojo con el
       error clásico: al usar el KV-Cache hay que rotar con la posición absoluta,
       no con el índice dentro de la caché.
+
+      Ya no es sólo extrapolación: **arregla que el KV-Cache deje de acelerar
+      pasada la ventana**. Con posiciones aprendidas hay que reconstruir la caché
+      casi en cada paso (medido: 1.29 ms/token frente a 0.13 dentro de la
+      ventana); con posición relativa, deslizar no invalida nada.
 - [ ] **SwiGLU**
 - [ ] **GQA**
 - [ ] **Perplejidad** como métrica, sobre validación y sobre prueba.
