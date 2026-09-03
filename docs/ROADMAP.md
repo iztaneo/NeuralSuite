@@ -803,7 +803,7 @@ acuerde de tocar la lista.
 
 **Lo primero, porque es barato y porque sin ello entrenar es peligroso.**
 
-- [ ] **`--vocab_file` en `train_llm`.** Existe `--out_file` para redirigir el
+- [x] **`--vocab_file` en `train_llm`** (`2b91064`). Existe `--out_file` para redirigir el
       modelo, pero **no hay forma de redirigir el vocabulario**:
       `tokenizer.Save()` escribe siempre en `release/vocab_cpp.txt`. Entrenar con
       el corpus español lo sobrescribiría con sus 111 símbolos y el modelo de
@@ -811,10 +811,18 @@ acuerde de tocar la lista.
       caracteres. Y el daño no sería visible: el modelo seguiría cargando y
       decodificaría con la tabla equivocada. Basura silenciosa, no un error.
       **Hoy no se puede entrenar un segundo modelo sin destruir el primero.**
-- [ ] **`generate_llm` debe deslizar la ventana, no abortar.** Si la generación
-      supera `block_size`, revienta con
-      `std::out_of_range: Embedding: token 16 fuera del rango [0, 16)`, porque la
-      posición se sale de la tabla de `wpe_`.
+- [x] **`generate_llm` desliza la ventana en vez de abortar** (`2b91064`).
+      Superado `block_size`, la posición se salía de `wpe_` y reventaba con
+      `std::out_of_range`. La caché se reconstruye ahora con los últimos
+      `block_size` tokens, igual que hacía la ruta sin caché.
+
+      Arreglando esto apareció un tercer defecto que nadie buscaba: el bucle
+      **reinyectaba el último token del prompt** en una posición ya alimentada,
+      metiéndolo dos veces en la caché —0.056 de diferencia en los logits frente
+      a la ruta de referencia, 0.000000 sin reinyectar—. Llevaba ahí sin verse
+      porque la comprobación que existía comparaba *secuencias*, y el argmax
+      absorbe una diferencia pequeña. El test 38 compara ahora logits paso a
+      paso.
 - [ ] **Entrenamiento de referencia en español.** Con el corpus ya preparado
       (4.9 M caracteres, ver [tools/corpus/](../tools/corpus/README.md)). No es
       solo un modelo: es la **prueba de humo del canal completo** —nadie ha
