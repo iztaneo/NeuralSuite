@@ -7,13 +7,52 @@ commit que lo cerró.
 El principio que ordena el plan: **cada operación debe ser correcta,
 comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
+## Las dos reglas
+
+> **Prioridad de desarrollo: implementar primero capacidades reutilizables que
+> habiliten modelos reales. No duplicar implementaciones existentes salvo que
+> aporten corrección demostrable, rendimiento medible o una capacidad nueva del
+> framework.**
+
+> **Reference → Parity → Optimize → Benchmark → Integrate.**
+
+El `Integrate` es el añadido reciente, y es el que marca la etapa actual. No
+basta con que `Conv2D`, la atención, el autoencoder y la difusión funcionen cada
+uno en su planeta: **la siguiente etapa consiste en que formen sistemas juntos.**
+
+La primera regla nace de una medición, no de una intuición. Se construyeron
+`LinearAutograd` y `EmbeddingAutograd` como parejas de verificación: ~330 líneas,
+dos capas entre 2.7× y 20× más lentas que nadie usará para entrenar, y **cero
+defectos encontrados**. El concepto quedó demostrado y ahí debe pararse. Migrar
+`Conv2D`, `LSTM` y `MultiHeadAttention` al mismo esquema costaría otras ~600
+líneas con el mismo retorno esperado, y **las tres ya tienen su pareja
+`*Reference`**. El detalle, en [AUTOGRAD_CAPAS.md](AUTOGRAD_CAPAS.md).
+
+Lo que sí necesita el autograd es dejar de ser una demostración y volverse
+infraestructura: que permita **construir arquitecturas nuevas** sin escribir cada
+backward a mano. Eso son dos operaciones concretas, no una fase entera.
+
 ---
 
 ## Lo que falta
 
-Nada de lo que queda está **mal**: son mejoras sobre código verificado, o
-límites conocidos del OCR con su causa medida. Esa distinción es la que ordena
-el trabajo, más que el número de fase.
+Nada de lo que queda está **mal**: son mejoras sobre código verificado, límites
+conocidos del OCR con su causa medida, o construcción nueva. Esa distinción es la
+que ordena el trabajo, más que el número de fase.
+
+### El orden, y por qué
+
+| | Fase | Por qué va aquí |
+| --- | --- | --- |
+| **1. Deuda que bloquea entrenar** | 12 | Hoy **no se puede entrenar un segundo modelo sin destruir el primero**: `train_llm` no deja redirigir el vocabulario. Es barato y es un riesgo activo. Incluye el entrenamiento de referencia en español, que es la prueba de humo del canal completo. |
+| **2. Cerrar el motor** | 13 | Sólo faltan `Concat` y `Backward(salida, gradiente)`. Dos operaciones pequeñas que desbloquean composición: sin `Concat` no hay skips de U-Net. Máximo desbloqueo por coste. |
+| **3. Vocabulario compartido** | 14 | Seis piezas (`RMSNorm`, `SiLU`, `GroupNorm`, `Upsample2D`, `Downsample2D`, `CrossAttention`) que sirven a la vez al LLM y a la visión. Aquí el proyecto deja de acumular demos. |
+| **4. Transformer moderno** | 15 | El examen principal, y está a mitad: ya hay KV-Cache, clipping, scheduler, checkpoint, paridad y corpus. |
+| **5. Datos** | 16 | No existe ningún cargador de datasets. Bloquea todo lo visual. |
+| **6. Difusión real** | 17 | Con MNIST como examen, no CIFAR: medido, la diferencia es 8 horas contra semanas. |
+
+Y en paralelo, cuando convenga: BPE (Fase 08), SIMD y KV contiguo (Fase 09), y
+los límites del OCR.
 
 El recuento sale del propio documento con el comando que hay más abajo, no de un
 número escrito a mano —que ya divergió tres veces—.
@@ -35,7 +74,6 @@ uno se sabe por qué:
 | | Fase | Nota |
 | --- | --- | --- |
 | BPE propio | 08 | El tokenizador de bytes gasta ~1 token por carácter; un BPE gasta ~0.25–0.3. Secuencias 3–4× más cortas, y la atención es cuadrática en la longitud. (Medido: español 1.08 tokens/carácter, inglés 1.00 — los acentos son sólo el 8% del problema, no el motivo principal.) |
-| Migrar el resto de capas al autograd | 05 | Quedan `Conv2D`, `LSTM` y `MultiHeadAttention`, y **las tres ya tienen su pareja `*Reference`**, así que el oráculo adicional aporta menos que en `Linear` y `Embedding`. Medido: cero defectos encontrados, ~200 líneas por capa. Antes de seguir, leer [AUTOGRAD_CAPAS.md](AUTOGRAD_CAPAS.md). |
 | Estado del generador por hilo | 07 | El RNG es global. **Verificado latente, no activo**: no hay `Dropout`, ninguna llamada aleatoria vive fuera de un constructor, y `RandomNormal`/`RandomUniform` son bucles secuenciales que ningún `ParallelFor` toca. Se vuelve defecto el día que se paralelice la generación de datos. |
 
 ### Rendimiento
@@ -49,7 +87,7 @@ naturaleza.
 | --- | --- | --- |
 | Intrínsecos SIMD por arquitectura | 09 | Hoy el bucle interno lo autovectoriza el compilador. |
 | KV cache contiguo | 09 | Solo afecta a la generación token a token. Hoy es `vector<vector<float>>`. |
-| RoPE | 09 | Posición por rotación de Q y K. Detalle y requisitos en [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md). |
+| RoPE | **15** | Movido: no es una mejora de rendimiento sino una pieza del transformer moderno. Requisitos en [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md). |
 
 ---
 
@@ -80,10 +118,12 @@ naturaleza.
 | 11 Estructura              | ✅               |                   |              |
 
 El recuento sale del propio documento, no de un número escrito a mano —que ya
-divergió tres veces—:
+divergió tres veces—. El propio comando falló una cuarta: anclaba en `^- \[` y
+no veía los pendientes indentados del OCR, así que informaba de 6 donde había 9.
+Ahora ancla en `^ *- \[`:
 
 ```bash
-echo "cerrados: $(grep -c '^- \[x\]' docs/ROADMAP.md)  pendientes: $(grep -c '^- \[ \]' docs/ROADMAP.md)"
+echo "cerrados: $(grep -cE '^ *- \[x\]' docs/ROADMAP.md)  pendientes: $(grep -cE '^ *- \[ \]' docs/ROADMAP.md)"
 ```
 
 ---
@@ -265,10 +305,16 @@ Cada prueba lleva su calibración documentada en el código.
       broadcasting. `Embedding` lo consigue con un `% num_cached` que parece
       defensivo y en realidad es carga estructural, cosa que ahora una prueba
       unitaria fija.
-- [ ] Migrar el resto de capas al mismo esquema de pareja. El orden natural es
-      `Embedding` (ya tiene su primitiva) y después `Conv2D`. Deliberadamente
-      gradual: el motor debía estar verificado antes de reescribir sobre él nada
-      que ya funciona y está comprobado contra PyTorch.
+- [x] **Decidido NO migrar el resto de capas.** El concepto quedó demostrado con
+      `Linear` y `Embedding`, y lo que se midió fue: ~330 líneas, dos capas entre
+      2.7× y 20× más lentas que nadie usará para entrenar, y **cero defectos
+      encontrados**. `Conv2D`, `LSTM` y `MultiHeadAttention` costarían otras ~600
+      líneas con el mismo retorno esperado, y **las tres ya tienen su pareja
+      `*Reference`**, así que el oráculo adicional aporta todavía menos que en las
+      dos que no la tenían. Es la primera de [las dos reglas](#las-dos-reglas): no
+      duplicar salvo que aporte corrección demostrable, rendimiento medible o una
+      capacidad nueva. El esfuerzo del autograd se traslada a la Fase 13, que sí
+      habilita arquitecturas nuevas.
 
   **Antes de seguir migrando, leer [AUTOGRAD_CAPAS.md](AUTOGRAD_CAPAS.md)**, que
   recoge lo medido: las versiones del grafo son 2.7x y 20x mas lentas, no han
@@ -480,15 +526,14 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
       forward: una función así sugiere una capacidad que el modelo no tiene, y es
       peor que su ausencia porque nadie sabe que no hace nada. La posición sigue
       llegando por embeddings aprendidos.
-- [ ] **RoPE de verdad.** Esta casilla estuvo mal cerrada: lo decidido fue
-      *retirar el esbozo*, no que la técnica estuviera resuelta, y con la
-      decisión marcada como hecha el trabajo dejó de aparecer en la lista de
-      pendientes. Exige rotar Q y K, propagar por la rotación con su gradient
-      check, decidir qué pasa con `wpe_` —que queda redundante, y retirarla rompe
-      los pesos guardados—, rotar con la posición absoluta al usar el KV-Cache, y
-      actualizar la referencia en PyTorch o la paridad deja de ser válida. Los
-      cinco pasos, en
-      [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md).
+  **RoPE se trasladó a la Fase 15**, donde le corresponde: no es una mejora de
+  rendimiento sino una pieza del transformer moderno. Su casilla vive allí, y no
+  aquí, para que no cuente dos veces.
+
+  Merece la pena dejar escrito por qué estuvo invisible tanto tiempo. La casilla
+  decía «RoPE decidido» y estaba marcada como hecha, pero lo decidido fue
+  *retirar el esbozo muerto*, no que la técnica estuviera resuelta. Una decisión
+  marcada como logro esconde el trabajo que queda.
 
 ## Fase 10 — Ecosistema ✅
 
@@ -734,6 +779,167 @@ proyecto:
 Todas pasan a derivarse de un patrón. CMake desaconseja `GLOB` porque no se
 entera de los archivos nuevos sin reconfigurar; aquí pesa más que nadie se
 acuerde de tocar la lista.
+
+---
+
+## Fase 12 — Deuda que bloquea cualquier entrenamiento ⬜
+
+**Lo primero, porque es barato y porque sin ello entrenar es peligroso.**
+
+- [ ] **`--vocab_file` en `train_llm`.** Existe `--out_file` para redirigir el
+      modelo, pero **no hay forma de redirigir el vocabulario**:
+      `tokenizer.Save()` escribe siempre en `release/vocab_cpp.txt`. Entrenar con
+      el corpus español lo sobrescribiría con sus 111 símbolos y el modelo de
+      Shakespeare —que carga y genera— quedaría inservible, porque el suyo son 53
+      caracteres. Y el daño no sería visible: el modelo seguiría cargando y
+      decodificaría con la tabla equivocada. Basura silenciosa, no un error.
+      **Hoy no se puede entrenar un segundo modelo sin destruir el primero.**
+- [ ] **`generate_llm` debe deslizar la ventana, no abortar.** Si la generación
+      supera `block_size`, revienta con
+      `std::out_of_range: Embedding: token 16 fuera del rango [0, 16)`, porque la
+      posición se sale de la tabla de `wpe_`.
+- [ ] **Entrenamiento de referencia en español.** Con el corpus ya preparado
+      (4.9 M caracteres, ver [tools/corpus/](../tools/corpus/README.md)). No es
+      solo un modelo: es la **prueba de humo del canal completo** —nadie ha
+      ejecutado un entrenamiento de LLM desde los cambios de estructura— y la
+      base contra la que medir el BPE después. Sin ella, el BPE volvería a ser
+      una mejora indemostrable, que es exactamente lo que pasó con el autograd.
+      Medido: ~14 min con 5000 iteraciones.
+
+## Fase 13 — Cerrar el motor ⬜ (corresponde a 0.5 y 0.6)
+
+**Contra lo que parecía, aquí faltan dos cosas, no dos fases.** El inventario
+contra el código: `strides`, `views`, `broadcasting`, reducciones por eje,
+`Transpose`, acumulación de gradientes, `Reshape` y `Transpose` derivables,
+backward con broadcasting y `Conv2DVar` **ya existen**. Queda esto:
+
+- [ ] **`Concat` y su derivada.** Es la pieza que más desbloquea de todo el
+      roadmap por lo poco que cuesta: sin ella no hay skips de U-Net, y son la
+      mitad de la arquitectura.
+- [ ] **`Backward(salida, gradiente_externo)`.** Hoy `Backward` exige una raíz
+      escalar y siembra el gradiente él mismo, así que propagar un `dout`
+      concreto obliga al rodeo `Sum(Mul(salida, dout))` —que es literalmente lo
+      que hacen `LinearAutograd` y `EmbeddingAutograd`— y materializa un tensor
+      del tamaño de la salida entera. Ése es el coste fijo que hace que la
+      versión por grafo sea 6× más lenta incluso con tablas pequeñas.
+- [ ] **`dtype`.** Lo último de la lista y lo menos urgente: hoy todo es `float`
+      y no hay ningún caso de uso que lo exija. Se anota para no perderlo.
+
+**Criterio de salida: cuando esto funcione, parar.** El objetivo del autograd es
+permitir construir arquitecturas nuevas, no reimplementar NeuralSuite por
+segunda vez.
+
+## Fase 14 — Vocabulario neural compartido ⬜ (corresponde a 0.7)
+
+**El cambio de filosofía: dejar de acumular demos y tener piezas reutilizables.**
+`RMSNorm` no pertenece a GPT ni `GroupNorm` a la difusión; son capacidades del
+framework que después usan LLM, visión y OCR.
+
+Hay ya: `LayerNorm`, `Conv2D`, `MaxPool2D`, `MultiHeadAttention`, `Residual`,
+`ReLU`, `GELU`, `Sigmoid`. Faltan seis, en este orden —las dos primeras porque
+desbloquean el transformer moderno, que es el examen principal—:
+
+- [ ] `RMSNorm`
+- [ ] `SiLU`
+- [ ] `GroupNorm`
+- [ ] `Upsample2D`
+- [ ] `Downsample2D`
+- [ ] `CrossAttention` — `Q` del latente, `K` y `V` del condicionamiento. Es la
+      pieza que conecta lenguaje y visión, y la que convierte dos modelos
+      separados en un sistema multimodal.
+
+Cada una con su paridad contra PyTorch, como el resto.
+
+## Fase 15 — Transformer moderno ⬜ (corresponde a 0.8)
+
+**Sigue siendo el examen principal del framework, y está a mitad.** Ya hay
+KV-Cache (medido: 9.6×, misma secuencia exacta), recorte de gradiente,
+planificador de tasa de aprendizaje, checkpoint/resume, paridad de entrenamiento
+con PyTorch y ahora corpus en español.
+
+- [ ] **RoPE** — los cinco requisitos están en
+      [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md). Ojo con el
+      error clásico: al usar el KV-Cache hay que rotar con la posición absoluta,
+      no con el índice dentro de la caché.
+- [ ] **SwiGLU**
+- [ ] **GQA**
+- [ ] **Perplejidad** como métrica, sobre validación y sobre prueba.
+
+**Criterio de salida:** entrenar un transformer pequeño de verdad y demostrar que
+NeuralSuite y PyTorch siguen trayectorias de entrenamiento equivalentes. Eso es
+más fuerte que la paridad de un solo paso que ya existe.
+
+## Fase 16 — Datos ⬜
+
+**Fase que el plan original no tenía y sin la cual las siguientes no arrancan.**
+Hoy **no existe ningún cargador de datasets**: nada lee MNIST ni CIFAR. El mismo
+agujero que costó medio día descubrir en el LLM —donde el corpus eran 3.2 KB de
+Shakespeare— está intacto en visión.
+
+- [ ] **Lector de MNIST** con verificación de checksum y formato.
+- [ ] **`DataLoader`**: lotes, barajado y partición reproducibles.
+
+## Fase 17 — Difusión de verdad ⬜ (corresponde a 0.9)
+
+La demo actual es un `beta = 0.3f` fijo y un MLP pequeño. Se conserva como
+juguete didáctico y se construye la implementación real:
+
+- [ ] `DiffusionSchedule` — `beta[t]`, `alpha[t]`, `alpha_bar[t]`, `q_sample()`,
+      `predict_x0()`, `step()`.
+- [ ] `SinusoidalTimeEmbedding`.
+- [ ] `DDPMSampler` y `DDIMSampler`.
+- [ ] `UNet2D` — bloques residuales condicionados por tiempo, skips por `Concat`
+      (de ahí la Fase 13), atención en el centro, up/downsampling.
+- [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
+
+### Por qué MNIST y no CIFAR
+
+Ésta es la corrección más importante al plan propuesto, y sale de medir. Una
+pila convolucional al tamaño de la U-Net de un DDPM para CIFAR —**sin** atención,
+**sin** skips, **sin** *time embedding*, o sea una cota inferior generosa—:
+
+| | Por paso | 1 época | 200 épocas |
+| --- | --- | --- | --- |
+| CIFAR-10, canales 64–128 | 150 ms | 7.8 min | **26 horas** |
+| MNIST, canales 32–64 | 78 ms | 2.4 min | **8.2 horas** |
+
+Una U-Net real es 5–20× eso, y los DDPM de CIFAR se entrenan 500–800 épocas:
+**semanas o meses de CPU**. El plan propuesto colocaba ahí la puerta —«si no
+podemos hacer esto, no tiene sentido añadir latent diffusion»— y con CIFAR esa
+puerta no se abre nunca. Con MNIST el examen se ejecuta en una tarde.
+
+## Horizonte — sin casillas, deliberadamente
+
+Latent diffusion, compresión perceptual y condicionamiento multimodal son la
+**dirección declarada** del proyecto, no un plan con casillas. Se escriben aquí
+para que el rumbo esté claro y para no volver a discutirlo desde cero, pero no se
+trocean en tareas hasta que la Fase 17 esté cerrada.
+
+La razón es la que ya conoce este documento: **un plan de once fases inalcanzables
+es otra lista que diverge**, y este proyecto ya arregló siete.
+
+- **Autoencoder convolucional** (0.10). El actual es `Linear(8,4) → Linear(4,2)`:
+  densas, no convolucional, sin latente espacial. Habría que rehacerlo con
+  `ConvEncoder`/`ConvDecoder`, latente `[B,C,H/f,W/f]` con `f=4`, y KL.
+- **Latent diffusion** (0.12). El experimento interesante sería comparar, con el
+  mismo presupuesto, DDPM en píxeles contra DDPM en latente: tiempo de
+  entrenamiento, tiempo de muestreo, memoria pico y calidad. Eso ya es un
+  experimento y no una demo. Y la aritmética favorece al latente: a `f=4`, un
+  32×32 pasa a 8×8, dieciséis veces menos posiciones.
+- **Compresión perceptual** (0.13), donde la GAN actual dejaría de ser una demo
+  aislada para convertirse en el discriminador por parches del autoencoder.
+- **Condicionamiento texto→imagen** (0.14), una vez exista `CrossAttention`.
+
+### Dos dependencias ocultas que hay que resolver antes de prometer nada
+
+- **FID** necesita una Inception preentrenada y **perceptual loss** una VGG.
+  Ninguna se puede entrenar en CPU. O se importan pesos de PyTorch —y entonces la
+  métrica deja de ser «solo NeuralSuite», que es la premisa del proyecto— o esas
+  fases no se pueden evaluar tal como están escritas. Hay que decidirlo antes,
+  no al llegar.
+- **BF16/FP16** en CPU sin AVX512-BF16 ni AMX no da ganancia, y convertir un
+  framework que usa `float` en todas partes es un refactor grande. No es una
+  opción de compilador.
 
 ---
 

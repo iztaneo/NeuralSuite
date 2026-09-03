@@ -156,10 +156,19 @@ Por orden de lo que más devuelve por lo que cuesta:
    gradiente inicial quitaría ese tensor intermedio y el coste fijo con él.
 3. **Reutilizar el `Conv2D` interno de `Conv2DVar`** entre llamadas, en vez de
    construirlo cada vez.
-4. **Las capas que faltan.** `Conv2D`, `LSTM` y `MultiHeadAttention`. Aviso: las
-   tres **ya tienen** su pareja de referencia (`*Reference`), así que el oráculo
-   adicional aporta bastante menos que en `Linear` y `Embedding`, que no la
-   tenían. Cada pareja cuesta unas 200 líneas.
+4. ~~**Las capas que faltan.**~~ **Descartado por decisión.** `Conv2D`, `LSTM` y
+   `MultiHeadAttention` no se migran: las tres **ya tienen** su pareja de
+   referencia (`*Reference`), así que el oráculo adicional aporta todavía menos
+   que en `Linear` y `Embedding`, que no la tenían. Serían ~600 líneas con el
+   mismo retorno esperado —cero—. Está cerrado en el
+   [ROADMAP](ROADMAP.md#las-dos-reglas) como caso de la primera regla: no
+   duplicar salvo que aporte corrección demostrable, rendimiento medible o una
+   capacidad nueva del framework.
+
+   Lo que sí sigue vivo del autograd son los puntos 1 y 2 de esta lista, que
+   ahora son la **Fase 13** del roadmap: `Concat` y
+   `Backward(salida, gradiente)`. Ésos habilitan arquitecturas nuevas —los skips
+   de una U-Net, sin ir más lejos— en vez de reimplementar lo que ya existe.
 
 Y una advertencia que vale más que las cuatro: **el patrón, medido, encuentra
 cero defectos y cuesta ~200 líneas por capa.** Antes de seguir migrando conviene
