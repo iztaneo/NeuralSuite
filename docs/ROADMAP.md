@@ -44,7 +44,7 @@ que ordena el trabajo, más que el número de fase.
 
 | | Fase | Por qué va aquí |
 | --- | --- | --- |
-| **1. Deuda que bloquea entrenar** | 12 | Hoy **no se puede entrenar un segundo modelo sin destruir el primero**: `train_llm` no deja redirigir el vocabulario. Es barato y es un riesgo activo. Incluye el entrenamiento de referencia en español, que es la prueba de humo del canal completo. |
+| ~~1. Deuda que bloquea entrenar~~ | 12 | ✅ **Cerrada.** `--vocab_file`, ventana deslizante en `generate_llm`, un defecto del KV-Cache que apareció al verificarlo, y el modelo de referencia en español: perplejidad **6.23** sobre un autor nunca visto, frente a 5.35 en entrenamiento. |
 | **2. Cerrar el motor** | 13 | Sólo faltan `Concat` y `Backward(salida, gradiente)`. Dos operaciones pequeñas que desbloquean composición: sin `Concat` no hay skips de U-Net. Máximo desbloqueo por coste. |
 | **3. Vocabulario compartido** | 14 | Seis piezas (`RMSNorm`, `SiLU`, `GroupNorm`, `Upsample2D`, `Downsample2D`, `CrossAttention`) que sirven a la vez al LLM y a la visión. Aquí el proyecto deja de acumular demos. |
 | **4. Transformer moderno** | 15 | El examen principal, y está a mitad: ya hay KV-Cache, clipping, scheduler, checkpoint, paridad y corpus. |
@@ -799,7 +799,7 @@ acuerde de tocar la lista.
 
 ---
 
-## Fase 12 — Deuda que bloquea cualquier entrenamiento ⬜
+## Fase 12 — Deuda que bloquea cualquier entrenamiento ✅
 
 **Lo primero, porque es barato y porque sin ello entrenar es peligroso.**
 
@@ -823,13 +823,32 @@ acuerde de tocar la lista.
       porque la comprobación que existía comparaba *secuencias*, y el argmax
       absorbe una diferencia pequeña. El test 38 compara ahora logits paso a
       paso.
-- [ ] **Entrenamiento de referencia en español.** Con el corpus ya preparado
-      (4.9 M caracteres, ver [tools/corpus/](../tools/corpus/README.md)). No es
-      solo un modelo: es la **prueba de humo del canal completo** —nadie ha
-      ejecutado un entrenamiento de LLM desde los cambios de estructura— y la
-      base contra la que medir el BPE después. Sin ella, el BPE volvería a ser
-      una mejora indemostrable, que es exactamente lo que pasó con el autograd.
-      Medido: ~14 min con 5000 iteraciones.
+- [x] **Entrenamiento de referencia en español.** 5000 iteraciones sobre los
+      4.9 M caracteres del corpus, **21.8 minutos**, pérdida de 4.73 (azar) a
+      **1.6645**. El canal completo funciona: nadie lo había ejecutado desde los
+      cambios de estructura del repositorio.
+
+      Genera español reconocible —concordancia de artículos, terminaciones
+      verbales, acentos y hasta la raya de diálogo de la novela española—, con
+      palabras que no existen pero suenan a español. Es lo esperable de 858 K
+      parámetros a nivel de carácter: fonotáctica sí, semántica no.
+
+      **Y generaliza**, que es lo que el entrenamiento por sí solo no dice.
+      Medido con `eval_llm` sobre las tres particiones:
+
+      | | Pérdida | Perplejidad |
+      | --- | --- | --- |
+      | train | 1.676 | 5.35 |
+      | val | 1.791 | 5.99 |
+      | **test** (Blasco Ibáñez, autor nunca visto) | **1.829** | **6.23** |
+
+      0.15 nats de distancia entre entrenamiento y un autor que jamás vio: no
+      memorizó el corpus, aprendió el idioma. Ésta es la base contra la que medir
+      el BPE, y sin ella habría sido otra mejora indemostrable —exactamente lo
+      que pasó con el autograd—.
+
+      Los pesos viven en `release/` y no en el historial. Se reproducen con el
+      comando que hay en [tools/corpus/README.md](../tools/corpus/README.md).
 
 ## Fase 13 — Cerrar el motor ⬜ (corresponde a 0.5 y 0.6)
 
