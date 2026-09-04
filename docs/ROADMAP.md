@@ -834,21 +834,61 @@ acuerde de tocar la lista.
       parámetros a nivel de carácter: fonotáctica sí, semántica no.
 
       **Y generaliza**, que es lo que el entrenamiento por sí solo no dice.
-      Medido con `eval_llm` sobre las tres particiones:
+      Medido con `eval_llm --completo`, sobre **todas** las particiones enteras:
 
-      | | Pérdida | Perplejidad |
-      | --- | --- | --- |
-      | train | 1.676 | 5.35 |
-      | val | 1.791 | 5.99 |
-      | **test** (Blasco Ibáñez, autor nunca visto) | **1.829** | **6.23** |
+      | | Tokens | Pérdida | Perplejidad |
+      | --- | --- | --- | --- |
+      | train | 5 073 920 | 1.6641 | 5.28 |
+      | val | 269 312 | 1.8163 | 6.15 |
+      | **test** (Blasco Ibáñez, autor nunca visto) | 1 568 768 | **1.7743** | **5.90** |
 
-      0.15 nats de distancia entre entrenamiento y un autor que jamás vio: no
-      memorizó el corpus, aprendió el idioma. Ésta es la base contra la que medir
-      el BPE, y sin ella habría sido otra mejora indemostrable —exactamente lo
-      que pasó con el autograd—.
+      0.11 nats entre entrenamiento y un autor que jamás vio. **Generaliza a un
+      autor no visto y ha aprendido regularidades del español más allá de
+      memorizar secuencias concretas del corpus.** Ésta es la base contra la que
+      medir el BPE, y sin ella habría sido otra mejora indemostrable —exactamente
+      lo que pasó con el autograd—.
+
+      Esa formulación sustituye a la que había aquí, «no memorizó el corpus,
+      aprendió el idioma», que era una **sobreinterpretación**: 858 K parámetros
+      a nivel de carácter aprenden ortografía, morfología y sintaxis local, no el
+      idioma —lo dice dos párrafos más arriba este mismo texto: «fonotáctica sí,
+      semántica no»—.
+
+      Las cifras también son otras, y conviene decir por qué. La primera medición
+      **estaba sesgada de dos maneras**:
+
+      - Evaluaba 30 720 tokens pero informaba del tamaño del archivo, 400 000:
+        una muestra trece veces menor de la que sugería.
+      - Tomaba las ventanas **del principio** de cada archivo, y el principio no
+        es prosa: `train` empezaba con la portada y el índice del Quijote
+        —«Tasa», «Testimonio de las erratas», «El Rey»— y `test` con la página
+        legal de Mare Nostrum —«95.OOO EJEMPLARES», «ES PROPIEDAD.--Reservados
+        todos los derechos»—. No comparaba español con español, y penalizaba a
+        `test`, que pasó de 6.23 a 5.90 al medirlo entero.
+
+      **`val` mide otra cosa de la que su nombre sugiere**, y esto sigue abierto:
+      es el 5% final de la concatenación, y como Unamuno va el último de los
+      cinco libros, `val` es **sólo Unamuno**, prosa ensayística densa. Por eso
+      sale peor (6.15) que `test` (5.90) siendo las dos texto no visto. La
+      comparación que sostiene la conclusión —`train` frente a `test`— sí es
+      válida, porque `test` es un autor entero apartado; la que no vale es
+      `train` frente a `val`. Corregirlo pide repartir la validación entre todos
+      los libros, y rehacer el corpus implica reentrenar.
 
       Los pesos viven en `release/` y no en el historial. Se reproducen con el
       comando que hay en [tools/corpus/README.md](../tools/corpus/README.md).
+
+- [x] **`CrossEntropyLoss` valida formas y objetivos.** Salió de aquí: leía
+      `Shape()[0]` y `Shape()[1]` sin comprobar nada, así que recibir los logits
+      en 3D `[lote, pasos, vocabulario]` en vez de 2D `[N, V]` devolvía 12.13
+      —peor que el azar— **sin avisar**, con un modelo que escribía español
+      correcto. Tampoco comprobaba que el objetivo cayera dentro del vocabulario:
+      uno fuera de rango leía la fila contigua y daba una pérdida plausible.
+
+      Que el framework acepte matemáticas sin sentido y devuelva un número
+      verosímil es el modo de fallo más peligroso en aprendizaje automático,
+      porque no hay nada que revisar. Ahora lanza excepción en los tres casos, y
+      las 38 pruebas siguen en verde: ningún uso existente era incorrecto.
 
 ## Fase 13 — Cerrar el motor ⬜ (corresponde a 0.5 y 0.6)
 

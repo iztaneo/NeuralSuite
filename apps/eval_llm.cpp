@@ -19,6 +19,7 @@
  *   ./bin/eval_llm --model release/es_base.bin --vocab release/es_base_vocab.txt
  */
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -45,8 +46,8 @@ int main(int argc, char** argv) {
   std::string vocab_ruta = "release/es_base_vocab.txt";
   std::string corpus = "corpus/es";
   int block_size = 128, n_layer = 4, n_head = 4, n_embd = 128;
-  int lote = 8, max_lotes = 30;
-  size_t max_caracteres = 400000;
+  int lote = 8, max_lotes = 40;
+  bool completo = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -67,6 +68,8 @@ int main(int argc, char** argv) {
     } else if (a == "--n_layer" && i + 1 < argc) { n_layer = std::stoi(argv[++i]);
     } else if (a == "--n_head" && i + 1 < argc) { n_head = std::stoi(argv[++i]);
     } else if (a == "--n_embd" && i + 1 < argc) { n_embd = std::stoi(argv[++i]);
+    } else if (a == "--lotes" && i + 1 < argc) { max_lotes = std::stoi(argv[++i]);
+    } else if (a == "--completo") { completo = true;
     }
   }
 
@@ -97,7 +100,8 @@ int main(int argc, char** argv) {
   std::cout << "✅ Pesos cargados. Vocabulario: " << cfg.vocab_size << " símbolos.\n\n";
 
   neuralsuite::CrossEntropyLoss criterio;
-  std::printf("  %-8s %12s %10s %13s\n", "", "caracteres", "pérdida", "perplejidad");
+  std::printf("  %-8s %11s %12s %10s %13s\n", "", "archivo", "tokens eval.",
+              "pérdida", "perplejidad");
 
   for (const char* nombre : {"train", "val", "test"}) {
     std::string txt = LeerArchivo(corpus + "/" + nombre + ".txt");
@@ -105,14 +109,32 @@ int main(int argc, char** argv) {
       std::cerr << "ERROR: '" << corpus << "/" << nombre << ".txt' está vacío o no existe.\n";
       return 1;
     }
-    if (txt.size() > max_caracteres) txt = txt.substr(0, max_caracteres);
     const std::vector<int> ids = tok.Encode(txt);
-
-    // Bloques disjuntos: sin solape no se cuenta dos veces el mismo texto.
     const size_t paso = static_cast<size_t>(lote) * block_size;
+    if (ids.size() < paso + 2) {
+      std::cerr << "ERROR: '" << nombre << "' no da ni un lote completo.\n";
+      return 1;
+    }
+
+    // Las ventanas se reparten por TODA la partición, no se toman del principio.
+    // Tomarlas del principio medía el arranque de cada archivo, y eso no es
+    // prosa: `train` empieza con la portada y el índice del Quijote —«Tasa»,
+    // «Testimonio de las erratas», «El Rey»— y `test` con la página legal de
+    // Mare Nostrum —«95.OOO EJEMPLARES», «ES PROPIEDAD.--Reservados todos los
+    // derechos»—. Comparar esas dos cosas no compara español con español.
+    //
+    // El reparto es determinista, así que dos ejecuciones dan lo mismo.
+    const size_t ventanas_posibles = (ids.size() - 1) / paso;
+    const size_t n_ventanas = completo
+        ? ventanas_posibles
+        : std::min(ventanas_posibles, static_cast<size_t>(max_lotes));
+    const size_t salto = ventanas_posibles / n_ventanas;
+
     double suma = 0.0;
     int lotes = 0;
-    for (size_t o = 0; o + paso + 1 < ids.size() && lotes < max_lotes; o += paso) {
+    for (size_t w = 0; w < n_ventanas; ++w) {
+      const size_t o = w * salto * paso;
+      if (o + paso + 1 >= ids.size()) break;
       neuralsuite::Tensor idx({lote, block_size}), obj({lote * block_size});
       for (size_t i = 0; i < paso; ++i) {
         idx[i] = static_cast<float>(ids[o + i]);
@@ -126,17 +148,21 @@ int main(int argc, char** argv) {
       suma += criterio.Forward(logits_2d, obj);
       ++lotes;
     }
-    if (lotes == 0) {
-      std::cerr << "ERROR: '" << nombre << "' no da ni un lote completo.\n";
-      return 1;
-    }
     const double L = suma / lotes;
-    std::printf("  %-8s %12zu %10.4f %13.2f\n", nombre, txt.size(), L, std::exp(L));
+    // Se informa de los tokens REALMENTE evaluados, no del tamaño del archivo.
+    // Antes se imprimía `txt.size()` —400 000— cuando se evaluaban 30 720: la
+    // cifra sugería una muestra trece veces mayor que la real.
+    std::printf("  %-8s %11zu %12zu %10.4f %13.2f\n", nombre, txt.size(),
+                static_cast<size_t>(lotes) * paso, L, std::exp(L));
   }
 
   std::printf(
-      "\n  La distancia entre `train` y `test` es lo que dice si aprendió el\n"
-      "  idioma o el corpus: `test` es un autor que nunca apareció en\n"
-      "  entrenamiento. El azar puro daría perplejidad igual al vocabulario.\n");
+      "\n  `test` es un autor entero que nunca aparece en entrenamiento, así que\n"
+      "  la distancia `train`-`test` dice si el modelo aprendió regularidades\n"
+      "  del idioma o memorizó secuencias del corpus. El azar puro daría una\n"
+      "  perplejidad igual al tamaño del vocabulario.\n\n"
+      "  Cuidado con `val`: en el corpus actual es el 5%% final de la\n"
+      "  concatenación, o sea un solo autor, no una muestra de la distribución\n"
+      "  de entrenamiento. Comparar `train` con `val` no mide lo que parece.\n");
   return 0;
 }

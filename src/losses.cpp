@@ -6,18 +6,47 @@
 
 #include "losses.h"
 
+#include <stdexcept>
+#include <string>
+
 namespace neuralsuite {
 
 float CrossEntropyLoss::Forward(const Tensor& predictions, const Tensor& targets) {
     last_preds_ = predictions;
     last_targets_ = targets;
 
+    // Sin estas comprobaciones el framework acepta matematicas sin sentido y
+    // devuelve un numero verosimil, que es la peor forma de fallar en aprendizaje
+    // automatico. Ocurrio de verdad: `eval_llm` paso los logits en 3D
+    // [lote, pasos, vocabulario] en vez de 2D [N, V]; esto leyo Shape()[0] y
+    // Shape()[1] como si fueran N y V, devolvio 12.13 —peor que el azar— y no
+    // aviso de nada. Con un modelo que escribia espanol correcto.
+    if (predictions.Shape().size() != 2) {
+      throw std::invalid_argument(
+          "CrossEntropyLoss: las predicciones deben ser [N, clases] y tienen " +
+          std::to_string(predictions.Shape().size()) +
+          " dimensiones. Aplana los ejes de lote y tiempo antes de llamar.");
+    }
     int num_samples = predictions.Shape()[0];
     int num_classes = predictions.Shape()[1];
+
+    if (static_cast<int>(targets.TotalSize()) != num_samples) {
+      throw std::invalid_argument(
+          "CrossEntropyLoss: hay " + std::to_string(num_samples) +
+          " predicciones y " + std::to_string(targets.TotalSize()) + " objetivos.");
+    }
 
     float total_loss = 0.0f;
     for (int i = 0; i < num_samples; ++i) {
       int target_cls = static_cast<int>(targets[i]);
+      // Un objetivo fuera de rango no falla: lee la fila de al lado y produce
+      // una perdida plausible. Es el mismo modo de fallo silencioso.
+      if (target_cls < 0 || target_cls >= num_classes) {
+        throw std::out_of_range(
+            "CrossEntropyLoss: el objetivo " + std::to_string(target_cls) +
+            " en la posicion " + std::to_string(i) + " cae fuera de [0, " +
+            std::to_string(num_classes) + ").");
+      }
 
       float max_val = predictions[i * num_classes];
       for (int c = 1; c < num_classes; ++c) {

@@ -31,9 +31,24 @@ salían del mismo generador. La métrica subía con el modelo sin decir nada del
 mundo.
 
 Aquí la trampa es idéntica, así que **el conjunto de prueba es un autor entero
-que nunca aparece en entrenamiento**. Validación dice si la optimización avanza;
-prueba dice si generaliza. Si el modelo escribe bien a Cervantes y se hunde con
-Blasco Ibáñez, eso es una respuesta, no ruido.
+que nunca aparece en entrenamiento**. Si el modelo escribe bien a Cervantes y se
+hunde con Blasco Ibáñez, eso es una respuesta, no ruido. Medido con el primer
+modelo: perplejidad 5.28 en entrenamiento y **5.90 sobre Blasco Ibáñez**.
+
+### Defecto conocido de `val`
+
+**`val` no es un conjunto de validación**, pese al nombre. Es el 5% final de la
+concatenación, y como Unamuno es el último de los cinco libros, `val` es **sólo
+Unamuno** —prosa ensayística densa—. No es una muestra de la distribución de
+entrenamiento, así que comparar `train` con `val` no mide lo que parece.
+
+Se detectó porque `val` daba peor perplejidad (6.15) que `test` (5.90) siendo las
+dos texto no visto, lo cual no tenía sentido hasta mirar qué contenía cada una.
+
+La conclusión que sostiene el modelo —que generaliza— se apoya en `train` frente
+a `test`, que sí es válida. Arreglarlo pide repartir la validación entre los
+cinco libros en vez de cortar por el final, y **rehacer el corpus obliga a
+reentrenar**, así que está anotado y no hecho.
 
 ## Por qué Gutenberg y no Wikipedia
 
