@@ -903,9 +903,18 @@ contra el código: `strides`, `views`, `broadcasting`, reducciones por eje,
 `Transpose`, acumulación de gradientes, `Reshape` y `Transpose` derivables,
 backward con broadcasting y `Conv2DVar` **ya existen**. Queda esto:
 
-- [ ] **`Concat` y su derivada.** Es la pieza que más desbloquea de todo el
-      roadmap por lo poco que cuesta: sin ella no hay skips de U-Net, y son la
-      mitad de la arquitectura.
+- [x] **`Concat` y su derivada** (`aad11c8`). Une varios tensores por un eje,
+      acepta ejes negativos y **valida las formas antes de reservar nada**: unir
+      formas incompatibles daría un tensor del tamaño correcto con los datos
+      entrelazados mal, que es de los fallos silenciosos caros.
+
+      `ConcatVar` lleva la derivada, que es **cortar**: a cada entrada le llega
+      la rebanada que ocupa su tramo del eje. El error natural ahí es que el
+      corte se desplace, porque entonces cada entrada recibe casi su gradiente y
+      el resultado sigue pareciendo razonable. El test 39 compara contra índices
+      calculados a mano —no contra la propia implementación— e incluye un nodo
+      concatenado consigo mismo, que debe acumular y no asignar. Cuatro
+      mutaciones, las cuatro rojas.
 - [ ] **`Backward(salida, gradiente_externo)`.** Hoy `Backward` exige una raíz
       escalar y siembra el gradiente él mismo, así que propagar un `dout`
       concreto obliga al rodeo `Sum(Mul(salida, dout))` —que es literalmente lo
