@@ -625,6 +625,71 @@ inline VarPtr Softmax(const VarPtr& a) {
 }
 
 /**
+ * @brief Une varios nodos a lo largo de un eje. Es la operacion de los saltos.
+ *
+ * Hacia adelante concatena; hacia atras hace lo contrario, que es **cortar**: a
+ * cada entrada le llega la rebanada del gradiente que ocupa su tramo del eje.
+ * No hay suma de por medio, y por eso el corte tiene que caer exactamente donde
+ * cayo la union: desplazarse una posicion mezcla el gradiente de dos entradas y
+ * produce numeros que parecen razonables.
+ *
+ * Sin esto no hay U-Net: el bloque de subida concatena su entrada con la salida
+ * guardada del bloque de bajada del mismo nivel, y sin derivada esa union corta
+ * el grafo por la mitad.
+ */
+inline VarPtr ConcatVar(const std::vector<VarPtr>& entradas, int eje) {
+  if (entradas.empty()) {
+    throw std::invalid_argument("ConcatVar: no hay nada que unir.");
+  }
+  std::vector<const Tensor*> valores;
+  valores.reserve(entradas.size());
+  for (const VarPtr& v : entradas) valores.push_back(&v->Value());
+
+  Tensor out = Concat(valores, eje);
+
+  const int rango = static_cast<int>(entradas[0]->Shape().size());
+  const int eje_pos = eje < 0 ? eje + rango : eje;
+
+  // Se guardan los anchos de cada entrada en el eje: el backward los necesita
+  // para saber donde cortar, y para entonces las formas podrian haber cambiado.
+  std::vector<int> anchos;
+  anchos.reserve(entradas.size());
+  for (const VarPtr& v : entradas) anchos.push_back(v->Shape()[eje_pos]);
+
+  size_t externo = 1, interno = 1;
+  const std::vector<int>& f0 = entradas[0]->Shape();
+  for (int d = 0; d < eje_pos; ++d) externo *= static_cast<size_t>(f0[d]);
+  for (int d = eje_pos + 1; d < rango; ++d) interno *= static_cast<size_t>(f0[d]);
+
+  int total_eje = 0;
+  for (int a : anchos) total_eje += a;
+
+  return MakeOp(std::move(out), entradas,
+                [entradas, anchos, externo, interno, total_eje](const Tensor& g) {
+                  size_t desplazado = 0;
+                  for (size_t k = 0; k < entradas.size(); ++k) {
+                    const size_t ancho = static_cast<size_t>(anchos[k]) * interno;
+                    if (entradas[k]->RequiresGrad()) {
+                      Tensor d(entradas[k]->Shape());
+                      for (size_t e = 0; e < externo; ++e) {
+                        std::memcpy(d.Data() + e * ancho,
+                                    g.Data() + e * static_cast<size_t>(total_eje) * interno +
+                                        desplazado,
+                                    ancho * sizeof(float));
+                      }
+                      entradas[k]->AccumulateGrad(d);
+                    }
+                    desplazado += ancho;
+                  }
+                });
+}
+
+/** @brief Atajo para dos nodos, que es el caso de los saltos de una U-Net. */
+inline VarPtr ConcatVar(const VarPtr& a, const VarPtr& b, int eje) {
+  return ConcatVar(std::vector<VarPtr>{a, b}, eje);
+}
+
+/**
  * @brief Toma filas de una tabla por indice, que es lo que hace un embedding.
  *
  * `tabla` es `[vocabulario, dimension]` e `indices` un tensor de enteros

@@ -2,6 +2,9 @@
 // Licensed under the Apache License, Version 2.0.
 
 #include "tensor.h"
+
+#include <cstring>
+#include <stdexcept>
 #include "parallel.h"
 
 namespace neuralsuite {
@@ -553,6 +556,66 @@ void ElementwiseMul(const Tensor& a, const Tensor& b, Tensor& out) {
   parallel::ParallelFor(sz, /*min_per_thread=*/4096, [&](int desde, int hasta) {
     for (int i = desde; i < hasta; ++i) out[i] = a[i] * b[i];
   });
+}
+
+Tensor Concat(const std::vector<const Tensor*>& entradas, int eje) {
+  if (entradas.empty()) {
+    throw std::invalid_argument("Concat: no hay nada que unir.");
+  }
+  const std::vector<int> forma0 = entradas[0]->Shape();
+  const int rango = static_cast<int>(forma0.size());
+  if (eje < 0) eje += rango;
+  if (eje < 0 || eje >= rango) {
+    throw std::invalid_argument("Concat: eje " + std::to_string(eje) +
+                                " fuera de un tensor de rango " + std::to_string(rango) + ".");
+  }
+
+  // Se comprueba antes de reservar nada: unir formas incompatibles produciria
+  // un tensor con el tamano correcto y los datos entrelazados mal, que es un
+  // fallo silencioso de los caros.
+  int suma_eje = 0;
+  for (const Tensor* t : entradas) {
+    const std::vector<int>& f = t->Shape();
+    if (static_cast<int>(f.size()) != rango) {
+      throw std::invalid_argument("Concat: los tensores no tienen el mismo rango.");
+    }
+    for (int d = 0; d < rango; ++d) {
+      if (d != eje && f[d] != forma0[d]) {
+        throw std::invalid_argument(
+            "Concat: en el eje " + std::to_string(d) + " uno mide " +
+            std::to_string(forma0[d]) + " y otro " + std::to_string(f[d]) +
+            "; solo puede diferir el eje " + std::to_string(eje) + ".");
+      }
+    }
+    suma_eje += f[eje];
+  }
+
+  std::vector<int> forma_salida = forma0;
+  forma_salida[eje] = suma_eje;
+  Tensor salida(forma_salida);
+
+  // El tensor se recorre como [externo, eje, interno]: las dimensiones antes del
+  // eje se aplanan en `externo` y las de despues en `interno`. Asi la copia es
+  // un memcpy por cada fila externa de cada entrada, sin indexar elemento a
+  // elemento.
+  size_t externo = 1, interno = 1;
+  for (int d = 0; d < eje; ++d) externo *= static_cast<size_t>(forma0[d]);
+  for (int d = eje + 1; d < rango; ++d) interno *= static_cast<size_t>(forma0[d]);
+
+  size_t desplazado = 0;
+  for (const Tensor* t : entradas) {
+    const size_t ancho = static_cast<size_t>(t->Shape()[eje]) * interno;
+    for (size_t e = 0; e < externo; ++e) {
+      std::memcpy(salida.Data() + e * static_cast<size_t>(suma_eje) * interno + desplazado,
+                  t->Data() + e * ancho, ancho * sizeof(float));
+    }
+    desplazado += ancho;
+  }
+  return salida;
+}
+
+Tensor Concat(const Tensor& a, const Tensor& b, int eje) {
+  return Concat(std::vector<const Tensor*>{&a, &b}, eje);
 }
 
 }  // namespace neuralsuite

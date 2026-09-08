@@ -3709,6 +3709,116 @@ void TestKVCacheCoincideConRecalculo() {
             << " cruces de ventana, peor diferencia " << peor << ")\n" << std::flush;
 }
 
+/**
+ * @brief `Concat` y su derivada, que es lo que necesitan los saltos de U-Net.
+ *
+ * Hacia adelante se compara contra el valor calculado a mano con índices
+ * explícitos, no contra la propia implementación: que una función coincida
+ * consigo misma no prueba nada.
+ *
+ * Hacia atrás, la derivada de concatenar es **cortar**, y ahí está el error
+ * natural: si el corte se desplaza aunque sea una posición, cada entrada recibe
+ * un gradiente que es casi el suyo y el resultado sigue pareciendo razonable.
+ * Por eso el gradiente de prueba lleva un valor distinto en cada posición: así
+ * un corte desplazado se nota.
+ */
+void TestConcatYSuDerivada() {
+  std::cout << "🧪 [Test 39] Concat y su derivada... " << std::flush;
+  using namespace neuralsuite::autograd;
+
+  // 1. Forward, uniendo por varios ejes y con tres entradas.
+  {
+    Tensor a({2, 3, 4}), b({2, 5, 4}), c({2, 1, 4});
+    for (size_t i = 0; i < a.TotalSize(); ++i) a[i] = static_cast<float>(i);
+    for (size_t i = 0; i < b.TotalSize(); ++i) b[i] = 1000.0f + static_cast<float>(i);
+    for (size_t i = 0; i < c.TotalSize(); ++i) c[i] = 9000.0f + static_cast<float>(i);
+
+    const Tensor u = Concat({&a, &b, &c}, 1);
+    Check(u.Shape() == std::vector<int>({2, 9, 4}), "Concat no suma el eje 1");
+
+    // La verdad, con índices explícitos.
+    for (int lote = 0; lote < 2; ++lote) {
+      for (int f = 0; f < 9; ++f) {
+        for (int d = 0; d < 4; ++d) {
+          float esperado;
+          if (f < 3)      esperado = a[(lote * 3 + f) * 4 + d];
+          else if (f < 8) esperado = b[(lote * 5 + (f - 3)) * 4 + d];
+          else            esperado = c[(lote * 1 + (f - 8)) * 4 + d];
+          Check(u[(lote * 9 + f) * 4 + d] == esperado,
+                "Concat coloca mal el elemento [" + std::to_string(lote) + "," +
+                    std::to_string(f) + "," + std::to_string(d) + "]");
+        }
+      }
+    }
+  }
+
+  // El último eje es el que usan los saltos de una U-Net: se unen canales.
+  {
+    Tensor a({2, 3}), b({2, 2});
+    for (size_t i = 0; i < a.TotalSize(); ++i) a[i] = static_cast<float>(i + 1);
+    for (size_t i = 0; i < b.TotalSize(); ++i) b[i] = 100.0f * static_cast<float>(i + 1);
+    const Tensor u = Concat(a, b, -1);   // eje negativo: cuenta desde el final
+    Check(u.Shape() == std::vector<int>({2, 5}), "Concat no acepta ejes negativos");
+    const float esperado[10] = {1, 2, 3, 100, 200, 4, 5, 6, 300, 400};
+    for (int i = 0; i < 10; ++i) {
+      Check(u[i] == esperado[i], "Concat entrelaza mal por el último eje");
+    }
+  }
+
+  // 2. Formas incompatibles deben abortar, no producir un tensor entrelazado.
+  {
+    Tensor a({2, 3}), b({4, 3});
+    bool protesto = false;
+    try { Concat(a, b, 1); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "Concat aceptó formas que no encajan");
+  }
+
+  // 3. Backward: a cada entrada le llega su rebanada, sin desplazamiento.
+  {
+    auto a = Variable::Create(Tensor({2, 3, 4}), /*requires_grad=*/true);
+    auto b = Variable::Create(Tensor({2, 5, 4}), /*requires_grad=*/true);
+    auto u = ConcatVar(a, b, 1);
+    Check(u->Shape() == std::vector<int>({2, 8, 4}), "ConcatVar no suma el eje");
+
+    // Cada posición con un valor distinto: un corte desplazado se nota.
+    Tensor g(u->Shape());
+    for (size_t i = 0; i < g.TotalSize(); ++i) g[i] = static_cast<float>(i + 1);
+    Backward(Sum(Mul(u, Variable::Create(g))));
+
+    for (int lote = 0; lote < 2; ++lote) {
+      for (int f = 0; f < 3; ++f) {
+        for (int d = 0; d < 4; ++d) {
+          Check(a->Grad()[(lote * 3 + f) * 4 + d] == g[(lote * 8 + f) * 4 + d],
+                "el gradiente de la primera entrada está desplazado");
+        }
+      }
+      for (int f = 0; f < 5; ++f) {
+        for (int d = 0; d < 4; ++d) {
+          Check(b->Grad()[(lote * 5 + f) * 4 + d] == g[(lote * 8 + (f + 3)) * 4 + d],
+                "el gradiente de la segunda entrada está desplazado");
+        }
+      }
+    }
+  }
+
+  // 4. Un nodo concatenado consigo mismo recibe la SUMA de las dos rebanadas.
+  //    Es el caso que distingue acumular de asignar, y ocurre de verdad cuando
+  //    una salida alimenta dos ramas que luego se vuelven a unir.
+  {
+    auto x = Variable::Create(Tensor({1, 2}), /*requires_grad=*/true);
+    auto u = ConcatVar(x, x, 1);
+    Tensor g(u->Shape());
+    g[0] = 1.0f; g[1] = 2.0f; g[2] = 10.0f; g[3] = 20.0f;
+    Backward(Sum(Mul(u, Variable::Create(g))));
+    Check(x->Grad()[0] == 11.0f && x->Grad()[1] == 22.0f,
+          "un nodo usado dos veces no acumula: " + std::to_string(x->Grad()[0]) +
+              ", " + std::to_string(x->Grad()[1]));
+  }
+
+  std::cout << "PASADO ✅ (3 ejes, eje negativo, formas incompatibles y nodo repetido)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3752,6 +3862,7 @@ int main() {
   TestLinearContraAutograd();
   TestEmbeddingContraAutograd();
   TestKVCacheCoincideConRecalculo();
+  TestConcatYSuDerivada();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

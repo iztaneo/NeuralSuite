@@ -220,6 +220,12 @@ def deduplicar(texto):
 
 
 def preparar(libros, cache, etiqueta):
+    """Devuelve [(titulo, cuerpo), ...] y los bytes descargados.
+
+    Antes devolvia los libros ya concatenados, y eso obligaba a partir la
+    validacion cortando el final del pegote. Como los libros se pegan en orden,
+    ese final era siempre el ultimo autor.
+    """
     partes, total_bruto = [], 0
     for id_libro, autor_esperado, titulo_esperado in libros:
         datos, nuevo = descargar(id_libro, cache)
@@ -236,10 +242,10 @@ def preparar(libros, cache, etiqueta):
 
         cuerpo, restos = quitar_restos(recortar(texto, id_libro))
         cuerpo = normalizar(cuerpo)
-        partes.append(cuerpo)
+        partes.append((titulo, cuerpo))
         print(f"    #{id_libro:<6} {titulo[:34]:<34} {autor[:24]:<24} "
               f"{len(cuerpo):>9,} car  {codif}  {restos} restos{'  (descargado)' if nuevo else ''}")
-    return "\n\n".join(partes), total_bruto
+    return partes, total_bruto
 
 
 def main():
@@ -260,20 +266,39 @@ def main():
     cache.mkdir(parents=True, exist_ok=True)
 
     print("\n  === ENTRENAMIENTO Y VALIDACIÓN ===")
-    texto_tr, bruto_tr = preparar(ENTRENAMIENTO, cache, "entrenamiento")
+    libros_tr, bruto_tr = preparar(ENTRENAMIENTO, cache, "entrenamiento")
     print("\n  === PRUEBA (autor apartado, nunca visto en entrenamiento) ===")
-    texto_te, bruto_te = preparar(PRUEBA, cache, "prueba")
+    libros_te, bruto_te = preparar(PRUEBA, cache, "prueba")
 
-    texto_tr, quitadas_tr = deduplicar(texto_tr)
-    texto_te, quitadas_te = deduplicar(texto_te)
+    print("\n  === REPARTO DE VALIDACION (una porcion de cada libro) ===")
 
-    # El corte de validacion va al final y por lineas completas, no por caracter:
-    # partir una palabra por la mitad meteria un fragmento sin sentido en ambos
-    # lados y ensuciaria las dos particiones.
-    lineas = texto_tr.split("\n")
-    corte = int(len(lineas) * (1.0 - args.val))
-    entrenamiento = "\n".join(lineas[:corte]).strip() + "\n"
-    validacion = "\n".join(lineas[corte:]).strip() + "\n"
+    # La validacion se saca de CADA libro, no del final de la concatenacion.
+    #
+    # Cortando el final salia un `val` que era solo el ultimo autor —Unamuno, y
+    # su prosa ensayistica es mas dificil que la narrativa del resto—. Se noto
+    # porque `val` daba peor perplejidad (6.15) que `test` (5.90) siendo las dos
+    # texto no visto, lo cual no tenia sentido hasta mirar que habia dentro.
+    # Un `val` asi no mide la distribucion de entrenamiento: mide a un autor.
+    #
+    # El trozo se toma del INTERIOR de cada libro, no del principio ni del final,
+    # porque los extremos llevan portada, indice y colofon, que no son prosa.
+    trozos_tr, trozos_val = [], []
+    for titulo, cuerpo in libros_tr:
+        lineas = cuerpo.split("\n")
+        n = len(lineas)
+        ancho = max(1, int(n * args.val))
+        desde = int(n * 0.45)                      # interior, y determinista
+        hasta = min(n, desde + ancho)
+        trozos_val.append("\n".join(lineas[desde:hasta]))
+        trozos_tr.append("\n".join(lineas[:desde] + lineas[hasta:]))
+        print(f"    {titulo[:34]:<34} val: lineas {desde}-{hasta} de {n}")
+
+    texto_tr, quitadas_tr = deduplicar("\n\n".join(trozos_tr))
+    texto_val, quitadas_val = deduplicar("\n\n".join(trozos_val))
+    texto_te, quitadas_te = deduplicar("\n\n".join(c for _, c in libros_te))
+
+    entrenamiento = texto_tr.strip() + "\n"
+    validacion = texto_val.strip() + "\n"
 
     (salida / "train.txt").write_text(entrenamiento, encoding="utf-8")
     (salida / "val.txt").write_text(validacion, encoding="utf-8")
@@ -322,7 +347,7 @@ def main():
   prueba        : {len(texto_te):>10,} caracteres   {salida/'test.txt'}
   muestra       : {muestra.stat().st_size:>10,} bytes        {muestra}
 
-  descargado    : {(bruto_tr + bruto_te)/1e6:.1f} MB      líneas duplicadas quitadas: {quitadas_tr + quitadas_te}
+  descargado    : {(bruto_tr + bruto_te)/1e6:.1f} MB      líneas duplicadas quitadas: {quitadas_tr + quitadas_val + quitadas_te}
   símbolos únicos: {len(set(entrenamiento))}
   tokens/parámetro con el modelo actual (858 880 par.): {car/858880:.1f}
   ========================================================================""")

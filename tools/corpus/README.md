@@ -35,20 +35,31 @@ que nunca aparece en entrenamiento**. Si el modelo escribe bien a Cervantes y se
 hunde con Blasco Ibáñez, eso es una respuesta, no ruido. Medido con el primer
 modelo: perplejidad 5.28 en entrenamiento y **5.90 sobre Blasco Ibáñez**.
 
-### Defecto conocido de `val`
+### `val` sale de los cinco libros, no del final
 
-**`val` no es un conjunto de validación**, pese al nombre. Es el 5% final de la
-concatenación, y como Unamuno es el último de los cinco libros, `val` es **sólo
-Unamuno** —prosa ensayística densa—. No es una muestra de la distribución de
-entrenamiento, así que comparar `train` con `val` no mide lo que parece.
+Un detalle que costó una medición equivocada. La primera versión cortaba el 5%
+**final de la concatenación**, y como los libros se pegan en orden y Unamuno es
+el último, `val` era **sólo Unamuno** —prosa ensayística, más difícil que la
+narrativa del resto—. No era una muestra de la distribución de entrenamiento:
+era un autor.
 
-Se detectó porque `val` daba peor perplejidad (6.15) que `test` (5.90) siendo las
+Se notó porque `val` daba peor perplejidad (6.15) que `test` (5.90) siendo las
 dos texto no visto, lo cual no tenía sentido hasta mirar qué contenía cada una.
 
-La conclusión que sostiene el modelo —que generaliza— se apoya en `train` frente
-a `test`, que sí es válida. Arreglarlo pide repartir la validación entre los
-cinco libros en vez de cortar por el final, y **rehacer el corpus obliga a
-reentrenar**, así que está anotado y no hecho.
+Ahora se toma una porción del **interior de cada libro**, empezando en el 45%
+para esquivar portada, índice y colofón, que no son prosa:
+
+```
+Don Quijote                    val: líneas 16834-18704 de 37409
+La Regenta                     val: líneas 15387-17096 de 34195
+Insolación y Morriña           val: líneas  4199-4665  de  9332
+Cuentos de amor                val: líneas  2997-3330  de  6660
+Andanzas y visiones españolas  val: líneas  3636-4040  de  8080
+```
+
+Con eso el orden pasa a ser el que debe ser: `train` 5.69, `val` 5.84, `test`
+6.23. `val` a 0.026 nats de entrenamiento —misma distribución— y `test` a 0.091,
+que es lo que cuesta un autor entero que el modelo nunca vio.
 
 ## Por qué Gutenberg y no Wikipedia
 

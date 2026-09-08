@@ -176,6 +176,21 @@ void MatMul(const Tensor& A, const Tensor& B, Tensor& C);
 Tensor Transpose(const Tensor& A);
 
 /**
+ * @brief Une varios tensores a lo largo de un eje.
+ *
+ * Todas las entradas deben coincidir en forma salvo en el eje `eje`, que es el
+ * que se suma. Un eje negativo cuenta desde el final, como es costumbre.
+ *
+ * Es la operacion que necesitan los saltos de una U-Net —el bloque de subida
+ * concatena su entrada con la salida guardada del bloque de bajada del mismo
+ * nivel— y tambien la forma natural de juntar las cabezas de una atencion.
+ */
+Tensor Concat(const std::vector<const Tensor*>& entradas, int eje);
+
+/** @brief Atajo para el caso de dos tensores, que es el habitual. */
+Tensor Concat(const Tensor& a, const Tensor& b, int eje);
+
+/**
  * @brief Pre-LN Layer Normalization Forward Pass
  */
 void LayerNormForward(const Tensor& x, const Tensor& gamma, const Tensor& beta,

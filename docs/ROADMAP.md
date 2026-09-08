@@ -838,15 +838,16 @@ acuerde de tocar la lista.
 
       | | Tokens | Pérdida | Perplejidad |
       | --- | --- | --- | --- |
-      | train | 5 073 920 | 1.6641 | 5.28 |
-      | val | 269 312 | 1.8163 | 6.15 |
-      | **test** (Blasco Ibáñez, autor nunca visto) | 1 568 768 | **1.7743** | **5.90** |
+      | train | 5 063 680 | 1.7383 | 5.69 |
+      | val (porción interior de los cinco libros) | 280 576 | 1.7641 | 5.84 |
+      | **test** (Blasco Ibáñez, autor nunca visto) | 1 568 768 | **1.8292** | **6.23** |
 
-      0.11 nats entre entrenamiento y un autor que jamás vio. **Generaliza a un
-      autor no visto y ha aprendido regularidades del español más allá de
-      memorizar secuencias concretas del corpus.** Ésta es la base contra la que
-      medir el BPE, y sin ella habría sido otra mejora indemostrable —exactamente
-      lo que pasó con el autograd—.
+      El orden es el que debe ser y no lo era antes: `train` < `val` < `test`.
+      `val` queda a 0.026 nats de entrenamiento —es la misma distribución, sale
+      del interior de los mismos cinco libros— y `test` a 0.091, que es lo
+      esperable de un autor entero apartado. **Generaliza a un autor no visto y
+      ha aprendido regularidades del español más allá de memorizar secuencias
+      concretas del corpus.** Ésta es la base contra la que medir el BPE.
 
       Esa formulación sustituye a la que había aquí, «no memorizó el corpus,
       aprendió el idioma», que era una **sobreinterpretación**: 858 K parámetros
@@ -854,26 +855,31 @@ acuerde de tocar la lista.
       idioma —lo dice dos párrafos más arriba este mismo texto: «fonotáctica sí,
       semántica no»—.
 
-      Las cifras también son otras, y conviene decir por qué. La primera medición
-      **estaba sesgada de dos maneras**:
+      Hasta llegar a estas cifras hubo que corregir **tres** medidas equivocadas,
+      y conviene que quede escrito porque las tres fallaban en el instrumento y
+      no en lo medido:
 
-      - Evaluaba 30 720 tokens pero informaba del tamaño del archivo, 400 000:
-        una muestra trece veces menor de la que sugería.
+      - El evaluador **informaba de 400 000 caracteres y evaluaba 30 720**:
+        imprimía el tamaño del archivo bajo una columna llamada «caracteres».
       - Tomaba las ventanas **del principio** de cada archivo, y el principio no
         es prosa: `train` empezaba con la portada y el índice del Quijote
         —«Tasa», «Testimonio de las erratas», «El Rey»— y `test` con la página
         legal de Mare Nostrum —«95.OOO EJEMPLARES», «ES PROPIEDAD.--Reservados
-        todos los derechos»—. No comparaba español con español, y penalizaba a
-        `test`, que pasó de 6.23 a 5.90 al medirlo entero.
+        todos los derechos»—. No comparaba español con español.
+      - **`val` no era un conjunto de validación.** Se sacaba cortando el 5%
+        final de la concatenación y, como Unamuno era el último de los cinco
+        libros, `val` era sólo Unamuno: prosa ensayística, más difícil que la
+        narrativa del resto. Por eso salía **peor** (6.15) que `test` (5.90)
+        siendo las dos texto no visto, lo cual no tenía sentido. Ahora se toma
+        una porción del interior de cada libro —desde el 45%, para esquivar
+        portada y colofón— y se verifica que un fragmento distintivo de los cinco
+        aparece en `val` y ninguno quedó también en `train`.
 
-      **`val` mide otra cosa de la que su nombre sugiere**, y esto sigue abierto:
-      es el 5% final de la concatenación, y como Unamuno va el último de los
-      cinco libros, `val` es **sólo Unamuno**, prosa ensayística densa. Por eso
-      sale peor (6.15) que `test` (5.90) siendo las dos texto no visto. La
-      comparación que sostiene la conclusión —`train` frente a `test`— sí es
-      válida, porque `test` es un autor entero apartado; la que no vale es
-      `train` frente a `val`. Corregirlo pide repartir la validación entre todos
-      los libros, y rehacer el corpus implica reentrenar.
+      Corregir `val` cambia `train.txt`, así que el modelo se reentrenó entero:
+      20.75 minutos. Las cifras absolutas se movieron respecto a la medición
+      anterior (train 5.28 → 5.69) porque el texto de entrenamiento ya no es el
+      mismo y el vocabulario pasó de 113 a 114 símbolos; lo que importa es que
+      **el orden entre particiones pasó a ser interpretable**.
 
       Los pesos viven en `release/` y no en el historial. Se reproducen con el
       comando que hay en [tools/corpus/README.md](../tools/corpus/README.md).
