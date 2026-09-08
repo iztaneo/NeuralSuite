@@ -51,12 +51,11 @@ Tensor LinearAutograd::Backward(const Tensor& dout) {
 
   const int n = static_cast<int>(dout.TotalSize()) / out_features_;
 
-  // `Backward` exige una raiz escalar y siembra el gradiente el mismo. Para
-  // propagar un `dout` concreto se cierra el grafo con una perdida cuya
-  // derivada respecto a la salida es exactamente ese `dout`: sum(salida * dout).
+  // Se siembra el gradiente directamente. Antes habia que cerrar el grafo con
+  // `Sum(Mul(salida, dout))`, y eso materializaba un tensor del tamano de la
+  // salida entera solo para propagar: era el coste fijo de esta capa.
   const Tensor dout_2d = dout.View({n, out_features_});
-  autograd::Backward(
-      autograd::Sum(autograd::Mul(salida_, Variable::Create(dout_2d))));
+  autograd::Backward(salida_, dout_2d);
 
   // `Linear` asigna sus gradientes en vez de acumularlos; se copia igual para
   // que las dos capas sean intercambiables ante el optimizador.

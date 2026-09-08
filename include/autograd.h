@@ -105,6 +105,7 @@ class Variable : public std::enable_shared_from_this<Variable> {
  private:
   friend VarPtr MakeOp(Tensor, std::vector<VarPtr>, std::function<void(const Tensor&)>);
   friend void Backward(const VarPtr&);
+  friend void Backward(const VarPtr&, const Tensor&);
 
   Tensor value_;
   Tensor grad_;
@@ -145,11 +146,28 @@ inline VarPtr MakeOp(Tensor value, std::vector<VarPtr> parents,
  * recibido las contribuciones de todos los caminos que llegan a el, que es lo
  * que distingue un grafo de un simple encadenado lineal.
  */
-inline void Backward(const VarPtr& root) {
-  if (root->Value().TotalSize() != 1) {
+/**
+ * @brief Propaga hacia atras desde `root`, sembrando con `semilla`.
+ *
+ * La version que solo acepta raices escalares obligaba a cerrar el grafo con
+ * `Sum(Mul(salida, dout))` para propagar un gradiente concreto. Ese rodeo tiene
+ * dos costes: **materializa un tensor del tamano de la salida entera**, que es
+ * el coste fijo que hacia lentas a `LinearAutograd` y `EmbeddingAutograd` —6x
+ * mas lentas incluso con tablas pequenas—, y anade dos nodos al grafo que no
+ * son parte del modelo.
+ *
+ * Con la semilla explicita, una capa propaga su `dout` directamente, que es lo
+ * que hacen las capas escritas a mano.
+ */
+inline void Backward(const VarPtr& root, const Tensor& semilla) {
+  if (semilla.Shape() != root->Shape()) {
+    // Sin esta comprobacion, una semilla de otra forma se propagaria y cada
+    // operacion leeria de donde no debe, dando gradientes plausibles y falsos.
+    std::string a, b;
+    for (int d : root->Shape()) a += std::to_string(d) + " ";
+    for (int d : semilla.Shape()) b += std::to_string(d) + " ";
     throw std::invalid_argument(
-        "Backward: la raiz debe ser escalar; reduce la salida con Sum() o Mean(). "
-        "Tiene " + std::to_string(root->Value().TotalSize()) + " elementos.");
+        "Backward: la semilla tiene forma [" + b + "] y la raiz [" + a + "].");
   }
 
   // Orden topologico por recorrido en profundidad.
@@ -163,9 +181,7 @@ inline void Backward(const VarPtr& root) {
   };
   visit(root);
 
-  Tensor seed({1});
-  seed[0] = 1.0f;
-  root->AccumulateGrad(seed);
+  root->AccumulateGrad(semilla);
 
   for (auto it = order.rbegin(); it != order.rend(); ++it) {
     Variable* node = *it;
@@ -173,6 +189,19 @@ inline void Backward(const VarPtr& root) {
       node->backward_(node->Grad());
     }
   }
+}
+
+/** @brief Propaga desde una raiz escalar, sembrando con 1. */
+inline void Backward(const VarPtr& root) {
+  if (root->Value().TotalSize() != 1) {
+    throw std::invalid_argument(
+        "Backward: la raiz debe ser escalar; reduce la salida con Sum() o Mean(), "
+        "o pasa la semilla con Backward(raiz, gradiente). "
+        "Tiene " + std::to_string(root->Value().TotalSize()) + " elementos.");
+  }
+  Tensor seed(root->Shape());
+  for (size_t i = 0; i < seed.TotalSize(); ++i) seed[i] = 1.0f;
+  Backward(root, seed);
 }
 
 namespace detail {

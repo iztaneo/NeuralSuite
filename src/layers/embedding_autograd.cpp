@@ -34,10 +34,29 @@ Tensor EmbeddingAutograd::Forward(const Tensor& input) {
 }
 
 Tensor EmbeddingAutograd::Backward(const Tensor& dout) {
-  // `Backward` exige una raiz escalar y siembra el gradiente el mismo; se cierra
-  // el grafo con una perdida cuya derivada respecto a la salida es ese `dout`.
-  autograd::Backward(autograd::Sum(
-      autograd::Mul(salida_, autograd::Variable::Create(dout))));
+  // Se siembra el gradiente directamente, sin materializar un tensor del tamano
+  // de la salida solo para propagarlo.
+  //
+  // Ojo con el caso del GPT: el embedding de posicion se calcula con forma
+  // [1, T] y su gradiente llega [B, T, D]. Antes eso lo resolvia el broadcasting
+  // de `Mul`; ahora hay que reducirlo aqui, sumando sobre el lote, que es la
+  // misma operacion escrita donde se ve.
+  Tensor semilla = dout;
+  if (semilla.Shape() != salida_->Shape()) {
+    const size_t n = salida_->Value().TotalSize();
+    if (semilla.TotalSize() % n != 0) {
+      throw std::invalid_argument(
+          "EmbeddingAutograd: el gradiente no encaja con la salida.");
+    }
+    const size_t repeticiones = semilla.TotalSize() / n;
+    Tensor sumado(salida_->Shape());
+    sumado.Zeros();
+    for (size_t r = 0; r < repeticiones; ++r) {
+      for (size_t i = 0; i < n; ++i) sumado[i] += dout[r * n + i];
+    }
+    semilla = std::move(sumado);
+  }
+  autograd::Backward(salida_, semilla);
 
   // `Embedding` pone a cero y acumula, o sea que asigna; se copia igual para
   // que las dos capas sean intercambiables ante el optimizador.

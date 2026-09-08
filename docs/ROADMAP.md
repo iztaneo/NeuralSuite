@@ -915,12 +915,29 @@ backward con broadcasting y `Conv2DVar` **ya existen**. Queda esto:
       calculados a mano —no contra la propia implementación— e incluye un nodo
       concatenado consigo mismo, que debe acumular y no asignar. Cuatro
       mutaciones, las cuatro rojas.
-- [ ] **`Backward(salida, gradiente_externo)`.** Hoy `Backward` exige una raíz
-      escalar y siembra el gradiente él mismo, así que propagar un `dout`
-      concreto obliga al rodeo `Sum(Mul(salida, dout))` —que es literalmente lo
-      que hacen `LinearAutograd` y `EmbeddingAutograd`— y materializa un tensor
-      del tamaño de la salida entera. Ése es el coste fijo que hace que la
-      versión por grafo sea 6× más lenta incluso con tablas pequeñas.
+- [x] **`Backward(salida, gradiente_externo)`.** Antes exigía una raíz escalar y
+      sembraba el gradiente él mismo, así que propagar un `dout` concreto
+      obligaba al rodeo `Sum(Mul(salida, dout))`, que **materializa un tensor del
+      tamaño de la salida entera**. Ése era el coste fijo del grafo, y quitarlo
+      se nota:
+
+      | | Antes | Ahora | |
+      | --- | --- | --- | --- |
+      | `LinearAutograd` 768×768, 2048 filas | 124.4 ms (2.61×) | **74.9 ms (1.74×)** | −40% |
+      | `EmbeddingAutograd` vocab 50257 | 231.7 ms (19.96×) | **189.4 ms (16.40×)** | −18% |
+
+      Al embedding le queda el otro coste ya diagnosticado: copiar la tabla
+      entera en cada pasada. Por eso baja menos.
+
+      Valida que la semilla tenga la forma de la raíz. Sin eso se propagaría
+      leyendo de donde no debe y los gradientes saldrían plausibles y falsos.
+
+      El test 40 comprueba que sembrar equivale al rodeo **exactamente**, sobre
+      un grafo con ramas y un nodo reutilizado. Conviene saber qué no cubre: es
+      una prueba de **equivalencia entre dos rutas**, así que un recorrido del
+      grafo mal hecho las rompería a las dos por igual y pasaría. La corrección
+      absoluta la dan los gradient checks por diferencias finitas —invertir el
+      orden topológico deja 92 pruebas en rojo—.
 - [ ] **`dtype`.** Lo último de la lista y lo menos urgente: hoy todo es `float`
       y no hay ningún caso de uso que lo exija. Se anota para no perderlo.
 

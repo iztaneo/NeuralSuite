@@ -3819,6 +3819,89 @@ void TestConcatYSuDerivada() {
             << std::flush;
 }
 
+/**
+ * @brief `Backward(raiz, semilla)` frente al rodeo que sustituye.
+ *
+ * Antes, propagar un `dout` concreto obligaba a cerrar el grafo con
+ * `Sum(Mul(salida, dout))`, cuya derivada respecto a la salida es justamente
+ * ese `dout`. Las dos rutas deben dar el mismo gradiente **exactamente**: si
+ * difieren, la sustitución cambió la matemática y no sólo el coste.
+ *
+ * La diferencia está en lo que cuesta: el rodeo materializa un tensor del
+ * tamaño de la salida entera. Medido sobre `LinearAutograd` con 768x768 y 2048
+ * filas, quitarlo baja de 124 ms a 75 ms por paso.
+ */
+void TestBackwardConSemilla() {
+  std::cout << "🧪 [Test 40] Backward con gradiente externo... " << std::flush;
+  using namespace neuralsuite::autograd;
+
+  // Un grafo con ramas y un nodo reutilizado, para que el recorrido importe.
+  auto construir = [](VarPtr& a, VarPtr& b) {
+    auto t = Tanh(MatMulVar(a, b));
+    return Add(t, Mul(t, t));            // `t` alimenta dos caminos
+  };
+
+  Tensor va({3, 4}), vb({4, 5});
+  for (size_t i = 0; i < va.TotalSize(); ++i) va[i] = 0.3f * std::sin(0.7f * i);
+  for (size_t i = 0; i < vb.TotalSize(); ++i) vb[i] = 0.4f * std::cos(0.5f * i);
+
+  Tensor g({3, 5});
+  for (size_t i = 0; i < g.TotalSize(); ++i) g[i] = 0.6f * std::sin(0.31f * i) + 0.2f;
+
+  // Ruta A: el rodeo.
+  auto a1 = Variable::Create(va, true), b1 = Variable::Create(vb, true);
+  auto y1 = construir(a1, b1);
+  Backward(Sum(Mul(y1, Variable::Create(g))));
+
+  // Ruta B: la semilla directa.
+  auto a2 = Variable::Create(va, true), b2 = Variable::Create(vb, true);
+  auto y2 = construir(a2, b2);
+  Backward(y2, g);
+
+  double peor = 0.0;
+  for (size_t i = 0; i < a1->Grad().TotalSize(); ++i) {
+    peor = std::max(peor, std::abs(static_cast<double>(a1->Grad()[i]) - a2->Grad()[i]));
+  }
+  for (size_t i = 0; i < b1->Grad().TotalSize(); ++i) {
+    peor = std::max(peor, std::abs(static_cast<double>(b1->Grad()[i]) - b2->Grad()[i]));
+  }
+  Check(peor < 1e-6,
+        "sembrar el gradiente no equivale al rodeo Sum(Mul(...)): " + std::to_string(peor));
+
+  // Una semilla de otra forma debe abortar. Sin esta comprobación se propagaría
+  // leyendo de donde no debe, y los gradientes saldrían plausibles y falsos.
+  {
+    auto a3 = Variable::Create(va, true), b3 = Variable::Create(vb, true);
+    auto y3 = construir(a3, b3);
+    Tensor mala({5, 3});                 // traspuesta: mismo tamaño, otra forma
+    bool protesto = false;
+    try { Backward(y3, mala); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "Backward aceptó una semilla con forma equivocada");
+  }
+
+  // La versión escalar sigue funcionando y equivale a sembrar con unos.
+  {
+    auto a4 = Variable::Create(va, true), b4 = Variable::Create(vb, true);
+    auto s4 = Sum(construir(a4, b4));
+    Backward(s4);
+
+    auto a5 = Variable::Create(va, true), b5 = Variable::Create(vb, true);
+    auto y5 = construir(a5, b5);
+    Tensor unos(y5->Shape());
+    for (size_t i = 0; i < unos.TotalSize(); ++i) unos[i] = 1.0f;
+    Backward(y5, unos);
+
+    double d = 0.0;
+    for (size_t i = 0; i < a4->Grad().TotalSize(); ++i) {
+      d = std::max(d, std::abs(static_cast<double>(a4->Grad()[i]) - a5->Grad()[i]));
+    }
+    Check(d < 1e-6, "Sum() y sembrar con unos no coinciden: " + std::to_string(d));
+  }
+
+  std::cout << "PASADO ✅ (equivale al rodeo, valida la forma y respeta la raíz escalar)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3863,6 +3946,7 @@ int main() {
   TestEmbeddingContraAutograd();
   TestKVCacheCoincideConRecalculo();
   TestConcatYSuDerivada();
+  TestBackwardConSemilla();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
