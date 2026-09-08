@@ -1,4 +1,4 @@
-"""Exporta RMSNorm y SiLU de PyTorch para compararlos con los de C++.
+"""Exporta RMSNorm, SiLU y GroupNorm de PyTorch para compararlos con los de C++.
 
 Por qué hace falta, si ya hay gradient check: un gradient check confirma que el
 backward deriva el forward **que se escribió**, no que ese forward sea realmente
@@ -71,7 +71,32 @@ def main():
     (y_silu * w).sum().backward()
     dx_silu = x2.grad.detach().clone()
 
+    # --- GroupNorm, sobre un tensor [N, C, H, W] aparte.
+    #
+    # Ojo con la asimetria que es facil equivocar: las estadisticas son POR
+    # GRUPO —sobre (C/G, H, W)— pero gamma y beta son POR CANAL. Una
+    # implementacion que aplicara gamma por grupo daria numeros plausibles.
+    N4, C4, H4, W4, G4 = 2, 6, 3, 4, 3
+    xg = torch.randn(N4, C4, H4, W4, generator=g, dtype=torch.float32,
+                     requires_grad=True)
+    wg = torch.randn(N4, C4, H4, W4, generator=g, dtype=torch.float32)
+    gn = nn.GroupNorm(G4, C4, eps=EPS, dtype=torch.float32)
+    with torch.no_grad():
+        gn.weight.copy_(torch.randn(C4, generator=g, dtype=torch.float32))
+        gn.bias.copy_(torch.randn(C4, generator=g, dtype=torch.float32))
+    y_gn = gn(xg)
+    (y_gn * wg).sum().backward()
+
     tensors = {
+        "gn_x": xg.detach().numpy(),
+        "gn_w": wg.numpy(),
+        "gn_gamma": gn.weight.detach().numpy(),
+        "gn_beta": gn.bias.detach().numpy(),
+        "gn_meta": np.array([N4, C4, H4, W4, G4], dtype=np.float32),
+        "gn_y": y_gn.detach().numpy(),
+        "gn_dx": xg.grad.detach().numpy(),
+        "gn_dgamma": gn.weight.grad.detach().numpy(),
+        "gn_dbeta": gn.bias.grad.detach().numpy(),
         "x": x.detach().numpy(),
         "w": w.numpy(),
         "gamma": gamma.numpy(),

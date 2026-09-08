@@ -4042,6 +4042,134 @@ void TestSiluYRMSNorm() {
   std::cout << "PASADO ✅ (SiLU y RMSNorm contra diferencias finitas)\n" << std::flush;
 }
 
+/**
+ * @brief `GroupNorm`: gradientes contra diferencias finitas y sus dos asimetrías.
+ *
+ * La paridad contra `nn.GroupNorm` ya confirma que el forward es el correcto.
+ * Lo que añade esta prueba es lo que la paridad no puede: que el gradiente
+ * salga de derivar ese forward y no de una fórmula parecida, y las dos
+ * confusiones que la capa invita a cometer.
+ *
+ * La primera: las estadísticas son **por grupo** —sobre `(C/G, H, W)`— pero
+ * `gamma` y `beta` son **por canal**. Aplicar gamma por grupo daría números
+ * plausibles.
+ *
+ * La segunda: `GroupNorm` no mira el lote. Cada ejemplo se normaliza con sus
+ * propias estadísticas, así que procesar dos ejemplos juntos o por separado
+ * tiene que dar exactamente lo mismo. Es justo lo que la distingue de
+ * `BatchNorm`, y la razón de usarla cuando los lotes son pequeños.
+ */
+void TestGroupNorm() {
+  std::cout << "🧪 [Test 42] GroupNorm... " << std::flush;
+
+  const int N = 2, C = 6, H = 3, W = 4, G = 3;
+  GroupNormLayer capa(G, C);
+  for (int c = 0; c < C; ++c) {
+    capa.Gamma()[c] = 0.6f + 0.13f * static_cast<float>(c);
+    capa.Beta()[c] = 0.05f * static_cast<float>(c) - 0.1f;
+  }
+
+  Tensor x({N, C, H, W}), w({N, C, H, W});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.9f * std::sin(0.41f * static_cast<float>(i)) + 0.15f;
+    w[i] = 0.5f * std::cos(0.23f * static_cast<float>(i)) + 0.1f;
+  }
+
+  const Tensor y = capa.Forward(x);
+  const Tensor dx = capa.Backward(w);
+  const Tensor dgamma = *capa.GetGradients()[0];
+  const Tensor dbeta = *capa.GetGradients()[1];
+
+  // Cada grupo debe quedar con media 0 y varianza 1 ANTES de gamma/beta. Se
+  // comprueba deshaciendo la escala, que es lo que verifica que las
+  // estadísticas se tomaron por grupo y no por canal ni sobre todo el tensor.
+  const int cpg = C / G, espacial = H * W, m = cpg * espacial;
+  for (int n = 0; n < N; ++n) {
+    for (int g = 0; g < G; ++g) {
+      double suma = 0.0, suma2 = 0.0;
+      for (int k = 0; k < cpg; ++k) {
+        const int canal = g * cpg + k;
+        for (int s = 0; s < espacial; ++s) {
+          const size_t i = (static_cast<size_t>(n) * C + canal) * espacial + s;
+          const double xhat = (y[i] - capa.Beta()[canal]) / capa.Gamma()[canal];
+          suma += xhat;
+          suma2 += xhat * xhat;
+        }
+      }
+      Check(std::abs(suma / m) < 1e-4,
+            "el grupo no queda con media cero: " + std::to_string(suma / m));
+      Check(std::abs(suma2 / m - 1.0) < 1e-3,
+            "el grupo no queda con varianza uno: " + std::to_string(suma2 / m));
+    }
+  }
+
+  auto perdida = [&](GroupNormLayer& c, const Tensor& entrada) {
+    const Tensor s = c.Forward(entrada);
+    double l = 0.0;
+    for (size_t i = 0; i < s.TotalSize(); ++i) l += w[i] * s[i];
+    return l;
+  };
+
+  const float h = 1e-3f;
+  double peor_dx = 0.0;
+  for (size_t i = 0; i < x.TotalSize(); i += 7) {   // muestreo: 144 puntos es mucho
+    Tensor xp = x, xm = x;
+    xp[i] += h; xm[i] -= h;
+    const double num = (perdida(capa, xp) - perdida(capa, xm)) / (2.0 * h);
+    peor_dx = std::max(peor_dx, std::abs(num - dx[i]) / std::max(1.0, std::abs(num)));
+  }
+  Check(peor_dx < 5e-3, "el gradiente respecto a x no cuadra: " + std::to_string(peor_dx));
+
+  double peor_dg = 0.0, peor_db = 0.0;
+  for (int c = 0; c < C; ++c) {
+    const float og = capa.Gamma()[c];
+    capa.Gamma()[c] = og + h; const double lp = perdida(capa, x);
+    capa.Gamma()[c] = og - h; const double lm = perdida(capa, x);
+    capa.Gamma()[c] = og;
+    const double ng = (lp - lm) / (2.0 * h);
+    peor_dg = std::max(peor_dg, std::abs(ng - dgamma[c]) / std::max(1.0, std::abs(ng)));
+
+    const float ob = capa.Beta()[c];
+    capa.Beta()[c] = ob + h; const double bp = perdida(capa, x);
+    capa.Beta()[c] = ob - h; const double bm = perdida(capa, x);
+    capa.Beta()[c] = ob;
+    const double nb = (bp - bm) / (2.0 * h);
+    peor_db = std::max(peor_db, std::abs(nb - dbeta[c]) / std::max(1.0, std::abs(nb)));
+  }
+  Check(peor_dg < 5e-3, "el gradiente de gamma no cuadra: " + std::to_string(peor_dg));
+  Check(peor_db < 5e-3, "el gradiente de beta no cuadra: " + std::to_string(peor_db));
+
+  // No mira el lote: un ejemplo suelto debe dar lo mismo que dentro del lote.
+  {
+    Tensor uno({1, C, H, W});
+    const size_t por_ejemplo = static_cast<size_t>(C) * H * W;
+    for (size_t i = 0; i < por_ejemplo; ++i) uno[i] = x[por_ejemplo + i];  // el 2º
+    GroupNormLayer suelta(G, C);
+    for (int c = 0; c < C; ++c) {
+      suelta.Gamma()[c] = capa.Gamma()[c];
+      suelta.Beta()[c] = capa.Beta()[c];
+    }
+    const Tensor y1 = suelta.Forward(uno);
+    double peor = 0.0;
+    for (size_t i = 0; i < por_ejemplo; ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(y1[i]) - y[por_ejemplo + i]));
+    }
+    Check(peor < 1e-5,
+          "el resultado depende del lote, que es lo que GroupNorm evita: " +
+              std::to_string(peor));
+  }
+
+  // Canales que no se reparten en grupos iguales deben abortar.
+  {
+    bool protesto = false;
+    try { GroupNormLayer mala(4, 6); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "GroupNorm aceptó 6 canales en 4 grupos");
+  }
+
+  std::cout << "PASADO ✅ (estadísticas por grupo, gamma por canal, independiente del lote)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -4088,6 +4216,7 @@ int main() {
   TestConcatYSuDerivada();
   TestBackwardConSemilla();
   TestSiluYRMSNorm();
+  TestGroupNorm();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

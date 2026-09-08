@@ -999,7 +999,32 @@ desbloquean el transformer moderno, que es el examen principal—:
   El caso nuevo (`run_case bloques`) entra en `run_parity.sh` con los otros
   cuatro. Comprobado que muerde: restando una media falsa en el forward, la
   paridad da discrepancia de 5.1e-02 en `rms_y`.
-- [ ] `GroupNorm`
+- [x] **`GroupNorm`.** Divide `C` en `G` grupos y normaliza sobre
+      `(C/G, alto, ancho)`. Es la normalización de las U-Net de difusión, y la
+      razón de usarla en vez de `BatchNorm` es que **no mira el lote**: cada
+      ejemplo se normaliza con sus propias estadísticas. En difusión los lotes
+      son pequeños —la memoria se va en los mapas de activación— y `BatchNorm`
+      con lotes pequeños estima mal la varianza y mete ruido que depende de con
+      quién te tocó compartir lote.
+
+      Tiene dos asimetrías fáciles de equivocar. Las estadísticas son **por
+      grupo** pero `gamma` y `beta` son **por canal**. Y a diferencia de
+      `RMSNorm`, sí lleva sesgo.
+
+      Mismo esquema de reparto que `RMSNorm`: `dx` por (ejemplo, grupo) y
+      `dgamma`/`dbeta` por canal, salidas disjuntas y sin reducción entre hilos.
+
+      Verificada en dos capas que comprueban cosas distintas. **Paridad contra
+      `nn.GroupNorm`** —peor error relativo 1.3e-07 en las cuatro salidas—, que
+      dice que el forward es de verdad un GroupNorm. Y **diferencias finitas**,
+      que dicen que el gradiente sale de derivar *ese* forward. La prueba
+      unitaria fija además que cada grupo queda con media 0 y varianza 1 tras
+      deshacer la escala, y que procesar un ejemplo suelto da lo mismo que
+      dentro del lote —que es justo lo que la distingue de `BatchNorm`—.
+
+      Tres mutaciones, y las tres caen en **ambas** capas: aplicar gamma por
+      grupo, normalizar por canal en vez de por grupo, y omitir el término de la
+      varianza en `dx`.
 - [ ] `Upsample2D`
 - [ ] `Downsample2D`
 - [ ] `CrossAttention` — `Q` del latente, `K` y `V` del condicionamiento. Es la

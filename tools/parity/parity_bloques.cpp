@@ -84,6 +84,27 @@ int main(int argc, char** argv) {
   out["silu_y"] = AArray(y_silu);
   out["silu_dx"] = AArray(dx_silu);
 
+  // --- GroupNorm
+  {
+    const Tensor gx = ATensor(Require(ref, "gn_x"));
+    const Tensor gw = ATensor(Require(ref, "gn_w"));
+    const Tensor ggamma = ATensor(Require(ref, "gn_gamma"));
+    const Tensor gbeta = ATensor(Require(ref, "gn_beta"));
+    const nsparity::Array& gmeta = Require(ref, "gn_meta");
+    const int canales = static_cast<int>(gmeta.data[1]);
+    const int grupos = static_cast<int>(gmeta.data[4]);
+
+    GroupNormLayer gn(grupos, canales);
+    std::memcpy(gn.Gamma().Data(), ggamma.Data(), ggamma.TotalSize() * sizeof(float));
+    std::memcpy(gn.Beta().Data(), gbeta.Data(), gbeta.TotalSize() * sizeof(float));
+    const Tensor gy = gn.Forward(gx);
+    const Tensor gdx = gn.Backward(gw);
+    out["gn_y"] = AArray(gy);
+    out["gn_dx"] = AArray(gdx);
+    out["gn_dgamma"] = AArray(*gn.GetGradients()[0]);
+    out["gn_dbeta"] = AArray(*gn.GetGradients()[1]);
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;
