@@ -955,8 +955,50 @@ Hay ya: `LayerNorm`, `Conv2D`, `MaxPool2D`, `MultiHeadAttention`, `Residual`,
 `ReLU`, `GELU`, `Sigmoid`. Faltan seis, en este orden —las dos primeras porque
 desbloquean el transformer moderno, que es el examen principal—:
 
-- [ ] `RMSNorm`
-- [ ] `SiLU`
+- [x] **`RMSNorm`.** `y = x / sqrt(media(x²) + eps) · gamma`. Es la de LLaMA,
+      Mistral y Gemma: **no resta la media y no lleva sesgo**. Eso se nota en el
+      backward, donde el gradiente pierde uno de los tres términos que tiene el
+      de `LayerNorm`; el que sobrevive —el que resta la proyección de `x`— es el
+      que lo hace ortogonal a `x`, y **olvidarlo es el error clásico**: la red
+      sigue entrenando, algo peor, y no falla ninguna prueba que no mire el
+      gradiente.
+
+      El backward hace dos pasadas y cada una reparte por un eje distinto: `dx`
+      por filas y `dgamma` por columnas. No es un capricho — `ParallelFor`
+      reparte de forma dinámica y no garantiza qué hilo toma qué rango, así que
+      acumular en un vector por hilo no vale. Repartiendo por columnas, cada
+      hilo escribe posiciones distintas y no hay reducción. Comprobado: **bit a
+      bit idéntico con 1, 2, 4, 8 y 10 hilos**.
+- [x] **`SiLU`** (Swish): `x · sigmoid(x)`. Sirve al transformer moderno y a la
+      U-Net de difusión. Su backward necesita la **entrada**, no la salida,
+      porque SiLU no es inyectiva —tiene un mínimo cerca de x = −1.278, así que
+      dos valores de `x` dan la misma `y`—. Derivarla como si fuera sigmoide da
+      un gradiente equivocado justo en la zona negativa, que es la razón de
+      usarla en vez de ReLU.
+
+  Las dos se comprueban contra **diferencias finitas**, no contra otra
+  implementación propia: el error que importa aquí no es una discrepancia entre
+  versiones sino un término omitido, y ése coincide consigo mismo. Cinco
+  mutaciones, las cinco rojas: quitar el término de proyección, restar la media,
+  normalizar mal `dgamma`, derivar SiLU como sigmoide, e implementarla como ReLU.
+
+  **Y paridad contra PyTorch**, que es lo que el gradient check no puede dar. Un
+  gradient check confirma que el backward deriva el forward *que se escribió*, no
+  que ese forward sea de verdad un RMSNorm: una implementación que restara la
+  media sería coherente consigo misma y pasaría igual. Contra `nn.RMSNorm` y
+  `nn.SiLU`:
+
+  | | Error relativo |
+  | --- | --- |
+  | `rms_y` | 7.7e-08 |
+  | `rms_dx` | 3.8e-08 |
+  | `rms_dgamma` | 5.8e-08 |
+  | `silu_y` | **0** (exacto) |
+  | `silu_dx` | 5.1e-09 |
+
+  El caso nuevo (`run_case bloques`) entra en `run_parity.sh` con los otros
+  cuatro. Comprobado que muerde: restando una media falsa en el forward, la
+  paridad da discrepancia de 5.1e-02 en `rms_y`.
 - [ ] `GroupNorm`
 - [ ] `Upsample2D`
 - [ ] `Downsample2D`

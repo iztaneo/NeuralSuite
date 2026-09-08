@@ -236,6 +236,27 @@ void SigmoidForward(const Tensor& input, Tensor& output);
 void SigmoidBackward(const Tensor& dout, const Tensor& output, Tensor& dx);
 
 /**
+ * @brief SiLU (Swish): x * sigmoid(x).
+ *
+ * Es la activacion de los transformers modernos —LLaMA, Mistral, Gemma— y de
+ * las U-Net de difusion, asi que sirve a los dos lados del framework.
+ *
+ * Frente a ReLU no se corta en cero: para x negativa deja pasar un poco, y esa
+ * cola es lo que evita que una neurona se apague del todo y deje de recibir
+ * gradiente. Frente a GELU es mas barata —una exponencial en vez de una
+ * tangente hiperbolica sobre un polinomio— y muy parecida en forma.
+ *
+ * El backward necesita la ENTRADA, no la salida, porque su derivada
+ * `s * (1 + x * (1 - s))` con `s = sigmoid(x)` no se puede recuperar de `y`
+ * sola: SiLU no es inyectiva. Tiene un minimo cerca de x = -1.278, asi que hay
+ * dos valores de x que dan la misma y. Es la diferencia con `SigmoidBackward`,
+ * que si toma la salida, y confundirlas da un gradiente equivocado justo en la
+ * zona negativa que es la razon de usar SiLU.
+ */
+void SiluForward(const Tensor& input, Tensor& output);
+void SiluBackward(const Tensor& dout, const Tensor& input, Tensor& dx);
+
+/**
  * @brief Tanh Forward & Backward
  */
 void TanhForward(const Tensor& input, Tensor& output);

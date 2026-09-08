@@ -3902,6 +3902,146 @@ void TestBackwardConSemilla() {
             << std::flush;
 }
 
+/**
+ * @brief `SiLU` y `RMSNorm`, contra diferencias finitas.
+ *
+ * Las dos piezas que el transformer moderno necesita. Se comprueban contra
+ * diferencias finitas y no contra otra implementación propia, porque el error
+ * que importa aquí no es una discrepancia entre versiones sino un término
+ * **olvidado** en la derivada, y ése coincide consigo mismo.
+ *
+ * En `RMSNorm` ese término es el que resta la proyección de `x`. Sin él la red
+ * sigue entrenando, algo peor, y no falla ninguna prueba que no mire el
+ * gradiente. En `SiLU` el error equivalente es derivar como si fuera sigmoide
+ * —usando la salida en vez de la entrada—, que da un gradiente equivocado justo
+ * en la zona negativa, que es la razón de usar SiLU en primer lugar.
+ */
+void TestSiluYRMSNorm() {
+  std::cout << "🧪 [Test 41] SiLU y RMSNorm... " << std::flush;
+
+  // --- SiLU: forward contra la definición, backward contra diferencias finitas.
+  {
+    const int n = 24;
+    Tensor x({n});
+    for (int i = 0; i < n; ++i) x[i] = -4.0f + 8.0f * static_cast<float>(i) / (n - 1);
+
+    Tensor y;
+    SiluForward(x, y);
+    double peor = 0.0;
+    for (int i = 0; i < n; ++i) {
+      const double esperado = x[i] / (1.0 + std::exp(-static_cast<double>(x[i])));
+      peor = std::max(peor, std::abs(esperado - y[i]));
+    }
+    Check(peor < 1e-6, "SiLU no calcula x*sigmoid(x): " + std::to_string(peor));
+
+    // La zona negativa es la que distingue SiLU de ReLU: debe dejar pasar algo,
+    // y tener un mínimo. Si alguien la implementa como ReLU, esto lo caza.
+    Check(y[0] < 0.0f, "SiLU no deja pasar valores negativos (¿es ReLU?)");
+    bool hay_minimo = false;
+    for (int i = 1; i + 1 < n; ++i) {
+      if (y[i] < y[i - 1] && y[i] < y[i + 1] && x[i] < 0.0f) hay_minimo = true;
+    }
+    Check(hay_minimo, "SiLU no tiene mínimo en la zona negativa");
+
+    Tensor w({n});
+    for (int i = 0; i < n; ++i) w[i] = 0.4f * std::cos(0.7f * static_cast<float>(i)) + 0.3f;
+    Tensor dx;
+    SiluBackward(w, x, dx);
+
+    const float h = 1e-3f;
+    double peor_rel = 0.0;
+    for (int i = 0; i < n; ++i) {
+      Tensor xp = x, xm = x;
+      xp[i] += h; xm[i] -= h;
+      Tensor yp, ym;
+      SiluForward(xp, yp);
+      SiluForward(xm, ym);
+      double lp = 0.0, lm = 0.0;
+      for (int k = 0; k < n; ++k) { lp += w[k] * yp[k]; lm += w[k] * ym[k]; }
+      const double num = (lp - lm) / (2.0 * h);
+      peor_rel = std::max(peor_rel, std::abs(num - dx[i]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor_rel < 2e-3, "el gradiente de SiLU no cuadra: " + std::to_string(peor_rel));
+  }
+
+  // --- RMSNorm: forward contra la definición y gradientes contra diferencias.
+  {
+    const int N = 3, D = 6;
+    RMSNormLayer capa(D);
+    for (int j = 0; j < D; ++j) capa.Gamma()[j] = 0.7f + 0.1f * static_cast<float>(j);
+
+    Tensor x({N, D});
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      x[i] = 0.8f * std::sin(1.7f * static_cast<float>(i)) + 0.2f;
+    }
+
+    const Tensor y = capa.Forward(x);
+    // La verdad, calculada aparte: NO se resta la media, que es lo que
+    // distingue RMSNorm de LayerNorm.
+    double peor = 0.0;
+    for (int f = 0; f < N; ++f) {
+      double ms = 0.0;
+      for (int j = 0; j < D; ++j) ms += static_cast<double>(x[f * D + j]) * x[f * D + j];
+      ms = ms / D + 1e-5;
+      for (int j = 0; j < D; ++j) {
+        const double esperado = x[f * D + j] / std::sqrt(ms) * capa.Gamma()[j];
+        peor = std::max(peor, std::abs(esperado - y[f * D + j]));
+      }
+    }
+    Check(peor < 1e-5, "RMSNorm no coincide con su definición: " + std::to_string(peor));
+
+    Tensor w({N, D});
+    for (size_t i = 0; i < w.TotalSize(); ++i) {
+      w[i] = 0.5f * std::cos(0.9f * static_cast<float>(i)) + 0.2f;
+    }
+    const Tensor dx = capa.Backward(w);
+    const Tensor dgamma = *capa.GetGradients()[0];
+
+    auto perdida = [&](RMSNormLayer& c, const Tensor& entrada) {
+      const Tensor s = c.Forward(entrada);
+      double l = 0.0;
+      for (size_t i = 0; i < s.TotalSize(); ++i) l += w[i] * s[i];
+      return l;
+    };
+
+    const float h = 1e-3f;
+    double peor_dx = 0.0;
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      Tensor xp = x, xm = x;
+      xp[i] += h; xm[i] -= h;
+      const double num = (perdida(capa, xp) - perdida(capa, xm)) / (2.0 * h);
+      peor_dx = std::max(peor_dx, std::abs(num - dx[i]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor_dx < 5e-3, "el gradiente de RMSNorm respecto a x no cuadra: " +
+                              std::to_string(peor_dx));
+
+    double peor_dg = 0.0;
+    for (int j = 0; j < D; ++j) {
+      const float original = capa.Gamma()[j];
+      capa.Gamma()[j] = original + h;
+      const double lp = perdida(capa, x);
+      capa.Gamma()[j] = original - h;
+      const double lm = perdida(capa, x);
+      capa.Gamma()[j] = original;
+      const double num = (lp - lm) / (2.0 * h);
+      peor_dg = std::max(peor_dg, std::abs(num - dgamma[j]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor_dg < 5e-3, "el gradiente de RMSNorm respecto a gamma no cuadra: " +
+                              std::to_string(peor_dg));
+
+    // Rechaza una entrada cuyo último eje no es el declarado, en vez de leer
+    // fuera de sitio y devolver números plausibles.
+    {
+      Tensor mala({N, D + 1});
+      bool protesto = false;
+      try { capa.Forward(mala); } catch (const std::invalid_argument&) { protesto = true; }
+      Check(protesto, "RMSNorm aceptó una entrada con el último eje equivocado");
+    }
+  }
+
+  std::cout << "PASADO ✅ (SiLU y RMSNorm contra diferencias finitas)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -3947,6 +4087,7 @@ int main() {
   TestKVCacheCoincideConRecalculo();
   TestConcatYSuDerivada();
   TestBackwardConSemilla();
+  TestSiluYRMSNorm();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

@@ -618,4 +618,32 @@ Tensor Concat(const Tensor& a, const Tensor& b, int eje) {
   return Concat(std::vector<const Tensor*>{&a, &b}, eje);
 }
 
+void SiluForward(const Tensor& input, Tensor& output) {
+  const size_t sz = input.TotalSize();
+  output.Resize(input.Shape());
+
+  parallel::ParallelFor(static_cast<int>(sz), /*min_per_thread=*/4096,
+                        [&](int begin, int end) {
+    for (int i = begin; i < end; ++i) {
+      const float x = input[i];
+      output[i] = x / (1.0f + std::exp(-x));
+    }
+  });
+}
+
+void SiluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
+  const size_t sz = input.TotalSize();
+  dx.Resize(input.Shape());
+
+  parallel::ParallelFor(static_cast<int>(sz), /*min_per_thread=*/4096,
+                        [&](int begin, int end) {
+    for (int i = begin; i < end; ++i) {
+      const float x = input[i];
+      const float s = 1.0f / (1.0f + std::exp(-x));
+      // d/dx [x * s] = s + x * s * (1 - s) = s * (1 + x * (1 - s))
+      dx[i] = dout[i] * s * (1.0f + x * (1.0f - s));
+    }
+  });
+}
+
 }  // namespace neuralsuite

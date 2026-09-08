@@ -1,0 +1,90 @@
+// Copyright 2026 NeuralSuite Authors.
+// Licensed under the Apache License, Version 2.0.
+
+/**
+ * @file parity_bloques.cpp
+ * @brief Reproduce en C++ el RMSNorm y el SiLU de PyTorch.
+ *
+ * Carga el archivo NSPARITY que escribe tools/parity/export_bloques.py, usa esos
+ * mismos numeros de entrada y vuelca los resultados para que
+ * tools/parity/compare_bloques.py los contraste.
+ *
+ * Un gradient check ya confirma que el backward deriva el forward escrito. Lo
+ * que esto anade es que ese forward sea de verdad un RMSNorm y no un LayerNorm
+ * disfrazado: la diferencia esta en restar o no la media, y una implementacion
+ * que la restara seria coherente consigo misma y pasaria el gradient check.
+ */
+
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "neuralsuite.h"
+#include "nsparity.h"
+
+using namespace neuralsuite;
+using nsparity::Bundle;
+using nsparity::ReadBundle;
+using nsparity::Require;
+using nsparity::WriteBundle;
+
+namespace {
+
+Tensor ATensor(const nsparity::Array& a) {
+  std::vector<int> forma(a.shape.begin(), a.shape.end());
+  Tensor t(forma);
+  std::memcpy(t.Data(), a.data.data(), a.data.size() * sizeof(float));
+  return t;
+}
+
+nsparity::Array AArray(const Tensor& t) {
+  nsparity::Array a;
+  a.shape.assign(t.Shape().begin(), t.Shape().end());
+  a.data.assign(t.Data(), t.Data() + t.TotalSize());
+  return a;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  std::string entrada, salida;
+  for (int i = 1; i < argc; ++i) {
+    const std::string a = argv[i];
+    if (a == "--in" && i + 1 < argc) entrada = argv[++i];
+    else if (a == "--out" && i + 1 < argc) salida = argv[++i];
+  }
+  if (entrada.empty() || salida.empty()) {
+    std::cerr << "Uso: parity_bloques --in ref.nsp --out cpp.nsp\n";
+    return 1;
+  }
+
+  const Bundle ref = ReadBundle(entrada);
+  const Tensor x = ATensor(Require(ref, "x"));
+  const Tensor w = ATensor(Require(ref, "w"));
+  const Tensor gamma = ATensor(Require(ref, "gamma"));
+  const nsparity::Array& meta = Require(ref, "meta");
+  const int ancho = static_cast<int>(meta.data[1]);
+
+  Bundle out;
+
+  // --- RMSNorm
+  RMSNormLayer rms(ancho);
+  std::memcpy(rms.Gamma().Data(), gamma.Data(), gamma.TotalSize() * sizeof(float));
+  const Tensor y_rms = rms.Forward(x);
+  const Tensor dx_rms = rms.Backward(w);
+  out["rms_y"] = AArray(y_rms);
+  out["rms_dx"] = AArray(dx_rms);
+  out["rms_dgamma"] = AArray(*rms.GetGradients()[0]);
+
+  // --- SiLU, sobre la misma entrada
+  Tensor y_silu, dx_silu;
+  SiluForward(x, y_silu);
+  SiluBackward(w, x, dx_silu);
+  out["silu_y"] = AArray(y_silu);
+  out["silu_dx"] = AArray(dx_silu);
+
+  WriteBundle(salida, out);
+  std::cout << "Escrito " << salida << "\n";
+  return 0;
+}

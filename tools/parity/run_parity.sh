@@ -74,6 +74,7 @@ run_case gpt
 run_case lstm
 run_case bilstm
 run_case crnn
+run_case bloques
 
 echo
 echo "### Sonda de precision (GPT) ###"
