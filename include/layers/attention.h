@@ -183,6 +183,20 @@ class MultiHeadAttention : public Layer {
   Tensor ForwardWithKVCache(const Tensor& single_token_input);
 
   void ClearKVCache();
+  /**
+   * @brief Deja en la cache solo las `n` entradas mas recientes.
+   *
+   * Con RoPE esto **sustituye a reconstruir la cache**. Cada K guardada lleva su
+   * rotacion por la posicion absoluta, y la Q nueva trae la suya, asi que el
+   * producto depende de la diferencia, que no cambia al desalojar. El resultado
+   * es identico al de reconstruir, y cuesta O(1) forwards en vez de O(ventana).
+   *
+   * Sin RoPE **no vale**: alli la posicion la pone `wpe_` con el indice dentro
+   * de la ventana, asi que al deslizar cambia la posicion de cada token y hay
+   * que rehacerlo todo. Por eso quien llama tiene que saber cual de los dos usa.
+   */
+  void RecortarKVCache(size_t n);
+
 
 
  private:
@@ -205,6 +219,17 @@ class MultiHeadAttention : public Layer {
   void RotarQK(Tensor& qkv, int B, int T, int pos_inicial, float signo) const;
 
   bool usa_rope_ = false;
+
+  /**
+   * @brief Posicion absoluta del proximo token en la generacion con cache.
+   *
+   * NO se puede usar el tamano de la cache como posicion. Mientras nada se
+   * desaloja coinciden, pero en cuanto la ventana se desliza dejan de hacerlo, y
+   * rotar por el indice dentro de la cache en vez de por la posicion real es el
+   * error clasico de combinar RoPE con KV-Cache. Se lleva aparte y `ClearKVCache`
+   * lo reinicia.
+   */
+  int pos_absoluta_ = 0;
 
   int n_embd_;
   int n_head_;

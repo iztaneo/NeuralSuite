@@ -157,6 +157,7 @@ Tensor MultiHeadAttentionReference::ForwardWithKVCache(const Tensor& single_toke
 
     Tensor qkv = c_attn_.Forward(input_2d);
 
+
     // Extraer Q_t, K_t, V_t para el token actual
     std::vector<float> q_curr(n_embd_), k_curr(n_embd_), v_curr(n_embd_);
     std::memcpy(q_curr.data(), qkv.Data(), n_embd_ * sizeof(float));
@@ -383,6 +384,16 @@ Tensor MultiHeadAttention::ForwardWithKVCache(const Tensor& single_token_input) 
 
     Tensor qkv = c_attn_.Forward(input_2d);
 
+    // La rotacion va con la posicion ABSOLUTA en la secuencia, no con el indice
+    // dentro de la cache. Faltaba aqui: el modelo entrenaba rotando y generaba
+    // sin rotar, con 0.142 de diferencia frente a recalcular el contexto
+    // entero. Nada fallaba; solo generaba peor.
+    if (usa_rope_) {
+      Tensor uno = qkv.View({1, 1, 3 * n_embd_});
+      RotarQK(uno, /*B=*/1, /*T=*/1, pos_absoluta_, +1.0f);
+    }
+    ++pos_absoluta_;
+
     // Extraer Q_t, K_t, V_t para el token actual
     std::vector<float> q_curr(n_embd_), k_curr(n_embd_), v_curr(n_embd_);
     std::memcpy(q_curr.data(), qkv.Data(), n_embd_ * sizeof(float));
@@ -440,9 +451,21 @@ Tensor MultiHeadAttention::ForwardWithKVCache(const Tensor& single_token_input) 
     return final_output;
   }
 
+void MultiHeadAttention::RecortarKVCache(size_t n) {
+    if (k_cache_.size() <= n) return;
+    const size_t sobran = k_cache_.size() - n;
+    k_cache_.erase(k_cache_.begin(), k_cache_.begin() + sobran);
+    v_cache_.erase(v_cache_.begin(), v_cache_.begin() + sobran);
+    // `pos_absoluta_` NO se toca: sigue contando desde el principio de la
+    // secuencia, que es justo lo que hace valida la rotacion tras desalojar.
+  }
+
 void MultiHeadAttention::ClearKVCache() {
     k_cache_.clear();
     v_cache_.clear();
+    // La posicion vuelve a cero: empieza otra secuencia. Olvidarlo haria que la
+    // segunda generacion rotase como si continuara la primera.
+    pos_absoluta_ = 0;
   }
 
 void MultiHeadAttention::Extraer(int b, int h, int T, Tensor* Q, Tensor* Kt, Tensor* V) const {

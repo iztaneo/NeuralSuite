@@ -60,6 +60,10 @@ Tensor GPTBlock::ForwardWithKVCache(const Tensor& input) {
     return x2;
   }
 
+void GPTModel::RecortarKVCache(size_t n) {
+    for (auto& block : blocks_) block->RecortarKVCache(n);
+  }
+
 void GPTModel::ClearKVCache() {
     for (auto& block : blocks_) {
       block->ClearKVCache();
@@ -71,13 +75,21 @@ Tensor GPTModel::ForwardWithKVCache(int token_idx, int pos_idx) {
     tok_tensor[0] = static_cast<float>(token_idx);
     Tensor tok_emb = wte_.Forward(tok_tensor);
 
-    Tensor pos_tensor({1, 1});
-    pos_tensor[0] = static_cast<float>(pos_idx);
-    Tensor pos_emb = wpe_.Forward(pos_tensor);
-
     Tensor x({1, 1, config_.n_embd});
-    for (int d = 0; d < config_.n_embd; ++d) {
-      x[d] = tok_emb[d] + pos_emb[d];
+    if (config_.use_rope) {
+      // Mismo criterio que en `Forward`: la posicion la pone la rotacion dentro
+      // de la atencion. Este camino se olvido al integrar RoPE y sumaba ademas
+      // `wpe_`, que con RoPE ni siquiera es parametro y por tanto lleva valores
+      // sin entrenar. La generacion con cache salia distinta de recalcular el
+      // contexto entero —0.142 medido— y nada fallaba.
+      std::memcpy(x.Data(), tok_emb.Data(), x.TotalSize() * sizeof(float));
+    } else {
+      Tensor pos_tensor({1, 1});
+      pos_tensor[0] = static_cast<float>(pos_idx);
+      Tensor pos_emb = wpe_.Forward(pos_tensor);
+      for (int d = 0; d < config_.n_embd; ++d) {
+        x[d] = tok_emb[d] + pos_emb[d];
+      }
     }
 
     for (auto& block : blocks_) {

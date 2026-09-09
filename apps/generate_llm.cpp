@@ -182,7 +182,9 @@ int main(int argc, char** argv) {
       Tensor ultimo;
       model.ClearKVCache();
       for (int i = desde; i < hasta; ++i) {
-        ultimo = model.ForwardWithKVCache(tokens[i], i - desde);
+        // Con RoPE la posicion es la ABSOLUTA en la secuencia; sin el, el indice
+        // dentro de la ventana, que es lo unico que `wpe_` sabe indexar.
+        ultimo = model.ForwardWithKVCache(tokens[i], config.use_rope ? i : i - desde);
       }
       return ultimo;
     };
@@ -199,9 +201,24 @@ int main(int argc, char** argv) {
       const int seq_len = static_cast<int>(tokens.size());
       if (seq_len - inicio > config.block_size) {
         inicio = seq_len - config.block_size;
-        logits = sembrar_cache(inicio, seq_len);
+        if (config.use_rope) {
+          // Con RoPE basta DESALOJAR: cada K guardada lleva su rotacion por la
+          // posicion absoluta y la Q nueva trae la suya, asi que el producto
+          // depende de la diferencia, que no cambia al recortar. El resultado es
+          // el mismo que reconstruir y cuesta un forward en vez de block_size.
+          //
+          // Medido antes de esto: 1.29 ms/token al cruzar la ventana frente a
+          // 0.13 dentro, con 73 reconstrucciones en 100 tokens.
+          model.RecortarKVCache(static_cast<size_t>(config.block_size) - 1);
+          logits = model.ForwardWithKVCache(sampled_token, seq_len - 1);
+        } else {
+          // Sin RoPE hay que rehacerlo: la posicion la pone `wpe_` con el indice
+          // dentro de la ventana, asi que al deslizar cambia la de cada token.
+          logits = sembrar_cache(inicio, seq_len);
+        }
       } else {
-        logits = model.ForwardWithKVCache(sampled_token, seq_len - 1 - inicio);
+        logits = model.ForwardWithKVCache(
+            sampled_token, config.use_rope ? seq_len - 1 : seq_len - 1 - inicio);
       }
     }
   } else {

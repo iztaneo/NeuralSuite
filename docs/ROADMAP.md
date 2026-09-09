@@ -537,6 +537,39 @@ guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
         K y V guardadas dejan de valer. **RoPE lo resuelve de raíz**, porque la
         posición pasa a ser relativa; es el argumento más concreto a favor de la
         Fase 15.
+- [x] **Deslizar el KV-Cache sin reconstruirlo** (sólo con RoPE). Era el
+      problema medido que justificaba RoPE: con posiciones aprendidas había que
+      rehacer la caché casi en cada paso pasada la ventana. Con rotación basta
+      **desalojar**, porque cada `K` guardada lleva su rotación absoluta y el
+      producto depende de la diferencia.
+
+      Medido con `block_size` 32 y 100 tokens generados:
+
+      | | ms/token | Reconstrucciones |
+      | --- | --- | --- |
+      | Sin RoPE (reconstruye) | 1.69 | 73 |
+      | **Con RoPE (desaloja)** | **0.06** | **0** |
+
+      **28× más rápido, y el coste deja de crecer al cruzar la ventana**: 0.07
+      ms/token con 20 tokens y 0.06 con 100.
+
+      Un matiz que costó entender y conviene dejar fijado: **desalojar y
+      reconstruir sólo dan lo mismo con una capa.** Con más, la caché del bloque
+      `n` guarda salidas del bloque `n-1`, calculadas con contextos distintos en
+      cada camino. Medido: 0.000 con una capa, 0.040 con dos, 0.066 con tres. No
+      es un defecto, y la dirección importa: **desalojar conserva los estados
+      calculados con todo el contexto** y reconstruir los recalcula con menos,
+      así que la ruta rápida es también la más fiel. El test 48 fija la
+      equivalencia exacta donde sí debe darse.
+
+- [x] **Arreglados dos huecos de la integración de RoPE**, encontrados al medir
+      esto y que ninguna prueba cubría. `ForwardWithKVCache` **no rotaba** —ni en
+      la atención ni en el modelo, que además seguía sumando `wpe_`, una tabla
+      que con RoPE ni siquiera es parámetro y por tanto llevaba valores sin
+      entrenar—. Medido: 0.142 de diferencia frente a recalcular el contexto. Un
+      modelo entrenado con `--rope` simplemente generaba peor, sin que nada
+      fallara. El test 47 lo cubre ahora en los dos caminos.
+
 - [ ] KV cache contiguo (hoy `vector<vector<float>>`: un vector por posición, con
       su reserva propia).
 - [x] **Retirado el esbozo de RoPE.** `ApplyRoPE()` no lo llamaba ningún

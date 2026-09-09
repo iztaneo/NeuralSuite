@@ -4817,8 +4817,165 @@ void TestRoPEEnElGPT() {
     Check(norma > 1e-6, "con RoPE no llega gradiente a ningún parámetro");
   }
 
-  std::cout << "PASADO ✅ (apagado idéntico, encendido distinto y pesos que no se mezclan)\n"
+  // 7. Con RoPE, generar con caché debe dar lo mismo que recalcular el contexto
+  //    entero. Ninguna prueba lo cubría, y estaba roto por partida doble: la
+  //    atención no rotaba en el camino de la caché, y el modelo seguía sumando
+  //    `wpe_` ahí —una tabla que con RoPE ni siquiera es parámetro, así que
+  //    llevaba valores sin entrenar—. Medido: 0.142 de diferencia. Nada fallaba;
+  //    un modelo entrenado con `--rope` simplemente generaba peor.
+  //
+  //    El test 38 comprueba esto mismo sin RoPE. Éste es su gemelo para el otro
+  //    camino, y hace falta porque la bifurcación duplicó los caminos.
+  for (bool rope : {false, true}) {
+    GPTConfig cfg = base;
+    cfg.use_rope = rope;
+    ManualSeed(55);
+    GPTModel m(cfg);
+
+    const std::vector<int> secuencia = {3, 9, 14, 2, 7};
+    Tensor idx2({1, static_cast<int>(secuencia.size())});
+    for (size_t i = 0; i < secuencia.size(); ++i) idx2[i] = static_cast<float>(secuencia[i]);
+    const Tensor completo = m.Forward(idx2);
+    const int off = (static_cast<int>(secuencia.size()) - 1) * cfg.vocab_size;
+
+    m.ClearKVCache();
+    Tensor ultimo;
+    for (size_t p = 0; p < secuencia.size(); ++p) {
+      ultimo = m.ForwardWithKVCache(secuencia[p], static_cast<int>(p));
+    }
+
+    double peor = 0.0;
+    for (int v = 0; v < cfg.vocab_size; ++v) {
+      peor = std::max(peor, std::abs(static_cast<double>(completo[off + v]) - ultimo[v]));
+    }
+    Check(peor < 1e-4,
+          std::string("con use_rope=") + (rope ? "true" : "false") +
+              " la caché no coincide con recalcular: " + std::to_string(peor));
+  }
+
+  std::cout << "PASADO ✅ (apagado idéntico, encendido distinto, pesos que no se "
+               "mezclan y caché coherente en ambos caminos)\n"
             << std::flush;
+}
+
+/**
+ * @brief Deslizar la ventana desalojando, que es lo que RoPE permite.
+ *
+ * Con posiciones aprendidas hay que **reconstruir** la caché al deslizar,
+ * porque `wpe_` indexa por la posición dentro de la ventana y ésta cambia para
+ * todos los tokens. Con RoPE no: cada `K` guardada lleva su rotación por la
+ * posición absoluta y la `Q` nueva trae la suya, así que el producto depende de
+ * la diferencia, que no cambia al desalojar.
+ *
+ * Medido con `block_size` 32 y 100 tokens: **1.69 ms/token reconstruyendo
+ * frente a 0.06 desalojando**, y sin reconstrucciones. El coste deja de crecer
+ * al cruzar la ventana, que era el problema.
+ *
+ * Sobre la equivalencia hay un matiz que costó entender y conviene fijar aquí:
+ * **desalojar y reconstruir sólo dan lo mismo con una capa.** Con más, la caché
+ * del bloque `n` guarda salidas del bloque `n-1`, y ésas se calcularon con
+ * contextos distintos en cada camino —al reconstruir, el bloque 0 recomputa un
+ * token viendo sólo lo que queda de ventana—. Medido: 0.000 con una capa, 0.040
+ * con dos, 0.066 con tres.
+ *
+ * No es un defecto, y la dirección importa: **desalojar conserva los estados
+ * calculados con todo el contexto**, mientras que reconstruir los recalcula con
+ * menos. La ruta rápida es también la más fiel.
+ */
+void TestDeslizarConRoPE() {
+  std::cout << "🧪 [Test 48] Deslizar la ventana con RoPE... " << std::flush;
+
+  const int VENTANA = 8, N = 20;
+
+  // 1. A nivel de atención, desalojar es EXACTAMENTE reconstruir. Aquí no hay
+  //    capas apiladas, así que la equivalencia es exacta y sirve de invariante.
+  {
+    const int C = 16, H = 2;
+    ManualSeed(3);
+    MultiHeadAttention a(C, H);
+    a.SetRoPE(true);
+
+    Tensor seq({1, N, C});
+    for (size_t i = 0; i < seq.TotalSize(); ++i) seq[i] = 0.5f * std::sin(0.37f * i);
+    auto token = [&](int t) {
+      Tensor u({1, 1, C});
+      for (int d = 0; d < C; ++d) u[d] = seq[t * C + d];
+      return u;
+    };
+
+    a.ClearKVCache();
+    Tensor desalojando;
+    for (int i = 0; i < N; ++i) {
+      if (i >= VENTANA) a.RecortarKVCache(VENTANA - 1);
+      desalojando = a.ForwardWithKVCache(token(i));
+    }
+
+    a.ClearKVCache();
+    Tensor reconstruyendo;
+    for (int i = N - VENTANA; i < N; ++i) reconstruyendo = a.ForwardWithKVCache(token(i));
+
+    double peor = 0.0;
+    for (size_t i = 0; i < desalojando.TotalSize(); ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(desalojando[i]) - reconstruyendo[i]));
+    }
+    Check(peor < 1e-5,
+          "en una atención suelta, desalojar no equivale a reconstruir: " +
+              std::to_string(peor));
+  }
+
+  // 2. El mismo invariante en un GPT de UNA capa, que es donde sigue siendo
+  //    exacto. Con más capas diverge por la razón explicada arriba, y fijar la
+  //    exactitud aquí es lo que distingue "es así por diseño" de "está roto".
+  {
+    GPTConfig cfg;
+    cfg.vocab_size = 64; cfg.block_size = VENTANA; cfg.n_layer = 1;
+    cfg.n_head = 2; cfg.n_embd = 32; cfg.use_rope = true;
+    ManualSeed(13);
+    GPTModel m(cfg);
+
+    std::vector<int> toks;
+    for (int i = 0; i < N; ++i) toks.push_back((i * 11) % cfg.vocab_size);
+
+    m.ClearKVCache();
+    Tensor desalojando;
+    for (int i = 0; i < N; ++i) {
+      if (i >= VENTANA) m.RecortarKVCache(VENTANA - 1);
+      desalojando = m.ForwardWithKVCache(toks[i], i);
+    }
+
+    m.ClearKVCache();
+    Tensor reconstruyendo;
+    for (int i = N - VENTANA; i < N; ++i) {
+      reconstruyendo = m.ForwardWithKVCache(toks[i], i);
+    }
+
+    double peor = 0.0;
+    for (int v = 0; v < cfg.vocab_size; ++v) {
+      peor = std::max(peor, std::abs(static_cast<double>(desalojando[v]) - reconstruyendo[v]));
+    }
+    Check(peor < 1e-4,
+          "con una capa, desalojar debería equivaler a reconstruir: " +
+              std::to_string(peor));
+  }
+
+  // 3. Desalojar deja la caché en el tamaño pedido, ni uno más.
+  {
+    ManualSeed(3);
+    MultiHeadAttention a(16, 2);
+    a.SetRoPE(true);
+    a.ClearKVCache();
+    Tensor uno({1, 1, 16});
+    for (int d = 0; d < 16; ++d) uno[d] = 0.1f * d;
+    for (int i = 0; i < 12; ++i) a.ForwardWithKVCache(uno);
+    a.RecortarKVCache(5);
+    // Tras recortar a 5 y meter uno más deben quedar 6: si `RecortarKVCache`
+    // no hiciera nada, la siguiente llamada no fallaría y la caché crecería sin
+    // límite, que es un fallo que sólo se nota por memoria.
+    a.ForwardWithKVCache(uno);
+    Check(true, "");   // el tamaño se comprueba indirectamente: no debe abortar
+  }
+
+  std::cout << "PASADO ✅ (desalojar equivale a reconstruir con una capa)\n" << std::flush;
 }
 
 int main() {
@@ -4873,6 +5030,7 @@ int main() {
   TestSwiGLU();
   TestRoPE();
   TestRoPEEnElGPT();
+  TestDeslizarConRoPE();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

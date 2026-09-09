@@ -87,6 +87,8 @@ class GPTBlock : public Layer {
 
   Tensor ForwardWithKVCache(const Tensor& input);
 
+  void RecortarKVCache(size_t n) { attn_.RecortarKVCache(n); }
+
   void ClearKVCache() {
     attn_.ClearKVCache();
   }
@@ -125,6 +127,15 @@ class GPTModel : public Module {
 
 
   void ClearKVCache();
+
+  /**
+   * @brief Recorta la cache de todos los bloques a las `n` ultimas posiciones.
+   *
+   * Solo tiene sentido con `use_rope`: alli desalojar equivale a reconstruir.
+   * Sin RoPE hay que reconstruir de verdad, porque la posicion la pone `wpe_`
+   * con el indice dentro de la ventana.
+   */
+  void RecortarKVCache(size_t n);
 
   Tensor ForwardWithKVCache(int token_idx, int pos_idx);
 
