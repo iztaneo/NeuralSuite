@@ -16,6 +16,7 @@
  */
 
 #include <cstring>
+#include <memory>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -254,6 +255,11 @@ int main(int argc, char** argv) {
     out["rb_dt"] = AArray(rb.GradTiempo());
   }
 
+  // La U-Net sobrevive a su bloque: el caso de los muestreadores la reutiliza
+  // con los mismos pesos, para que la comparacion mida el muestreo y no una
+  // red distinta.
+  std::unique_ptr<diffusion::UNet2D> unet_compartida;
+
   // --- UNet2D
   //
   // Aqui lo que se contrasta no son los numeros de cada capa —eso ya lo cubren
@@ -268,7 +274,8 @@ int main(int argc, char** argv) {
     const int DTu = static_cast<int>(um.data[2]);
     const int Gu = static_cast<int>(um.data[3]);
 
-    diffusion::UNet2D unet(1, Cu, DTu, Gu);
+    unet_compartida = std::make_unique<diffusion::UNet2D>(1, Cu, DTu, Gu);
+    diffusion::UNet2D& unet = *unet_compartida;
 
     auto cargar_norm = [&](GroupNormLayer& capa, const std::string& g, const std::string& b) {
       const Tensor tg = ATensor(Require(ref, g)), tb = ATensor(Require(ref, b));
@@ -311,6 +318,47 @@ int main(int argc, char** argv) {
     const Tensor uw = ATensor(Require(ref, "un_w"));
     out["un_y"] = AArray(unet.Forward(ux, up));
     out["un_dx"] = AArray(unet.Backward(uw));
+  }
+
+  // --- DDPMSampler y DDIMSampler
+  //
+  // Es lo unico que fija la TRAYECTORIA. La prueba del oraculo analitico
+  // aterriza en la imagen correcta aunque el camino sea otro —el oraculo se
+  // autocorrige en cada paso— y de cuatro mutaciones deliberadas solo caza una.
+  // Comparar la trayectoria completa contra PyTorch con el mismo ruido si
+  // distingue las otras tres, porque cada una desvia los x intermedios.
+  {
+    const nsparity::Array& sm = Require(ref, "sm_meta");
+    const int T = static_cast<int>(sm.data[0]);
+    const int NP = static_cast<int>(sm.data[3]);
+
+    diffusion::DiffusionSchedule cal(T, 1e-4f, 0.02f);
+    const Tensor xT = ATensor(Require(ref, "sm_xT"));
+    const Tensor ruidos = ATensor(Require(ref, "sm_ruido"));
+    const size_t por_paso = xT.TotalSize();
+
+    // El ruido no se genera aqui: se consume el exportado, indexado por paso.
+    // Si cada lado generase el suyo, dos implementaciones correctas darian
+    // resultados distintos y la comparacion no diria nada.
+    auto fuente = [&](int paso, Tensor* destino) {
+      std::memcpy(destino->Data(), ruidos.Data() + static_cast<size_t>(paso) * por_paso,
+                  por_paso * sizeof(float));
+    };
+    diffusion::Predictor pred = [&](const Tensor& x, const Tensor& t) {
+      return unet_compartida->Forward(x, t);
+    };
+
+    diffusion::DDPMSampler ddpm(cal);
+    out["sm_ddpm"] = AArray(ddpm.Muestrear(pred, xT, fuente));
+
+    diffusion::DDIMSampler ddim0(cal, NP, 0.0f);
+    out["sm_ddim0"] = AArray(ddim0.Muestrear(pred, xT, fuente));
+
+    diffusion::DDIMSampler ddim1(cal, NP, 1.0f);
+    out["sm_ddim1"] = AArray(ddim1.Muestrear(pred, xT, fuente));
+
+    diffusion::DDIMSampler ddim_full(cal, T, 1.0f);
+    out["sm_ddim_full1"] = AArray(ddim_full.Muestrear(pred, xT, fuente));
   }
 
   WriteBundle(salida, out);

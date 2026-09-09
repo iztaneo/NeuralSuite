@@ -144,7 +144,97 @@ def referencia_unet(g, EPS):
     for pre, d in (("un_b0", b_b0), ("un_b1", b_b1), ("un_ct", b_ce),
                    ("un_a1", b_a1), ("un_a0", b_a0)):
         vuelca(pre, d, salida_u)
-    return salida_u
+    def predictor(x, pasos):
+        """(x_t, t) -> eps, con la misma red y los mismos pesos."""
+        ang = pasos[:, None] * fr_u[None, :]
+        temb = torch.cat([torch.sin(ang), torch.cos(ang)], dim=1)
+        hh = u_ce(x)
+        s0 = aplicar(b_b0, hh, temb)
+        dd0 = nn.functional.avg_pool2d(s0, 2)
+        s1 = aplicar(b_b1, dd0, temb)
+        dd1 = nn.functional.avg_pool2d(s1, 2)
+        cc = aplicar(b_ce, dd1, temb)
+        uu1 = nn.functional.interpolate(cc, scale_factor=2, mode="nearest")
+        aa1 = aplicar(b_a1, torch.cat([uu1, s1], dim=1), temb)
+        uu0 = nn.functional.interpolate(aa1, scale_factor=2, mode="nearest")
+        aa0 = aplicar(b_a0, torch.cat([uu0, s0], dim=1), temb)
+        return u_cs(nn.functional.silu(u_ns(aa0)))
+
+    return salida_u, predictor
+
+
+def referencia_muestreadores(g, predictor):
+    """Referencia de DDPMSampler y DDIMSampler, con el ruido inyectado.
+
+    El punto de esta paridad es que **es lo unico que fija la trayectoria**. La
+    prueba del oraculo analitico —un predictor que siempre implica el mismo x_0—
+    aterriza en la imagen correcta aunque el camino sea otro, porque el oraculo
+    se autocorrige en cada paso: de cuatro mutaciones deliberadas solo caza una.
+    La varianza posterior cambiada por beta, la direccion de DDIM sin restar
+    sigma^2 y tomar ab[tau-1] en vez del siguiente de la subsecuencia le pasan
+    por delante sin inmutarse. Comparar la trayectoria completa contra PyTorch
+    con el mismo ruido si las distingue, porque cada una desvia los x
+    intermedios.
+
+    El ruido no se genera aqui dentro: se exporta, y el lado de C++ lo consume
+    indexado por el numero de paso. Si cada lado generase el suyo, dos
+    implementaciones correctas darian resultados distintos y la comparacion no
+    diria nada.
+    """
+    T_sm, N_sm, H_sm = 20, 2, 8
+    beta_sm = torch.linspace(1e-4, 0.02, T_sm, dtype=torch.float64)
+    alpha_sm = 1.0 - beta_sm
+    ab_sm = torch.cumprod(alpha_sm, dim=0)
+
+    x_T = torch.randn(N_sm, 1, H_sm, H_sm, generator=g, dtype=torch.float32)
+    # Un tensor de ruido por paso, indexado por el numero de paso.
+    ruido_sm = torch.randn(T_sm, N_sm, 1, H_sm, H_sm, generator=g, dtype=torch.float32)
+
+    def eps_de(x, paso):
+        with torch.no_grad():
+            return predictor(x, torch.full((x.shape[0],), float(paso), dtype=torch.float32))
+
+    def ddpm():
+        x = x_T.clone()
+        for paso in range(T_sm - 1, -1, -1):
+            e = eps_de(x, paso)
+            ab_t = ab_sm[paso]
+            ab_p = ab_sm[paso - 1] if paso > 0 else torch.tensor(1.0, dtype=torch.float64)
+            b_t = beta_sm[paso]
+            media = (x.double() - (b_t / torch.sqrt(1 - ab_t)) * e.double()) / torch.sqrt(alpha_sm[paso])
+            if paso > 0:
+                var = b_t * (1 - ab_p) / (1 - ab_t)
+                media = media + torch.sqrt(var) * ruido_sm[paso].double()
+            x = media.float()
+        return x
+
+    def ddim(n_pasos, eta):
+        taus = [int(round(i / (n_pasos - 1) * (T_sm - 1))) for i in range(n_pasos)][::-1]
+        x = x_T.clone()
+        for k, tau in enumerate(taus):
+            e = eps_de(x, tau)
+            ab_t = ab_sm[tau]
+            ab_p = ab_sm[taus[k + 1]] if k + 1 < len(taus) else torch.tensor(1.0, dtype=torch.float64)
+            x0 = (x.double() - torch.sqrt(1 - ab_t) * e.double()) / torch.sqrt(ab_t)
+            sigma = torch.tensor(0.0, dtype=torch.float64)
+            if eta > 0 and ab_p < 1.0:
+                sigma = eta * torch.sqrt((1 - ab_p) / (1 - ab_t)) * torch.sqrt(1 - ab_t / ab_p)
+            dirn = torch.sqrt(torch.clamp(1 - ab_p - sigma * sigma, min=0.0))
+            x = (torch.sqrt(ab_p) * x0 + dirn * e.double())
+            if sigma > 0:
+                x = x + sigma * ruido_sm[tau].double()
+            x = x.float()
+        return x
+
+    return {
+        "sm_meta": np.array([T_sm, N_sm, H_sm, 5], dtype=np.float32),   # 5 pasos DDIM
+        "sm_xT": x_T.numpy(),
+        "sm_ruido": ruido_sm.numpy(),
+        "sm_ddpm": ddpm().numpy(),
+        "sm_ddim0": ddim(5, 0.0).numpy(),
+        "sm_ddim1": ddim(5, 1.0).numpy(),
+        "sm_ddim_full1": ddim(T_sm, 1.0).numpy(),
+    }
 
 
 def main():
@@ -378,7 +468,8 @@ def main():
     yb = hb + at(xb)
     (yb * wb).sum().backward()
 
-    unet_t = referencia_unet(g, EPS)
+    unet_t, predictor_unet = referencia_unet(g, EPS)
+    tensors_sm = referencia_muestreadores(g, predictor_unet)
 
     tensors = {
         "rb_meta": np.array([Nb, Cin, Cout, Hb, Wb, DT, G], dtype=np.float32),
@@ -468,6 +559,7 @@ def main():
         "silu_dx": dx_silu.numpy(),
     }
     tensors.update(unet_t)
+    tensors.update(tensors_sm)
     nsparity.write(args.out, tensors)
 
     print(f"Escrito {args.out}")

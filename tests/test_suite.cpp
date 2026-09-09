@@ -5677,6 +5677,207 @@ void TestUNet2D() {
             << std::flush;
 }
 
+/**
+ * @brief `DDPMSampler` y `DDIMSampler`: el bucle que convierte ruido en imagen.
+ *
+ * Estas pruebas se escribieron **midiendo lo que cubren**, y el resultado
+ * cambio el diseno. La primera version era solo el oraculo analitico de abajo,
+ * que parecia una prueba fortisima —aterriza exacto, sin tolerancia— y resulto
+ * cazar una de cuatro mutaciones deliberadas: la varianza posterior cambiada
+ * por `beta[t]`, la direccion de DDIM sin restar `sigma^2` y tomar `ab[tau-1]`
+ * en vez del siguiente de la subsecuencia le pasan por delante sin inmutarse.
+ *
+ * La razon es que el oraculo **se autocorrige**: recalcula `eps` a partir del
+ * `x` que le den, asi que cualquier trayectoria que mantenga `x_0 = m` acaba en
+ * `m`. Fija el punto de llegada, no el camino. De ahi la comprobacion 2, que
+ * ata los dos muestreadores entre si, y la paridad contra PyTorch con el ruido
+ * inyectado, que es lo unico que fija la trayectoria entera.
+ */
+void TestMuestreadores() {
+  std::cout << "🧪 [Test 54] DDPMSampler y DDIMSampler... " << std::flush;
+  using namespace neuralsuite::diffusion;
+
+  const int N = 2, C = 1, H = 4, W = 4, T = 50;
+  const size_t POR_IMG = static_cast<size_t>(C) * H * W;
+  DiffusionSchedule cal(T);
+  ManualSeed(3);
+
+  // 1. Oraculo perfecto: el que siempre implica el mismo `x_0 = m`. Con el,
+  //    los dos muestreadores tienen que aterrizar EXACTAMENTE en `m`, sin
+  //    tolerancia y sin importar el ruido inyectado por el camino. Cubre el
+  //    ultimo paso y que nada se dispare; no cubre la trayectoria.
+  Tensor m({N, C, H, W});
+  m.RandomUniform(-1.0f, 1.0f);
+  Predictor oraculo = [&](const Tensor& x, const Tensor& t) {
+    Tensor e(x.Shape());
+    for (int n = 0; n < N; ++n) {
+      const int paso = static_cast<int>(t[n]);
+      const double sa = std::sqrt(static_cast<double>(cal.AlphaBar()[paso]));
+      const double su = std::sqrt(1.0 - cal.AlphaBar()[paso]);
+      for (size_t i = 0; i < POR_IMG; ++i) {
+        const size_t j = static_cast<size_t>(n) * POR_IMG + i;
+        e[j] = static_cast<float>((x[j] - sa * m[j]) / su);
+      }
+    }
+    return e;
+  };
+  auto lejos_de_m = [&](const Tensor& y) {
+    double p = 0.0;
+    for (size_t i = 0; i < y.TotalSize(); ++i) {
+      p = std::max(p, std::abs(static_cast<double>(y[i]) - m[i]));
+    }
+    return p;
+  };
+
+  Tensor xT({N, C, H, W});
+  xT.RandomNormal(0.0f, 1.0f);
+
+  {
+    DDPMSampler ddpm(cal);
+    const double e = lejos_de_m(ddpm.Muestrear(oraculo, xT, RuidoGaussiano(11)));
+    Check(e < 1e-4, "DDPM con un predictor perfecto no aterriza en la imagen (" +
+                        std::to_string(e) + ")");
+    for (int np : {T, 10, 3}) {
+      DDIMSampler ddim(cal, np, 0.0f);
+      const double d = lejos_de_m(ddim.Muestrear(oraculo, xT, RuidoNulo()));
+      Check(d < 1e-5, "DDIM con " + std::to_string(np) +
+                          " pasos y un predictor perfecto no aterriza (" +
+                          std::to_string(d) + ")");
+    }
+  }
+
+  // 2. `eta = 1` sobre la secuencia completa tiene que reproducir DDPM paso a
+  //    paso: es el caso limite que dice el articulo, y a diferencia del oraculo
+  //    compara TODA la trayectoria. Es lo que hace que una varianza equivocada
+  //    o una direccion sin `sigma^2` se noten aqui dentro y no solo en paridad.
+  {
+    Predictor cualquiera = [&](const Tensor& x, const Tensor& t) {
+      // No hace falta que prediga bien; hace falta que los dos muestreadores
+      // reciban exactamente lo mismo.
+      Tensor e(x.Shape());
+      for (int n = 0; n < N; ++n) {
+        for (size_t i = 0; i < POR_IMG; ++i) {
+          const size_t j = static_cast<size_t>(n) * POR_IMG + i;
+          e[j] = std::tanh(0.7f * x[j]) + 0.01f * t[n] * std::sin(static_cast<float>(i));
+        }
+      }
+      return e;
+    };
+    Tensor ruidos({T, N, C, H, W});
+    ruidos.RandomNormal(0.0f, 1.0f);
+    auto fuente = [&](int paso, Tensor* d) {
+      std::memcpy(d->Data(), ruidos.Data() + static_cast<size_t>(paso) * N * POR_IMG,
+                  static_cast<size_t>(N) * POR_IMG * sizeof(float));
+    };
+    auto distancia = [&](const Tensor& u, const Tensor& v) {
+      double may = 0.0, esc = 0.0;
+      for (size_t i = 0; i < u.TotalSize(); ++i) {
+        may = std::max(may, std::abs(static_cast<double>(u[i]) - v[i]));
+        esc = std::max(esc, std::abs(static_cast<double>(u[i])));
+      }
+      return may / std::max(1.0, esc);
+    };
+
+    DDPMSampler ddpm(cal);
+    const Tensor y_ddpm = ddpm.Muestrear(cualquiera, xT, fuente);
+    DDIMSampler eta1(cal, T, 1.0f);
+    const double igual = distancia(y_ddpm, eta1.Muestrear(cualquiera, xT, fuente));
+    Check(igual < 1e-4, "DDIM con eta=1 sobre la secuencia completa no reproduce "
+                        "DDPM (" + std::to_string(igual) + ")");
+
+    // El control que impide que la comprobacion anterior sea trivialmente
+    // cierta: con eta=0 el resultado tiene que ser OTRO.
+    DDIMSampler eta0(cal, T, 0.0f);
+    const double distinto = distancia(y_ddpm, eta0.Muestrear(cualquiera, xT, fuente));
+    Check(distinto > 1e-2, "eta=0 da lo mismo que DDPM: la comparacion de arriba "
+                           "no estaba distinguiendo nada");
+  }
+
+  // 3. Con `eta = 0` DDIM es determinista: la fuente de ruido no se consulta, y
+  //    dos semillas distintas deben dar el MISMO resultado, bit a bit.
+  {
+    DDIMSampler ddim(cal, 10, 0.0f);
+    const Tensor a = ddim.Muestrear(oraculo, xT, RuidoGaussiano(1));
+    const Tensor b = ddim.Muestrear(oraculo, xT, RuidoGaussiano(999));
+    double dif = 0.0;
+    for (size_t i = 0; i < a.TotalSize(); ++i) {
+      dif = std::max(dif, std::abs(static_cast<double>(a[i]) - b[i]));
+    }
+    Check(dif == 0.0, "eta=0 no es determinista: el ruido se esta colando");
+  }
+
+  // 4. La subsecuencia tiene que empezar en T-1 y terminar en 0. Empezar por
+  //    debajo dejaria sin deshacer el ruido de los primeros pasos; no terminar
+  //    en 0 devolveria un `x_t`, no un `x_0`, y la imagen saldria con ruido
+  //    residual sin que nada avisara.
+  {
+    for (int np : {1, 2, 7, T}) {
+      DDIMSampler ddim(cal, np, 0.0f);
+      const auto& taus = ddim.Subsecuencia();
+      Check(static_cast<int>(taus.size()) == np, "la subsecuencia no tiene el largo pedido");
+      Check(taus.front() == T - 1 || np == 1, "la subsecuencia no empieza en T-1");
+      Check(taus.back() == 0, "la subsecuencia no termina en 0");
+      for (size_t i = 1; i < taus.size(); ++i) {
+        Check(taus[i] < taus[i - 1], "la subsecuencia no es estrictamente decreciente");
+      }
+    }
+  }
+
+  // 4b. El telescopio. Con un predictor que devuelve ruido CERO, cada paso de
+  //     DDIM con eta=0 se reduce a `x <- sqrt(ab[p]/ab[t]) * x`, y el producto
+  //     sobre la subsecuencia tiene que telescopiar a `1/sqrt(ab[T-1])` —el
+  //     primer `ab[t]` y el ultimo `ab[p]=1`— **para cualquier numero de
+  //     pasos**. Eso es exactamente lo que compra la formulacion no markoviana,
+  //     y es la unica comprobacion de aqui que fija que `ab[p]` sea el siguiente
+  //     de la subsecuencia y no `ab[tau-1]`: con la secuencia completa las dos
+  //     cosas coinciden, y el oraculo del punto 1 se autocorrige y no lo nota.
+  {
+    Predictor sin_ruido = [](const Tensor& x, const Tensor&) {
+      Tensor e(x.Shape());
+      e.Zeros();
+      return e;
+    };
+    const double esperado = 1.0 / std::sqrt(static_cast<double>(cal.AlphaBar()[T - 1]));
+    for (int np : {T, 17, 5, 2}) {
+      DDIMSampler ddim(cal, np, 0.0f);
+      const Tensor y = ddim.Muestrear(sin_ruido, xT, RuidoNulo());
+      double peor = 0.0;
+      for (size_t i = 0; i < y.TotalSize(); ++i) {
+        peor = std::max(peor, std::abs(static_cast<double>(y[i]) - esperado * xT[i]) /
+                                  std::max(1.0, std::abs(esperado * xT[i])));
+      }
+      Check(peor < 1e-5, "con " + std::to_string(np) +
+                             " pasos el producto de escalas no telescopia (" +
+                             std::to_string(peor) + "): ab[anterior] no es el "
+                             "siguiente de la subsecuencia");
+    }
+  }
+
+  // 5. Lo que debe protestar en vez de hacer algo raro en silencio.
+  {
+    int protestas = 0;
+    try { DDIMSampler(cal, 0, 0.0f); } catch (const std::invalid_argument&) { ++protestas; }
+    try { DDIMSampler(cal, T + 1, 0.0f); } catch (const std::invalid_argument&) { ++protestas; }
+    try { DDIMSampler(cal, 5, 1.5f); } catch (const std::invalid_argument&) { ++protestas; }
+    try {
+      DDPMSampler(cal).Muestrear(Predictor(), xT, RuidoNulo());
+    } catch (const std::invalid_argument&) { ++protestas; }
+    Check(protestas == 4, "solo protestaron " + std::to_string(protestas) +
+                              " de 4 argumentos invalidos");
+    // Un predictor que devuelve otra forma es un modelo que no encaja con el
+    // muestreo; hay que decirlo, no propagar basura.
+    bool forma = false;
+    try {
+      DDPMSampler(cal).Muestrear(
+          [](const Tensor&, const Tensor&) { return Tensor({1, 1}); }, xT, RuidoNulo());
+    } catch (const std::runtime_error&) { forma = true; }
+    Check(forma, "acepto un predictor que devuelve una forma distinta de x_t");
+  }
+
+  std::cout << "PASADO ✅ (aterrizaje exacto, eta=1 ≡ DDPM y subsecuencia bien formada)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -5735,6 +5936,7 @@ int main() {
   TestTimeEmbedding();
   TestResBlockTiempo();
   TestUNet2D();
+  TestMuestreadores();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

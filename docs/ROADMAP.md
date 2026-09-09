@@ -1360,7 +1360,7 @@ juguete didáctico y se construye la implementación real:
       muy distintas, que es la misma comprobación que hizo falta en RoPE cuando
       poner todas las frecuencias iguales pasaba desapercibido. Tres mutaciones,
       las tres rojas en ambas capas.
-- [ ] `DDPMSampler` y `DDIMSampler`.
+- [x] **`DDPMSampler` y `DDIMSampler`.** Ver el escalón 6, más abajo.
 - [x] **`ResBlockTiempo`**, la pieza que se repite por toda la U-Net. Tercer
       escalón, y el primero con peso real: combina `GroupNorm`, `SiLU`, `Conv2D`
       y la inyección del paso, y su backward tiene cuatro ramas.
@@ -1438,8 +1438,71 @@ juguete didáctico y se construye la implementación real:
       Tres mutaciones, las tres rojas: sobrescribir en vez de sumar en un salto,
       ignorar la rama de arriba, y partir el `Concat` por el canal equivocado.
 
+- [x] **`DDPMSampler` y `DDIMSampler`** (escalón 6, adelantado al 5 a propósito).
+      Se hicieron antes del entrenamiento largo porque se pueden validar contra
+      el modelo sobreajustado de 16 imágenes **en minutos**: si el muestreador
+      estuviera mal, descubrirlo después de horas de entrenamiento no diría si
+      la culpa es del bucle o del modelo.
+
+      Toman el modelo como una función `(x_t, t) -> eps` en vez de una `UNet2D`.
+      Eso permite probarlos con un **oráculo analítico** cuya respuesta exacta se
+      conoce, sin ningún modelo entrenado.
+
+      **Lo que enseñó medir la cobertura, y cambió el diseño.** El oráculo
+      parecía una prueba fortísima —aterriza exacto, sin tolerancia— y cazaba
+      **una de cuatro** mutaciones deliberadas:
+
+      | mutación | oráculo | prueba 54 final | paridad |
+      | --- | --- | --- | --- |
+      | varianza `beta[t]` en vez de la posterior | ✗ | ✅ | ✅ (solo DDPM) |
+      | coeficiente de `eps` con `sqrt(beta)` | ✅ | ✅ | ✅ |
+      | DDIM sin restar `σ²` en la dirección | ✗ | ✅ | ✅ (solo `eta=1`) |
+      | `ab[τ−1]` en vez del siguiente de la subsecuencia | ✗ | ✅ | ✅ (solo subsecuencias cortas) |
+      | subsecuencia que no llega a 0 | — | ✅ | — |
+
+      El oráculo falla porque **se autocorrige**: recalcula `eps` a partir del
+      `x` que le den, así que cualquier trayectoria que mantenga `x_0 = m` acaba
+      en `m`. Fija el punto de llegada, no el camino. Se añadieron dos
+      comprobaciones que sí lo fijan sin PyTorch: que `eta=1` sobre la secuencia
+      completa **reproduzca DDPM paso a paso** (con el control de que `eta=0` dé
+      otra cosa, o la comparación no distinguiría nada), y **el telescopio** —con
+      un predictor que devuelve ruido cero, el producto de escalas de DDIM tiene
+      que dar `1/√ab[T−1]` para cualquier número de pasos, que es lo único que
+      fija el índice de `ab[anterior]`.
+
+      Paridad contra PyTorch de la trayectoria completa con el ruido **inyectado
+      desde la referencia**: `sm_ddpm` 1.0e-06, `sm_ddim0` 1.5e-07, `sm_ddim1`
+      7.8e-07, `sm_ddim_full1` 6.0e-07.
+
+- [x] **Muestreo desde ruido puro con el modelo sobreajustado.** La prueba de
+      extremo a extremo, y donde salió un fallo que ninguna de las capas de
+      verificación podía ver.
+
+      El primer intento generó manchas. La causa **no era el muestreador ni la
+      red**: con `T=200` pasos y `beta_final=0.02` —los valores del artículo,
+      que están calibrados para **1000** pasos— `x_T` conserva el **36% de la
+      imagen**. El modelo nunca veía ruido puro al entrenar y el muestreo
+      arrancaba de una distribución que no conocía. La pérdida, las diferencias
+      finitas y la paridad eran todas correctas y ninguna podía avisar.
+
+      `DiffusionSchedule::SenalResidual()` expone ahora `√ab[T−1]`, y el
+      entrenador escala `beta_final` por `1000/pasos` y lo imprime con su aviso.
+      Con eso queda el 0.56%.
+
+      Corregido eso, faltaba presupuesto. Con 800 iteraciones las muestras
+      seguían sin ser dígitos; con **5000 (5.6 min)** sí: distancia a la imagen
+      más cercana **0.089–0.25 frente a 0.61–0.73** de media a todas, una
+      separación de 5–7×. DDPM 2.0 s por lote (200 pasos), DDIM 0.2 s (20 pasos).
+
+      Un diagnóstico que corrigió una métrica mía: el error de `x_0` predicho es
+      enorme con `t` grande (5.15 en `t=195`) y **eso es normal en cualquier DDPM
+      correcto** —despejar `x_0` divide por `√ab`, que ahí vale 0.0056, y
+      amplifica el error de `eps` por 178×. Lo que sí es informativo es que con
+      `t` grande **copiar la entrada da error 0.0000**: la solución trivial es
+      casi perfecta, y lo único que sirve para generar es la desviación pequeña
+      respecto a ella. Por eso una pérdida baja en esa franja no dice nada.
+
 - [ ] DDPM sobre MNIST completo (escalón 5).
-- [ ] DDIM — mismo modelo, otro muestreador (escalón 6).
 - [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
 
   **El orden importa, y cada escalón lleva su examen.** Construir la U-Net entera
@@ -1450,8 +1513,8 @@ juguete didáctico y se construye la implementación real:
   2. `SinusoidalTimeEmbedding` — paridad numérica
   3. Bloque residual condicionado por tiempo — paridad de forward y backward
   4. **U-Net mínima: sobreajustar 8–32 imágenes a propósito** ✅
-  5. DDPM sobre MNIST completo
-  6. DDIM — mismo modelo, otro muestreador
+  5. DDPM sobre MNIST completo ⬜
+  6. DDIM — mismo modelo, otro muestreador ✅ (adelantado al 5)
 
   El paso 4 es el que decide si se sigue. Si la red **no puede memorizar** un
   puñado de dígitos, hay un defecto en la arquitectura, en el backward o en el

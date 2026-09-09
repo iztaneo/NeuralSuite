@@ -65,6 +65,23 @@ class DiffusionSchedule {
   [[nodiscard]] const Tensor& AlphaBar() const { return alpha_bar_; }
 
   /**
+   * @brief `sqrt(ab[T-1])`: cuanta senal de `x_0` queda en `x_T`.
+   *
+   * Deberia ser practicamente cero. Si no lo es, el ultimo paso **no es ruido
+   * puro**, el modelo nunca ve ruido puro durante el entrenamiento y el
+   * muestreo arranca de una distribucion que no conoce: salen manchas, no
+   * imagenes, y ni la perdida ni las diferencias finitas ni la paridad dicen
+   * nada, porque las tres son correctas.
+   *
+   * Pasa con facilidad al acortar el calendario y dejar las betas del articulo,
+   * que estan calibradas para 1000 pasos: con 200 pasos y `beta_final = 0.02`
+   * queda el **36%** de la imagen. Por eso esto se expone y se comprueba.
+   */
+  [[nodiscard]] float SenalResidual() const {
+    return std::sqrt(alpha_bar_[pasos_ - 1]);
+  }
+
+  /**
    * @brief `x_t = sqrt(ab[t]) * x_0 + sqrt(1 - ab[t]) * ruido`.
    *
    * `x0` y `ruido` son `[N, ...]`; `t` es `[N]` con el paso de cada ejemplo del
