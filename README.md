@@ -1,4 +1,4 @@
-# 🧠 NeuralSuite: C++17 Deep Learning Framework from Scratch
+# 🧠 NeuralSuite: C++17 Deep Learning Framework by KhepriNova
 
 [![CI](https://github.com/iztaneo/NeuralSuite/actions/workflows/ci.yml/badge.svg)](https://github.com/iztaneo/NeuralSuite/actions/workflows/ci.yml)
 
