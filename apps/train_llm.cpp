@@ -28,6 +28,7 @@ struct TrainArgs {
   // Los artefactos de entrenamiento viven bajo release/ (ver include/artifacts.h).
   std::string out_file = ReleasePath("model_cpp.bin");
   std::string vocab_file = ReleasePath("vocab_cpp.txt");
+  bool use_rope = false;
   int max_iters = 1000;
   int batch_size = 16;
   int block_size = 64;
@@ -51,6 +52,7 @@ void PrintUsage(const char* prog_name) {
             << "  --learning_rate <float> Tasa de aprendizaje inicial (default: 0.003)\n"
             << "  --out_file <path>       Ruta de guardado del modelo (default: release/model_cpp.bin)\n"
             << "  --vocab_file <path>     Ruta de guardado del vocabulario (default: release/vocab_cpp.txt)\n"
+            << "  --rope                  Posicion por rotacion (RoPE) en vez de aprendida\n"
             << "  --help                  Muestra este mensaje de ayuda\n";
 }
 
@@ -79,6 +81,11 @@ TrainArgs ParseTrainArgs(int argc, char** argv) {
       args.learning_rate = std::stof(argv[++i]);
     } else if (arg == "--out_file" && i + 1 < argc) {
       args.out_file = argv[++i];
+    } else if (arg == "--rope") {
+      // Entrenar con posicion por rotacion en vez de aprendida. Los pesos que
+      // salgan NO son compatibles con los de un modelo sin RoPE, y al reves
+      // tampoco: el formato lo detecta y lo dice.
+      args.use_rope = true;
     } else if (arg == "--vocab_file" && i + 1 < argc) {
       // Sin esta opcion no se podia entrenar un segundo modelo sin destruir el
       // primero: el vocabulario se escribia siempre en release/vocab_cpp.txt,
@@ -179,6 +186,7 @@ int main(int argc, char** argv) {
   config.n_layer = args.n_layer;
   config.n_head = args.n_head;
   config.n_embd = args.n_embd;
+  config.use_rope = args.use_rope;
 
   GPTModel model(config);
   std::cout << "🧠 Modelo GPT C++ Creado exitosamente.\n" << std::flush;

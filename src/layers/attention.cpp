@@ -214,6 +214,42 @@ Tensor MultiHeadAttentionReference::ForwardWithKVCache(const Tensor& single_toke
     return final_output;
   }
 
+void MultiHeadAttention::RotarQK(Tensor& qkv, int B, int T, int pos_inicial,
+                                 float signo) const {
+  const int C = n_embd_, D = head_dim_;
+  if (D % 2 != 0) {
+    throw std::invalid_argument(
+        "RoPE: la dimension por cabeza debe ser par y vale " + std::to_string(D) + ".");
+  }
+
+  // El buffer es [B*T, 3C] con los bloques Q | K | V seguidos en cada fila. Se
+  // rotan los dos primeros y NO el tercero: la posicion debe afectar a con
+  // quien se compara cada token, no a lo que aporta cuando se le atiende.
+  parallel::ParallelFor(B * T, /*min_per_thread=*/16, [&](int desde, int hasta) {
+    for (int bt = desde; bt < hasta; ++bt) {
+      const int t = bt % T;
+      const int pos = pos_inicial + t;
+      const size_t fila = static_cast<size_t>(bt) * 3 * C;
+
+      for (int bloque = 0; bloque < 2; ++bloque) {          // 0 = Q, 1 = K
+        const size_t base_bloque = fila + static_cast<size_t>(bloque) * C;
+        for (int h = 0; h < n_head_; ++h) {
+          const size_t off = base_bloque + static_cast<size_t>(h) * D;
+          for (int i = 0; i < D / 2; ++i) {
+            const float theta = static_cast<float>(
+                pos / std::pow(10000.0, 2.0 * i / D));
+            const float c = std::cos(theta), sn = std::sin(theta) * signo;
+            const float a = qkv[off + 2 * i];
+            const float b = qkv[off + 2 * i + 1];
+            qkv[off + 2 * i] = a * c - b * sn;
+            qkv[off + 2 * i + 1] = a * sn + b * c;
+          }
+        }
+      }
+    }
+  });
+}
+
 Tensor MultiHeadAttention::Forward(const Tensor& input) {
     last_input_ = input;
     const int B = input.Shape()[0];
@@ -222,6 +258,7 @@ Tensor MultiHeadAttention::Forward(const Tensor& input) {
 
     const Tensor input_2d = input.View({B * T, C});
     qkv_cache_ = c_attn_.Forward(input_2d);
+    if (usa_rope_) RotarQK(qkv_cache_, B, T, /*pos_inicial=*/0, +1.0f);
 
     Tensor attn_out({B, T, C});
     attn_out.Zeros();
@@ -328,6 +365,9 @@ Tensor MultiHeadAttention::Backward(const Tensor& dout) {
       }
     });
 
+    // La rotacion es ortogonal, asi que propagar por ella es rotar el gradiente
+    // por el angulo opuesto, antes de que llegue a la densa que produjo QKV.
+    if (usa_rope_) RotarQK(dqkv, B, T, /*pos_inicial=*/0, -1.0f);
     Tensor dx_2d = c_attn_.Backward(dqkv);
     dx_2d.Reshape({B, T, C});
     return dx_2d;

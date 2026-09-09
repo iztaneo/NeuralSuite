@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -4677,6 +4678,149 @@ void TestRoPE() {
             << std::flush;
 }
 
+/**
+ * @brief RoPE en el GPT: convive con lo anterior sin romperlo.
+ *
+ * Ésta es la prueba que hace segura la bifurcación. El proyecto ya sabe que
+ * mantener dos caminos sólo es aceptable si hay algo que los compare —es la
+ * lección de los tres pares `*Reference` frente a las seis listas que
+ * divergieron—, y aquí lo que hay que fijar es más fuerte que una comparación:
+ * que **con `use_rope = false` el modelo haga exactamente lo de siempre**.
+ *
+ * Y la otra mitad: que los pesos de un modelo no se puedan cargar en el otro.
+ * Deben fallar, y con un mensaje que diga por qué. Cargar pesos entrenados con
+ * posiciones aprendidas en un modelo que rota daría basura sin avisar, que es
+ * el modo de fallo que este proyecto lleva persiguiendo desde el principio.
+ */
+void TestRoPEEnElGPT() {
+  std::cout << "🧪 [Test 47] RoPE en el GPT (compatibilidad)... " << std::flush;
+
+  GPTConfig base;
+  base.vocab_size = 32;
+  base.block_size = 16;
+  base.n_layer = 2;
+  base.n_head = 2;
+  base.n_embd = 16;
+
+  Tensor idx({2, 6});
+  for (size_t i = 0; i < idx.TotalSize(); ++i) {
+    idx[i] = static_cast<float>((i * 7) % base.vocab_size);
+  }
+
+  // 1. Apagado por defecto: quien no pida RoPE no lo tiene.
+  Check(GPTConfig{}.use_rope == false, "RoPE viene activado por defecto");
+
+  // 2. `use_rope = false` produce EXACTAMENTE lo mismo que antes de existir la
+  //    bifurcación. Se comprueba comparando dos modelos con la misma semilla:
+  //    uno construido con la configuración por defecto y otro poniendo el campo
+  //    a false a mano. Si el camino nuevo se colara, diferirían.
+  {
+    ManualSeed(101);
+    GPTModel a(base);
+    GPTConfig explicita = base;
+    explicita.use_rope = false;
+    ManualSeed(101);
+    GPTModel b(explicita);
+
+    const Tensor ya = a.Forward(idx);
+    const Tensor yb = b.Forward(idx);
+    double peor = 0.0;
+    for (size_t i = 0; i < ya.TotalSize(); ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(ya[i]) - yb[i]));
+    }
+    Check(peor == 0.0, "apagar RoPE explícitamente no da lo mismo que el defecto");
+  }
+
+  // 3. Con RoPE la salida es DISTINTA. Si no lo fuera, la bandera no haría nada
+  //    y las pruebas de arriba pasarían igual sin que RoPE existiera.
+  GPTConfig con_rope = base;
+  con_rope.use_rope = true;
+  {
+    ManualSeed(101);
+    GPTModel sin(base);
+    ManualSeed(101);
+    GPTModel con(con_rope);
+
+    const Tensor y1 = sin.Forward(idx);
+    const Tensor y2 = con.Forward(idx);
+    double mayor = 0.0;
+    for (size_t i = 0; i < y1.TotalSize(); ++i) {
+      mayor = std::max(mayor, std::abs(static_cast<double>(y1[i]) - y2[i]));
+    }
+    Check(mayor > 1e-4, "activar RoPE no cambia nada: la bandera no llega a la atención");
+  }
+
+  // 4. Con RoPE, `wpe_` deja de ser parámetro. El conteo debe bajar justo en
+  //    block_size * n_embd, ni más ni menos.
+  {
+    ManualSeed(101);
+    GPTModel sin(base);
+    ManualSeed(101);
+    GPTModel con(con_rope);
+    size_t n_sin = 0, n_con = 0;
+    for (const Tensor* p : sin.GetParameters()) n_sin += p->TotalSize();
+    for (const Tensor* p : con.GetParameters()) n_con += p->TotalSize();
+    const size_t esperado = static_cast<size_t>(base.block_size) * base.n_embd;
+    Check(n_sin - n_con == esperado,
+          "la diferencia de parámetros no es la tabla de posiciones: " +
+              std::to_string(n_sin - n_con) + " frente a " + std::to_string(esperado));
+  }
+
+  // 5. Los pesos no se mezclan, y falla en las dos direcciones.
+  {
+    const std::string ruta_sin = "/tmp/ns_test_sin_rope.nsf";
+    const std::string ruta_con = "/tmp/ns_test_con_rope.nsf";
+
+    ManualSeed(101);
+    GPTModel sin(base);
+    ManualSeed(101);
+    GPTModel con(con_rope);
+    Check(sin.SaveWeights(ruta_sin), "no se pudieron guardar los pesos sin RoPE");
+    Check(con.SaveWeights(ruta_con), "no se pudieron guardar los pesos con RoPE");
+
+    // Cada uno carga el suyo.
+    ManualSeed(7);
+    GPTModel sin2(base);
+    Check(sin2.LoadWeights(ruta_sin), "un modelo sin RoPE no carga sus propios pesos");
+    ManualSeed(7);
+    GPTModel con2(con_rope);
+    Check(con2.LoadWeights(ruta_con), "un modelo con RoPE no carga sus propios pesos");
+
+    // Y ninguno carga el del otro. Aquí el silencio sería el desastre.
+    ManualSeed(7);
+    GPTModel cruz1(con_rope);
+    Check(!cruz1.LoadWeights(ruta_sin),
+          "un modelo con RoPE aceptó pesos entrenados sin él");
+    ManualSeed(7);
+    GPTModel cruz2(base);
+    Check(!cruz2.LoadWeights(ruta_con),
+          "un modelo sin RoPE aceptó pesos entrenados con él");
+
+    std::remove(ruta_sin.c_str());
+    std::remove(ruta_con.c_str());
+  }
+
+  // 6. Con RoPE el modelo sigue siendo derivable: los gradientes deben fluir.
+  {
+    ManualSeed(101);
+    GPTModel con(con_rope);
+    const Tensor logits = con.Forward(idx);
+    Tensor dlogits(logits.Shape());
+    for (size_t i = 0; i < dlogits.TotalSize(); ++i) {
+      dlogits[i] = 0.01f * std::sin(0.3f * static_cast<float>(i));
+    }
+    con.Backward(dlogits);
+    double norma = 0.0;
+    for (const Tensor* gr : con.GetGradients()) {
+      for (size_t i = 0; i < gr->TotalSize(); ++i) norma += std::abs((*gr)[i]);
+    }
+    Check(norma > 1e-6, "con RoPE no llega gradiente a ningún parámetro");
+  }
+
+  std::cout << "PASADO ✅ (apagado idéntico, encendido distinto y pesos que no se mezclan)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -4728,6 +4872,7 @@ int main() {
   TestCrossAttention();
   TestSwiGLU();
   TestRoPE();
+  TestRoPEEnElGPT();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

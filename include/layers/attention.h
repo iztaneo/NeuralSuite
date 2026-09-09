@@ -131,6 +131,21 @@ class MultiHeadAttentionReference : public Layer {
  */
 class MultiHeadAttention : public Layer {
  public:
+  /**
+   * @brief Activa RoPE en esta capa. Por defecto **apagado**.
+   *
+   * Con RoPE, `Q` y `K` se rotan por su posicion justo despues de la proyeccion
+   * `c_attn_` y antes del producto de atencion. `V` no se rota: la posicion
+   * tiene que afectar a con quien se compara cada token, no a lo que ese token
+   * aporta cuando se le atiende.
+   *
+   * Apagado, la capa hace exactamente lo de siempre —bit a bit— y los pesos
+   * antiguos siguen valiendo. Es lo que permite que las dos variantes convivan
+   * y se pueda entrenar con cualquiera de las dos.
+   */
+  void SetRoPE(bool activo) { usa_rope_ = activo; }
+  [[nodiscard]] bool UsaRoPE() const { return usa_rope_; }
+
   MultiHeadAttention(int n_embd, int n_head)
       : n_embd_(n_embd),
         n_head_(n_head),
@@ -180,6 +195,16 @@ class MultiHeadAttention : public Layer {
    * como entra en el producto.
    */
   void Extraer(int b, int h, int T, Tensor* Q, Tensor* Kt, Tensor* V) const;
+
+  /**
+   * @brief Rota los bloques Q y K dentro del buffer `[B*T, 3C]`.
+   *
+   * `signo` vale +1 hacia adelante y -1 hacia atras: la rotacion es ortogonal,
+   * asi que su transpuesta es la rotacion por el angulo opuesto.
+   */
+  void RotarQK(Tensor& qkv, int B, int T, int pos_inicial, float signo) const;
+
+  bool usa_rope_ = false;
 
   int n_embd_;
   int n_head_;

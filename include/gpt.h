@@ -36,6 +36,21 @@ struct GPTConfig {
   int n_layer = 4;
   int n_head = 4;
   int n_embd = 128;
+
+  /**
+   * @brief Codificar la posicion con RoPE en vez de con embeddings aprendidos.
+   *
+   * **Por defecto apagado, y eso es deliberado.** Con `false` el modelo hace
+   * exactamente lo de siempre, los pesos guardados siguen cargando y la paridad
+   * contra PyTorch sigue siendo valida sin tocar el oraculo. Las dos variantes
+   * conviven y se entrena con la que se quiera.
+   *
+   * Con `true`, `wpe_` deja de sumarse —RoPE la hace redundante, y mantener las
+   * dos seria sumar dos senales de posicion distintas— y la atencion rota `Q` y
+   * `K`. Eso cambia el numero de parametros, asi que un modelo con RoPE **no es
+   * compatible** con uno sin el; el formato NSF lo detecta y lo dice.
+   */
+  bool use_rope = false;
 };
 
 /**
@@ -59,6 +74,8 @@ class GPTBlock : public Layer {
     Register(&ln_1_, "ln_1");
     Register(&attn_, "attn");
     Register(&ln_2_, "ln_2");
+    // Se propaga la eleccion a la atencion, que es donde ocurre la rotacion.
+    attn_.SetRoPE(config.use_rope);
     Register(&mlp_fc_, "mlp_fc");
     Register(&mlp_proj_, "mlp_proj");
   }
@@ -95,7 +112,10 @@ class GPTModel : public Module {
         wpe_(cfg.block_size, cfg.n_embd),
         ln_f_(cfg.n_embd) {
     Register(&wte_, "wte");
-    Register(&wpe_, "wpe");
+    // Con RoPE, `wpe_` no se registra: deja de ser parametro y no aparece en el
+    // archivo de pesos. Es lo que hace que los dos modelos sean distintos y que
+    // cargar uno en el otro falle en vez de dar basura.
+    if (!cfg.use_rope) Register(&wpe_, "wpe");
     for (int i = 0; i < cfg.n_layer; ++i) {
       blocks_.push_back(std::make_shared<GPTBlock>(cfg));
       Register(blocks_.back().get(), "blocks." + std::to_string(i));

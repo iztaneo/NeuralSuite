@@ -1117,26 +1117,35 @@ con PyTorch y ahora corpus en español.
       el primer par gire diez veces más que el último— y ahora las cuatro
       mutaciones caen en ambas capas.
 
-- [ ] **Integrar RoPE en el GPT.** La primitiva está lista; conectarla exige tres
-      decisiones que no son técnicas y hay que tomarlas antes:
+- [x] **RoPE integrado en el GPT, conservando lo anterior.** `GPTConfig::use_rope`
+      viene **apagado por defecto**, y con eso el modelo hace exactamente lo de
+      siempre: los pesos guardados —incluido el modelo en español de la Fase 12—
+      siguen cargando, y la paridad contra `LLMRasec` sigue siendo válida **sin
+      tocar el oráculo**. Las dos variantes conviven y se entrena con la que se
+      quiera, con `--rope` en `train_llm` y `generate_llm`.
 
-      - **Qué pasa con `wpe_`.** RoPE la hace redundante: mantener las dos es
-        sumar dos señales de posición distintas. Retirarla **cambia el número de
-        parámetros y rompe los pesos guardados**, incluido el modelo en español
-        de la Fase 12. Hay que versionar el formato o convertir.
-      - **La referencia de PyTorch.** La paridad del GPT compara contra
-        `LLMRasec`; si el C++ rota y el oráculo no, falla por diseño. O se
-        actualiza el oráculo —que hasta ahora se ha mantenido intacto a
-        propósito— o el GPT con RoPE necesita su propio caso de paridad.
-      - **El KV-Cache.** `ForwardWithKVCache(token, pos)` debe rotar con la
-        posición **real**, no con el índice dentro de la caché. La primitiva ya
-        acepta `pos_inicial` para eso, y una mutación que lo ignora queda en
-        rojo en ambas capas.
+      Las tres decisiones que lo bloqueaban se resolvieron así:
 
-      A cambio, es lo que arregla que el KV-Cache deje de acelerar pasada la
-      ventana: hoy hay que reconstruirlo casi en cada paso —1.29 ms/token frente
-      a 0.13 dentro de la ventana— porque las posiciones aprendidas cambian al
-      deslizar.
+      - **`wpe_`** deja de registrarse como parámetro cuando RoPE está activo, y
+        el bloque no la suma. No se borra la tabla: el camino de siempre la
+        sigue usando igual.
+      - **La compatibilidad** sale del propio formato. El cargador NSF exige las
+        claves que el modelo *declara esperar* e ignora las que sobran, así que
+        `use_rope` se escribe **sólo cuando está activa**. Eso da: modelo sin
+        RoPE con archivo antiguo → carga; modelo con RoPE con archivo antiguo →
+        **falla diciendo que el archivo no declara `use_rope`**; y al revés falla
+        por el número de tensores. El caso cruzado *debe* fallar: cargar pesos
+        de posiciones aprendidas en un modelo que rota daría basura sin avisar.
+      - **El KV-Cache** rota con la posición real, que es para lo que la
+        primitiva acepta `pos_inicial`.
+
+      El test 47 fija lo que hace segura la bifurcación, que es más fuerte que
+      comparar dos implementaciones: **con `use_rope = false` la salida es
+      idéntica bit a bit** a la de la configuración por defecto; con `true` es
+      distinta —si no, la bandera no llegaría a la atención—; la diferencia de
+      parámetros es exactamente `block_size × n_embd`; y los pesos **no se
+      mezclan en ninguna de las dos direcciones**. Comprobado además de extremo
+      a extremo: entrenar con `--rope`, guardar, cargar y generar.
 
 - [ ] **GQA**
 - [x] **Perplejidad** como métrica, sobre validación y sobre prueba. La da

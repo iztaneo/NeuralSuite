@@ -32,6 +32,7 @@ struct GenerateArgs {
   int n_embd = 128;
 
   bool use_cache = true;
+  bool use_rope = false;
 };
 
 void PrintGenerateUsage(const char* prog_name) {
@@ -45,6 +46,7 @@ void PrintGenerateUsage(const char* prog_name) {
             << "  --n_head <int>            Número de cabezas de atención (default: 4)\n"
             << "  --n_embd <int>            Dimensión del embedding (default: 128)\n"
             << "  --no_cache                Desactivar aceleración por KV-Cache\n"
+            << "  --rope                    El modelo usa RoPE (debe coincidir con su entrenamiento)\n"
             << "  --model_path <path>       Ruta al archivo binario del modelo (default: release/model_cpp.bin)\n"
             << "  --vocab_path <path>       Ruta al archivo de vocabulario (default: release/vocab_cpp.txt)\n"
             << "  --help                    Muestra este mensaje de ayuda\n";
@@ -71,6 +73,8 @@ GenerateArgs ParseGenerateArgs(int argc, char** argv) {
       args.n_head = std::stoi(argv[++i]);
     } else if (arg == "--n_embd" && i + 1 < argc) {
       args.n_embd = std::stoi(argv[++i]);
+    } else if (arg == "--rope") {
+      args.use_rope = true;
     } else if (arg == "--no_cache") {
       args.use_cache = false;
     } else if (arg == "--model_path" && i + 1 < argc) {
@@ -129,6 +133,7 @@ int main(int argc, char** argv) {
   config.n_layer = args.n_layer;
   config.n_head = args.n_head;
   config.n_embd = args.n_embd;
+  config.use_rope = args.use_rope;
 
   GPTModel model(config);
   if (model.LoadWeights(args.model_path)) {

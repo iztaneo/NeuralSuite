@@ -106,17 +106,22 @@ Tensor GPTModel::Forward(const Tensor& idx) {
 
     Tensor tok_emb = wte_.Forward(idx);
 
-    Tensor pos_idx({1, seq_len});
-    for (int t = 0; t < seq_len; ++t) pos_idx[t] = static_cast<float>(t);
-    Tensor pos_emb = wpe_.Forward(pos_idx);
-
     Tensor x({batch_size, seq_len, config_.n_embd});
-    for (int b = 0; b < batch_size; ++b) {
-      for (int t = 0; t < seq_len; ++t) {
-        for (int d = 0; d < config_.n_embd; ++d) {
-          size_t idx_3d = (b * seq_len + t) * config_.n_embd + d;
-          size_t pos_3d = t * config_.n_embd + d;
-          x[idx_3d] = tok_emb[idx_3d] + pos_emb[pos_3d];
+    if (config_.use_rope) {
+      // Con RoPE la posicion entra en la atencion, rotando Q y K. Sumar ademas
+      // `wpe_` seria meter dos senales de posicion distintas.
+      std::memcpy(x.Data(), tok_emb.Data(), x.TotalSize() * sizeof(float));
+    } else {
+      Tensor pos_idx({1, seq_len});
+      for (int t = 0; t < seq_len; ++t) pos_idx[t] = static_cast<float>(t);
+      Tensor pos_emb = wpe_.Forward(pos_idx);
+      for (int b = 0; b < batch_size; ++b) {
+        for (int t = 0; t < seq_len; ++t) {
+          for (int d = 0; d < config_.n_embd; ++d) {
+            size_t idx_3d = (b * seq_len + t) * config_.n_embd + d;
+            size_t pos_3d = t * config_.n_embd + d;
+            x[idx_3d] = tok_emb[idx_3d] + pos_emb[pos_3d];
+          }
         }
       }
     }
@@ -170,7 +175,9 @@ Tensor GPTModel::Backward(const Tensor& dlogits) {
 
     // Escribe la contribución del embedding de entrada en dweight_.
     wte_.Backward(dx);
-    wpe_.Backward(dx);
+    // Sin RoPE, la posicion aprendida tambien recibe gradiente. Con RoPE no hay
+    // nada que actualizar ahi: `wpe_` ni siquiera es parametro.
+    if (!config_.use_rope) wpe_.Backward(dx);
 
     // dW_total = dW_embedding + dW_output.
     Tensor& wte_grad = wte_.WeightParam().Grad();
@@ -208,12 +215,26 @@ bool GPTModel::LoadWeights(const std::string& filepath) {
   }
 
 std::map<std::string, std::string> GPTModel::ArchitectureMetadata() const {
-    return {{"arch", "gpt"},
-            {"vocab_size", std::to_string(config_.vocab_size)},
-            {"block_size", std::to_string(config_.block_size)},
-            {"n_layer", std::to_string(config_.n_layer)},
-            {"n_head", std::to_string(config_.n_head)},
-            {"n_embd", std::to_string(config_.n_embd)}};
+    std::map<std::string, std::string> meta = {
+        {"arch", "gpt"},
+        {"vocab_size", std::to_string(config_.vocab_size)},
+        {"block_size", std::to_string(config_.block_size)},
+        {"n_layer", std::to_string(config_.n_layer)},
+        {"n_head", std::to_string(config_.n_head)},
+        {"n_embd", std::to_string(config_.n_embd)}};
+
+    // La clave se anade SOLO si RoPE esta activo, y ahi esta la compatibilidad.
+    // El cargador exige las claves que el modelo declara esperar e ignora las
+    // que sobran en el archivo, asi que:
+    //
+    //   modelo sin RoPE + archivo antiguo  -> carga, no espera la clave
+    //   modelo con RoPE + archivo antiguo  -> falla, la clave no esta   (correcto)
+    //   modelo sin RoPE + archivo con RoPE -> falla por el numero de tensores
+    //
+    // El segundo caso DEBE fallar: cargar pesos entrenados con posiciones
+    // aprendidas en un modelo que rota daria basura sin avisar.
+    if (config_.use_rope) meta["use_rope"] = "1";
+    return meta;
   }
 
 }  // namespace neuralsuite
