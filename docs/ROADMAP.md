@@ -1393,8 +1393,53 @@ juguete didáctico y se construye la implementación real:
       backward, no sumar sobre las posiciones al propagar el tiempo, no sumar el
       atajo en el forward, y derivar `SiLU` con la salida en vez de la entrada.
 
-- [ ] `UNet2D` — bloques residuales condicionados por tiempo, skips por `Concat`
-      (de ahí la Fase 13), atención en el centro, up/downsampling.
+- [x] **`UNet2D` y la puerta de sobreajuste.** Cuarto escalón, el que decide.
+      Bloques residuales condicionados por tiempo, skips por `Concat` (de ahí la
+      Fase 13) y up/downsampling. 246 273 parámetros con `canales=32`.
+
+      **La puerta pasa.** 16 imágenes, 400 iteraciones, 32 s: la pérdida cae de
+      1.2706 a 0.04–0.14 (predecir cero da 1.0). La red memoriza.
+
+      Tres cosas que esto enseñó y no estaban en el plan:
+
+      1. **La pérdida baja más con `t` grande, no con `t` pequeño** —al revés de
+         lo que yo había escrito en el código. Como
+         `eps = (x_t − √ab·x_0) / √(1−ab)`, con `t` grande `√ab → 0` y
+         `eps → x_t`: la red casi puede copiar su entrada. Con `t` pequeño hay
+         que dividir una diferencia pequeña entre `√(1−ab)`, que es diminuto, y
+         ahí sí hace falta conocer `x_0`. Lo difícil con `t` grande es predecir
+         `x_0`, no `eps`. Medido: 0.1397 en `t∈[0,50)` frente a 0.0417 en
+         `t∈[150,200)`.
+      2. **La reconstrucción visual a `t` bajo no demuestra nada.** El primer
+         dibujo se hizo a `t=20` y salió un cinco perfecto. Se comprobó qué hace
+         ahí una red **sin entrenar**: dibuja el mismo cinco, porque a `t=20`
+         `x_t` ya es casi la imagen limpia y `PredecirX0` deshace un ruido que
+         apenas tapaba nada. La prueba se movió a `t=140`, donde `x_t` es
+         irreconocible, y el programa imprime siempre al lado el control sin
+         entrenar. Ahí la entrenada recupera el dígito y el control da ruido.
+      3. **El exportador de paridad tenía todos los casos en un solo ámbito.**
+         Al escribir la referencia de la U-Net se reutilizó el nombre `xu`, que
+         ya usaba `Upsample2D`, y `up_x` acabó conteniendo la entrada de la
+         U-Net. Se notó porque las formas no cuadraban y el binario abortó; si
+         hubieran cuadrado, la comparación habría pasado midiendo el tensor
+         equivocado. La referencia vive ahora en su propia función.
+
+      Paridad contra PyTorch: `un_y` 5.7e-07, `un_dx` 3.7e-07. Lo que verifica no
+      son los números de cada capa —eso ya lo cubren los casos anteriores— sino
+      el **cableado**: orden de canales al concatenar, qué salto se une con qué
+      subida, y que el gradiente que vuelve a cada salto sume los dos caminos.
+      Los pesos entran por nombre, submódulo a submódulo, para que un fallo
+      señale al cableado y no a un orden mal adivinado.
+
+      La prueba unitaria añade lo que la paridad no da: diferencias finitas de
+      extremo a extremo, que los 62 tensores de gradiente reciban señal —una rama
+      mal conectada no rompe nada, solo se queda congelada—, que cambiar el paso
+      cambie la salida, y que una resolución que no sea múltiplo de 4 proteste.
+      Tres mutaciones, las tres rojas: sobrescribir en vez de sumar en un salto,
+      ignorar la rama de arriba, y partir el `Concat` por el canal equivocado.
+
+- [ ] DDPM sobre MNIST completo (escalón 5).
+- [ ] DDIM — mismo modelo, otro muestreador (escalón 6).
 - [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
 
   **El orden importa, y cada escalón lleva su examen.** Construir la U-Net entera
@@ -1404,7 +1449,7 @@ juguete didáctico y se construye la implementación real:
   1. `DiffusionSchedule` — `q_sample` contra PyTorch
   2. `SinusoidalTimeEmbedding` — paridad numérica
   3. Bloque residual condicionado por tiempo — paridad de forward y backward
-  4. **U-Net mínima: sobreajustar 8–32 imágenes a propósito**
+  4. **U-Net mínima: sobreajustar 8–32 imágenes a propósito** ✅
   5. DDPM sobre MNIST completo
   6. DDIM — mismo modelo, otro muestreador
 

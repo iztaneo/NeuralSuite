@@ -5576,6 +5576,107 @@ void TestResBlockTiempo() {
             << std::flush;
 }
 
+/**
+ * @brief `UNet2D`: la primera red donde todas las piezas de la fase se juntan.
+ *
+ * Aqui no hay paridad contra PyTorch todavia, asi que esta prueba carga con mas
+ * peso del habitual: es lo unico que separa un backward correcto de uno que
+ * *parece* correcto porque la perdida baja de todos modos. Comprueba las cinco
+ * propiedades que un entrenamiento que converge no demuestra.
+ */
+void TestUNet2D() {
+  std::cout << "🧪 [Test 53] UNet2D... " << std::flush;
+  using namespace neuralsuite::diffusion;
+
+  const int N = 2, H = 8, W = 8, C = 8, DT = 16, G = 2;
+  ManualSeed(31);
+  UNet2D unet(1, C, DT, G);
+
+  Tensor x({N, 1, H, W}), t({N}), w({N, 1, H, W});
+  x.RandomNormal(0.0f, 1.0f);
+  w.RandomNormal(0.0f, 1.0f);
+  t[0] = 5.0f;
+  t[1] = 300.0f;
+
+  const Tensor y = unet.Forward(x, t);
+
+  // 1. La U-Net predice ruido: la salida tiene que caber en la entrada, o el
+  //    objetivo de entrenamiento ni siquiera se puede formar.
+  Check(y.Shape() == x.Shape(), "la salida no conserva la forma de la entrada");
+
+  const Tensor dx = unet.Backward(w);
+  Check(dx.Shape() == x.Shape(), "el gradiente no tiene la forma de la entrada");
+
+  // 2. Diferencias finitas de extremo a extremo. Cubre las dos bajadas, las dos
+  //    subidas y —lo que importa— la suma de los dos caminos que llegan a cada
+  //    salto: si uno sobrescribiera al otro en vez de sumarse, el numerico y el
+  //    analitico se separarian justo en esos pixeles.
+  {
+    auto perdida = [&](const Tensor& entrada) {
+      const Tensor s = unet.Forward(entrada, t);
+      double l = 0.0;
+      for (size_t i = 0; i < s.TotalSize(); ++i) l += static_cast<double>(w[i]) * s[i];
+      return l;
+    };
+    const float h = 1e-3f;
+    double peor = 0.0;
+    for (size_t i = 0; i < x.TotalSize(); i += 17) {
+      Tensor xp = x, xm = x;
+      xp[i] += h;
+      xm[i] -= h;
+      const double num = (perdida(xp) - perdida(xm)) / (2.0 * h);
+      peor = std::max(peor, std::abs(num - dx[i]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor < 2e-2, "el gradiente de la entrada no cuadra con las diferencias "
+                       "finitas (" + std::to_string(peor) + ")");
+  }
+
+  // 3. Todos los parametros reciben senal. Una rama mal conectada —un salto que
+  //    no se concatena, un atajo que no propaga— no rompe el forward ni dispara
+  //    ninguna excepcion: simplemente se queda congelada y la red entrena peor
+  //    sin decir por que.
+  {
+    int mudos = 0, total = 0;
+    for (const Tensor* g : unet.GetGradients()) {
+      double s = 0.0;
+      for (size_t i = 0; i < g->TotalSize(); ++i) s += std::abs((*g)[i]);
+      if (s < 1e-12) ++mudos;
+      ++total;
+    }
+    Check(mudos == 0, std::to_string(mudos) + " de " + std::to_string(total) +
+                          " tensores de gradiente se quedaron sin senal");
+  }
+
+  // 4. El paso de tiempo tiene que llegar a la salida. Si la inyeccion se
+  //    perdiera, la red seguiria entrenando y prediciendo algo —el ruido medio
+  //    de todos los pasos— y el muestreo daria imagenes borrosas sin ninguna
+  //    senal de error.
+  {
+    UNet2D limpia(1, C, DT, G);
+    Tensor t_otro({N});
+    t_otro[0] = 900.0f;
+    t_otro[1] = 900.0f;
+    const Tensor a = limpia.Forward(x, t);
+    const Tensor b = limpia.Forward(x, t_otro);
+    double dif = 0.0;
+    for (size_t i = 0; i < a.TotalSize(); ++i) dif = std::max(dif, std::abs(static_cast<double>(a[i]) - b[i]));
+    Check(dif > 1e-4, "cambiar el paso no cambia la salida: el tiempo no llega "
+                      "al final de la red");
+  }
+
+  // 5. Dos bajadas de factor 2 solo se deshacen si la resolucion es multiplo de
+  //    4; un tamano que no lo sea debe protestar y no recortar en silencio.
+  {
+    bool protesto = false;
+    Tensor raro({1, 1, 10, 10}), t1({1});
+    try { unet.Forward(raro, t1); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "acepto una resolucion que no es multiplo de 4");
+  }
+
+  std::cout << "PASADO ✅ (forma, gradiente, todas las ramas vivas y tiempo que llega)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -5633,6 +5734,7 @@ int main() {
   TestDiffusionSchedule();
   TestTimeEmbedding();
   TestResBlockTiempo();
+  TestUNet2D();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

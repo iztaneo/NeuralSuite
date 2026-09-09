@@ -34,6 +34,7 @@
 #include "diffusion/resblock.h"
 #include "diffusion/schedule.h"
 #include "diffusion/time_embedding.h"
+#include "diffusion/unet.h"
 #include "data/mnist.h"
 #include "layers/attention.h"
 #include "layers/conv2d.h"

@@ -35,6 +35,118 @@ import nsparity
 EPS = 1e-5
 
 
+def referencia_unet(g, EPS):
+    """Referencia de UNet2D, en su propia funcion y no suelta en main().
+
+    No es un capricho de estilo. Todos los casos de este exportador comparten un
+    unico ambito y el diccionario final se construye al terminar, asi que un
+    nombre repetido se lleva el ultimo valor: al escribir esto se reutilizo `xu`,
+    que ya usaba el caso de Upsample2D, y `up_x` acabo conteniendo la entrada de
+    la U-Net. Ahi se noto porque las formas no cuadraban y el binario aborto; si
+    hubieran cuadrado, la comparacion habria pasado midiendo el tensor
+    equivocado, que es el peor fallo posible en un arnes de paridad. Dentro de
+    una funcion eso no puede ocurrir.
+    """
+    # --- UNet2D.
+    #
+    # El ultimo caso de la fase y el mas util: los componentes ya tienen paridad
+    # uno a uno, asi que lo que queda por verificar no son los numeros de cada
+    # capa sino el **cableado** —el orden de los canales al concatenar, que salto
+    # se une con que subida, y que el gradiente que vuelve a cada salto sea la
+    # suma de los dos caminos que lo alcanzan. Las diferencias finitas ya
+    # comprueban que el backward deriva ESE forward; esto comprueba que ese
+    # forward es la arquitectura que dice ser. Son garantias distintas y ninguna
+    # sustituye a la otra: un cableado coherente pero equivocado pasa las
+    # diferencias finitas sin inmutarse.
+    Nu, Cu, DTu, Gu, Hu = 2, 8, 16, 2, 8
+    x_unet = torch.randn(Nu, 1, Hu, Hu, generator=g, dtype=torch.float32, requires_grad=True)
+    # El forward calcula el embedding a partir de los pasos, no lo recibe hecho,
+    # asi que la referencia parte tambien de pasos reales y lo construye igual
+    # que TimeEmbedding —senos y luego cosenos, concatenados—, que ya tiene su
+    # propia paridad en el caso te_. Pasarle el embedding ya hecho dejaria esa
+    # conexion sin comprobar.
+    pasos_u = torch.tensor([3.0, 470.0], dtype=torch.float32)
+    mit_u = DTu // 2
+    fr_u = torch.exp(-math.log(10000.0) * torch.arange(mit_u, dtype=torch.float32) / mit_u)
+    ang_u = pasos_u[:, None] * fr_u[None, :]
+    t_unet = torch.cat([torch.sin(ang_u), torch.cos(ang_u)], dim=1)
+    w_unet = torch.randn(Nu, 1, Hu, Hu, generator=g, dtype=torch.float32)
+
+    def bloque(cin, cout):
+        """Un ResBlockTiempo de referencia, ya validado por el caso rb_."""
+        d = {"n1": nn.GroupNorm(Gu, cin, eps=EPS, dtype=torch.float32),
+             "c1": nn.Conv2d(cin, cout, 3, padding=1, dtype=torch.float32),
+             "pt": nn.Linear(DTu, cout, dtype=torch.float32),
+             "n2": nn.GroupNorm(Gu, cout, eps=EPS, dtype=torch.float32),
+             "c2": nn.Conv2d(cout, cout, 3, padding=1, dtype=torch.float32)}
+        # El atajo solo existe cuando cambian los canales; si no, es la identidad.
+        if cin != cout:
+            d["at"] = nn.Conv2d(cin, cout, 1, dtype=torch.float32)
+        with torch.no_grad():
+            for k, capa in d.items():
+                escala = 1.0 if k in ("n1", "n2") else 0.2
+                capa.weight.copy_(torch.randn(capa.weight.shape, generator=g) * escala)
+                capa.bias.copy_(torch.randn(capa.bias.shape, generator=g) * escala)
+        return d
+
+    def aplicar(d, h, temb):
+        z = d["c1"](nn.functional.silu(d["n1"](h)))
+        z = z + d["pt"](nn.functional.silu(temb))[:, :, None, None]
+        z = d["c2"](nn.functional.silu(d["n2"](z)))
+        return z + (d["at"](h) if "at" in d else h)
+
+    u_ce = nn.Conv2d(1, Cu, 3, padding=1, dtype=torch.float32)
+    u_cs = nn.Conv2d(Cu, 1, 3, padding=1, dtype=torch.float32)
+    u_ns = nn.GroupNorm(Gu, Cu, eps=EPS, dtype=torch.float32)
+    with torch.no_grad():
+        for capa, escala in ((u_ce, 0.2), (u_cs, 0.2), (u_ns, 1.0)):
+            capa.weight.copy_(torch.randn(capa.weight.shape, generator=g) * escala)
+            capa.bias.copy_(torch.randn(capa.bias.shape, generator=g) * escala)
+
+    b_b0 = bloque(Cu, Cu)
+    b_b1 = bloque(Cu, 2 * Cu)
+    b_ce = bloque(2 * Cu, 2 * Cu)
+    b_a1 = bloque(4 * Cu, Cu)
+    b_a0 = bloque(2 * Cu, Cu)
+
+    h_unet = u_ce(x_unet)
+    salto0_unet = aplicar(b_b0, h_unet, t_unet)
+    baj0_unet = nn.functional.avg_pool2d(salto0_unet, 2)          # Downsample2D: media 2x2
+    salto1_unet = aplicar(b_b1, baj0_unet, t_unet)
+    baj1_unet = nn.functional.avg_pool2d(salto1_unet, 2)
+    centro_unet = aplicar(b_ce, baj1_unet, t_unet)
+    up1_unet = nn.functional.interpolate(centro_unet, scale_factor=2, mode="nearest")
+    alt1_unet = aplicar(b_a1, torch.cat([up1_unet, salto1_unet], dim=1), t_unet)   # el que sube primero
+    up0_unet = nn.functional.interpolate(alt1_unet, scale_factor=2, mode="nearest")
+    alt0_unet = aplicar(b_a0, torch.cat([up0_unet, salto0_unet], dim=1), t_unet)
+    y_unet = u_cs(nn.functional.silu(u_ns(alt0_unet)))
+    (y_unet * w_unet).sum().backward()
+
+    def vuelca(prefijo, d, destino):
+        for k, capa in d.items():
+            if isinstance(capa, nn.Linear):
+                destino[f"{prefijo}_{k}_w"] = capa.weight.detach().T.contiguous().numpy()
+            else:
+                destino[f"{prefijo}_{k}_w"] = capa.weight.detach().numpy()
+            destino[f"{prefijo}_{k}_b"] = capa.bias.detach().numpy()
+
+    salida_u = {
+        "un_meta": np.array([Nu, Cu, DTu, Gu, Hu], dtype=np.float32),
+        "un_x": x_unet.detach().numpy(),
+        "un_pasos": pasos_u.numpy(),
+        "un_w": w_unet.numpy(),
+        "un_y": y_unet.detach().numpy(),
+        "un_dx": x_unet.grad.detach().numpy(),
+        "un_ce_w": u_ce.weight.detach().numpy(), "un_ce_b": u_ce.bias.detach().numpy(),
+        "un_cs_w": u_cs.weight.detach().numpy(), "un_cs_b": u_cs.bias.detach().numpy(),
+        "un_ns_w": u_ns.weight.detach().numpy(), "un_ns_b": u_ns.bias.detach().numpy(),
+    }
+    for pre, d in (("un_b0", b_b0), ("un_b1", b_b1), ("un_ct", b_ce),
+                   ("un_a1", b_a1), ("un_a0", b_a0)):
+        vuelca(pre, d, salida_u)
+    return salida_u
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/tmp/bloques_ref.nsp")
@@ -266,6 +378,8 @@ def main():
     yb = hb + at(xb)
     (yb * wb).sum().backward()
 
+    unet_t = referencia_unet(g, EPS)
+
     tensors = {
         "rb_meta": np.array([Nb, Cin, Cout, Hb, Wb, DT, G], dtype=np.float32),
         "rb_x": xb.detach().numpy(),
@@ -353,6 +467,7 @@ def main():
         "silu_y": y_silu.detach().numpy(),
         "silu_dx": dx_silu.numpy(),
     }
+    tensors.update(unet_t)
     nsparity.write(args.out, tensors)
 
     print(f"Escrito {args.out}")

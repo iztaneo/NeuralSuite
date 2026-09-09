@@ -254,6 +254,65 @@ int main(int argc, char** argv) {
     out["rb_dt"] = AArray(rb.GradTiempo());
   }
 
+  // --- UNet2D
+  //
+  // Aqui lo que se contrasta no son los numeros de cada capa —eso ya lo cubren
+  // los casos de arriba— sino el cableado: el orden de los canales al
+  // concatenar, que salto se une con que subida, y que el gradiente que vuelve
+  // a cada salto sume los dos caminos que lo alcanzan. Los pesos entran por
+  // nombre, submodulo a submodulo, para que un fallo senale al cableado y no a
+  // un orden mal adivinado en la lista plana de parametros.
+  {
+    const nsparity::Array& um = Require(ref, "un_meta");
+    const int Cu = static_cast<int>(um.data[1]);
+    const int DTu = static_cast<int>(um.data[2]);
+    const int Gu = static_cast<int>(um.data[3]);
+
+    diffusion::UNet2D unet(1, Cu, DTu, Gu);
+
+    auto cargar_norm = [&](GroupNormLayer& capa, const std::string& g, const std::string& b) {
+      const Tensor tg = ATensor(Require(ref, g)), tb = ATensor(Require(ref, b));
+      std::memcpy(capa.Gamma().Data(), tg.Data(), tg.TotalSize() * sizeof(float));
+      std::memcpy(capa.Beta().Data(), tb.Data(), tb.TotalSize() * sizeof(float));
+    };
+    auto cargar_conv = [&](Conv2D& capa, const std::string& w, const std::string& b) {
+      const Tensor tw = ATensor(Require(ref, w)), tb = ATensor(Require(ref, b));
+      std::memcpy(capa.Weight().Data(), tw.Data(), tw.TotalSize() * sizeof(float));
+      std::memcpy(capa.Bias().Data(), tb.Data(), tb.TotalSize() * sizeof(float));
+    };
+    auto cargar_lin = [&](Linear& capa, const std::string& w, const std::string& b) {
+      const Tensor tw = ATensor(Require(ref, w)), tb = ATensor(Require(ref, b));
+      std::memcpy(capa.Weight().Data(), tw.Data(), tw.TotalSize() * sizeof(float));
+      std::memcpy(capa.Bias().Data(), tb.Data(), tb.TotalSize() * sizeof(float));
+    };
+    auto cargar_bloque = [&](diffusion::ResBlockTiempo& rb, const std::string& p) {
+      cargar_norm(rb.Norm1(), p + "_n1_w", p + "_n1_b");
+      cargar_norm(rb.Norm2(), p + "_n2_w", p + "_n2_b");
+      cargar_conv(rb.Conv1(), p + "_c1_w", p + "_c1_b");
+      cargar_conv(rb.Conv2(), p + "_c2_w", p + "_c2_b");
+      cargar_lin(rb.ProyTiempo(), p + "_pt_w", p + "_pt_b");
+      // El atajo solo existe cuando cambian los canales; la referencia tampoco
+      // lo exporta en ese caso, asi que las dos condiciones tienen que coincidir
+      // o el Require de abajo lo delata.
+      if (rb.Atajo() != nullptr) cargar_conv(*rb.Atajo(), p + "_at_w", p + "_at_b");
+    };
+
+    cargar_conv(unet.ConvEntrada(), "un_ce_w", "un_ce_b");
+    cargar_conv(unet.ConvSalida(), "un_cs_w", "un_cs_b");
+    cargar_norm(unet.NormSalida(), "un_ns_w", "un_ns_b");
+    cargar_bloque(unet.ResBaja0(), "un_b0");
+    cargar_bloque(unet.ResBaja1(), "un_b1");
+    cargar_bloque(unet.ResCentro(), "un_ct");
+    cargar_bloque(unet.ResAlta1(), "un_a1");
+    cargar_bloque(unet.ResAlta0(), "un_a0");
+
+    const Tensor ux = ATensor(Require(ref, "un_x"));
+    const Tensor up = ATensor(Require(ref, "un_pasos"));
+    const Tensor uw = ATensor(Require(ref, "un_w"));
+    out["un_y"] = AArray(unet.Forward(ux, up));
+    out["un_dx"] = AArray(unet.Backward(uw));
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;
