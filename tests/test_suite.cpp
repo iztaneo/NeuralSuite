@@ -5148,9 +5148,50 @@ void TestMnistYDataLoader() {
     Check(protesto, "aceptó un índice de lote fuera de rango");
   }
 
+  // 9. `Partir()` debe COMPARTIR el almacenamiento, no copiarlo.
+  //
+  //    Ésta es la prueba que faltaba, y su ausencia dejó pasar un defecto real:
+  //    la primera versión pasaba los tensores como lvalue a un parámetro por
+  //    valor, y el constructor de copia de `Tensor` reserva memoria nueva. Los
+  //    datos salían correctos —la prueba de reparto pasaba— pero cada hijo se
+  //    llevaba una copia completa del conjunto mientras la documentación decía
+  //    lo contrario. Verificar el comportamiento no basta cuando lo que se
+  //    promete es una propiedad de arquitectura.
+  {
+    DataLoader dl(mnist.imagenes, mnist.etiquetas, 1, true, 3);
+    auto [grande, pequeno] = dl.Partir(0.3f);
+    Check(dl.CompartioDatosCon(grande),
+          "el hijo grande copió el conjunto en vez de compartirlo");
+    Check(dl.CompartioDatosCon(pequeno),
+          "el hijo pequeño copió el conjunto en vez de compartirlo");
+    Check(grande.CompartioDatosCon(pequeno),
+          "los dos hijos no comparten entre sí");
+  }
+
+  // 10. Una cabecera con dimensiones absurdas debe rechazarse ANTES de
+  //     multiplicarlas. Medido sin la comprobación: 0xFFFFFFFF en las tres da
+  //     12 884 901 887 en vez del producto real, o sea que desborda. Ahí lo
+  //     cazaba la comprobación de tamaño por casualidad, pero una cabecera
+  //     fabricada podría hacer que cuadrase.
+  {
+    const std::string hostil = "/tmp/ns_test_idx_hostil.bin";
+    { std::ofstream f(hostil, std::ios::binary);
+      escribir_u32(f, 0x00000803u);
+      escribir_u32(f, 0xFFFFFFFFu); escribir_u32(f, 0xFFFFFFFFu); escribir_u32(f, 0xFFFFFFFFu);
+      const uint8_t relleno[10] = {0};
+      f.write(reinterpret_cast<const char*>(relleno), 10); }
+
+    Tensor t; int n2 = 0; std::string e;
+    Check(!LeerIdxImagenes(hostil, &t, &n2, &e),
+          "aceptó una cabecera con dimensiones imposibles");
+    Check(e.find("absurdas") != std::string::npos,
+          "el error no señala que las dimensiones son absurdas: " + e);
+    std::remove(hostil.c_str());
+  }
+
   std::remove(ruta_img.c_str());
   std::remove(ruta_lab.c_str());
-  std::cout << "PASADO ✅ (IDX big-endian, barajado reproducible y sin tocar el RNG global)\n"
+  std::cout << "PASADO ✅ (IDX big-endian, RNG propio, Partir sin copiar y cabecera hostil)\n"
             << std::flush;
 }
 

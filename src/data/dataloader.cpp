@@ -120,10 +120,16 @@ std::pair<DataLoader, DataLoader> DataLoader::Partir(float fraccion_segunda) con
   std::vector<int> primera(indices_.begin(), indices_.end() - n_segunda);
   std::vector<int> segunda(indices_.end() - n_segunda, indices_.end());
 
-  return {DataLoader(entradas_, objetivos_, std::move(primera), lote_, barajar_,
-                     estado_, permitir_parcial_),
-          DataLoader(entradas_, objetivos_, std::move(segunda), lote_, barajar_,
-                     estado_ + 1u, permitir_parcial_)};
+  // `View()` devuelve un tensor que COMPARTE el almacenamiento, y al ser un
+  // temporal entra al parametro por valor moviendose, no copiandose. Pasar
+  // `entradas_` directamente compilaba igual pero invocaba el constructor de
+  // copia, que en `Tensor` reserva memoria nueva: cada hijo se llevaba una copia
+  // completa del conjunto. Con MNIST son 180 MB de mas por partir; con algo
+  // mayor, una bomba silenciosa.
+  return {DataLoader(entradas_.View(entradas_.Shape()), objetivos_.View(objetivos_.Shape()),
+                     std::move(primera), lote_, barajar_, estado_, permitir_parcial_),
+          DataLoader(entradas_.View(entradas_.Shape()), objetivos_.View(objetivos_.Shape()),
+                     std::move(segunda), lote_, barajar_, estado_ + 1u, permitir_parcial_)};
 }
 
 }  // namespace data

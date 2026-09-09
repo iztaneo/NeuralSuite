@@ -6,6 +6,7 @@
 #include "data/mnist.h"
 
 #include <fstream>
+#include <limits>
 
 namespace neuralsuite {
 namespace data {
@@ -70,6 +71,30 @@ bool LeerIdxImagenes(const std::string& ruta, Tensor* salida, int* n, std::strin
   const uint32_t total = LeerU32BE(datos.data() + 4);
   const uint32_t filas = LeerU32BE(datos.data() + 8);
   const uint32_t cols = LeerU32BE(datos.data() + 12);
+
+  // El producto se comprueba ANTES de calcularlo, como hace `ValidateShape` en
+  // el tensor. Sin esto, una cabecera que anuncie 0xFFFFFFFF en las tres
+  // dimensiones desborda y devuelve 12 884 901 887 en vez del valor real:
+  // medido. Aqui la comprobacion de tamano lo caza igual, pero por casualidad
+  // —el numero que salio no coincidia con el archivo—, y una cabecera fabricada
+  // podria hacer que cuadrase.
+  //
+  // Ademas IDX usa uint32 y `Tensor` usa int, asi que un valor por encima de
+  // INT_MAX se convertiria en negativo y llegaria a `Resize` como dimension
+  // invalida, con un mensaje que no explica de donde viene.
+  constexpr uint32_t kMaxDim = 1u << 30;   // holgado: MNIST son 28x28 y 60 000
+  if (total > kMaxDim || filas > kMaxDim || cols > kMaxDim) {
+    *error = "'" + ruta + "': la cabecera anuncia dimensiones absurdas (" +
+             std::to_string(total) + "x" + std::to_string(filas) + "x" +
+             std::to_string(cols) + "); el archivo esta corrupto o no es IDX.";
+    return false;
+  }
+  if (filas != 0 && cols != 0 &&
+      static_cast<uint64_t>(total) >
+          std::numeric_limits<uint64_t>::max() / filas / cols) {
+    *error = "'" + ruta + "': el numero total de pixeles desborda.";
+    return false;
+  }
   const size_t esperados = static_cast<size_t>(total) * filas * cols;
   if (datos.size() != 16 + esperados) {
     *error = "'" + ruta + "': la cabecera anuncia " + std::to_string(total) + "x" +
@@ -110,6 +135,11 @@ bool LeerIdxEtiquetas(const std::string& ruta, Tensor* salida, int* n, std::stri
     return false;
   }
   const uint32_t total = LeerU32BE(datos.data() + 4);
+  if (total > (1u << 30)) {
+    *error = "'" + ruta + "': la cabecera anuncia " + std::to_string(total) +
+             " etiquetas; el archivo esta corrupto o no es IDX.";
+    return false;
+  }
   if (datos.size() != 8 + total) {
     *error = "'" + ruta + "': la cabecera anuncia " + std::to_string(total) +
              " etiquetas y el archivo trae " + std::to_string(datos.size() - 8) + ".";

@@ -1190,10 +1190,14 @@ con PyTorch y ahora corpus en español.
       | El nuestro (4 capas, `n_embd` 128, ctx 256) | 1.0 MB | **0.79 MB** |
       | GPT-2 small | 75.5 MB | 56 MB |
       | LLaMA-7B | 4.3 GB | 3.2 GB |
-      | LLaMA-70B, ctx 32k | 171.8 GB | 129 GB |
+      | Un 70B con contexto 32k | 171.8 GB | 129 GB |
 
-      En LLaMA-70B la caché no cabe en la GPU y GQA decide si el modelo se puede
-      servir. Aquí ahorraría 0.79 MB.
+      Las dos últimas filas son **órdenes de magnitud, no configuraciones
+      reales**: suponen atención multi-cabeza pura y `float32`, mientras que los
+      modelos de esa talla ya usan GQA y suelen servirse en 16 bits. Valen para
+      ver la escala del problema —a ese tamaño la caché no cabe en la GPU y GQA
+      decide si el modelo se puede servir—, no para comparar configuraciones
+      equivalentes. Aquí ahorraría 0.79 MB.
 
       Y no es gratis: **cambia capacidad por memoria**. Con `n_embd` 128 y sólo 4
       cabezas, una proporción 4:1 dejaría **una única** cabeza de clave-valor
@@ -1270,14 +1274,31 @@ Shakespeare— está intacto en visión.
         pesos y dos entrenamientos dejarían de ser comparables por algo que no
         tiene que ver con lo que se cambió. Es el mismo cuidado que en la
         validación de `train_llm`, y hay una prueba que lo fija.
-      - **Partición por índices**, no por copia: duplicar los tensores gastaría
-        la memoria del conjunto entero para nada. Y el corte va sobre los
-        índices **ya barajados**, porque cortar el orden original daría
-        particiones sesgadas si los datos vienen agrupados por clase, que es
-        como vienen muchos conjuntos.
-      - **El último lote incompleto se descarta** por defecto: cambia la escala
-        del gradiente y mete un salto al final de cada época que parece del
-        modelo y es del cargador.
+      - **Partición por índices**, no por copia, y el corte va sobre los índices
+        **ya barajados**: cortar el orden original daría particiones sesgadas si
+        los datos vienen agrupados por clase, que es como vienen muchos
+        conjuntos.
+
+        **La primera versión no cumplía la mitad de esa promesa.** Pasaba los
+        tensores como *lvalue* a un parámetro por valor, y el constructor de
+        copia de `Tensor` reserva memoria nueva: cada hijo se llevaba una copia
+        completa del conjunto. Nada fallaba —los datos eran correctos— pero
+        partir gastaba el doble de memoria mientras la documentación afirmaba lo
+        contrario. Con MNIST son ~180 MB de más; con algo mayor, una bomba
+        silenciosa. Se arregla pasando `View()`, que comparte almacenamiento y,
+        al ser un temporal, entra moviéndose en vez de copiándose.
+
+        **La promesa es ahora comprobable**: `CompartioDatosCon()` y una prueba
+        que exige que los dos hijos compartan el almacenamiento con el padre. La
+        prueba anterior verificaba el comportamiento —los índices se reparten
+        bien— pero no la propiedad de arquitectura que el texto afirmaba.
+      - **El último lote incompleto se descarta** por defecto, para mantener el
+        tamaño de lote constante. La primera versión justificaba esto diciendo
+        que «cambia la escala del gradiente», y **era incorrecto**:
+        `CrossEntropyLoss` promedia y su backward divide entre `num_samples`, así
+        que 17 ejemplos y 32 dan gradientes de la misma escala. Lo que sí varía
+        es el **ruido** del gradiente, el rendimiento y cualquier estadística que
+        dependa del lote.
 
       Los archivos IDX de la prueba se **fabrican byte a byte** en vez de
       descargar MNIST: así es reproducible y sin red, y comprueba que el lector
@@ -1296,6 +1317,22 @@ juguete didáctico y se construye la implementación real:
 - [ ] `UNet2D` — bloques residuales condicionados por tiempo, skips por `Concat`
       (de ahí la Fase 13), atención en el centro, up/downsampling.
 - [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
+
+  **El orden importa, y cada escalón lleva su examen.** Construir la U-Net entera
+  de golpe y descubrir a las ocho horas que no aprende es la forma cara de
+  averiguarlo:
+
+  1. `DiffusionSchedule` — `q_sample` contra PyTorch
+  2. `SinusoidalTimeEmbedding` — paridad numérica
+  3. Bloque residual condicionado por tiempo — paridad de forward y backward
+  4. **U-Net mínima: sobreajustar 8–32 imágenes a propósito**
+  5. DDPM sobre MNIST completo
+  6. DDIM — mismo modelo, otro muestreador
+
+  El paso 4 es el que decide si se sigue. Si la red **no puede memorizar** un
+  puñado de dígitos, hay un defecto en la arquitectura, en el backward o en el
+  entrenamiento, y ninguna cantidad de épocas lo va a arreglar. Es una puerta de
+  minutos que ahorra una tarde.
 
 ### Por qué MNIST y no CIFAR
 

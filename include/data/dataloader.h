@@ -35,10 +35,14 @@ namespace data {
  *    que comparten los mismos datos y se reparten los indices. Copiar los
  *    tensores duplicaria la memoria del conjunto entero para nada.
  *
- * 3. **El ultimo lote incompleto se descarta por defecto.** Un lote a medias
- *    cambia la escala del gradiente respecto a los demas, y eso mete un salto en
- *    la curva de perdida al final de cada epoca que parece del modelo y es del
- *    cargador. `permitir_parcial` lo activa para quien lo necesite.
+ * 3. **El ultimo lote incompleto se descarta por defecto**, para mantener el
+ *    tamano de lote constante. Lo que varia con un lote a medias no es la escala
+ *    del gradiente —`CrossEntropyLoss` promedia, y su backward divide entre
+ *    `num_samples`, asi que 17 ejemplos y 32 dan gradientes de la misma escala—
+ *    sino el **ruido** del gradiente, el rendimiento, y cualquier estadistica que
+ *    dependa del lote. Con una perdida que sumara en vez de promediar si
+ *    cambiaria la escala, y por eso conviene no depender de ello.
+ *    `permitir_parcial` lo activa para quien lo necesite.
  */
 class DataLoader {
  public:
@@ -74,6 +78,21 @@ class DataLoader {
 
   /** @brief Dos cargadores que se reparten los indices, sin copiar los datos. */
   [[nodiscard]] std::pair<DataLoader, DataLoader> Partir(float fraccion_segunda) const;
+
+  /**
+   * @brief Cierto si comparte el almacenamiento del conjunto con `otro`.
+   *
+   * Existe para que la promesa de `Partir()` sea comprobable y no solo una
+   * afirmacion de la documentacion. La primera version SI copiaba: pasaba los
+   * tensores como lvalue a un parametro por valor, y el constructor de copia de
+   * `Tensor` reserva memoria nueva. Nada fallaba —los datos eran correctos— pero
+   * partir un conjunto gastaba el doble de memoria mientras la documentacion
+   * decia que no.
+   */
+  [[nodiscard]] bool CompartioDatosCon(const DataLoader& otro) const {
+    return entradas_.SharesStorageWith(otro.entradas_) &&
+           objetivos_.SharesStorageWith(otro.objetivos_);
+  }
 
  private:
   DataLoader(Tensor entradas, Tensor objetivos, std::vector<int> indices, int lote,
