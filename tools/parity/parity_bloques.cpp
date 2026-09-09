@@ -169,6 +169,21 @@ int main(int argc, char** argv) {
     out["sw_dWd"] = AArray(*sw.Down().GetGradients()[0]);
   }
 
+  // --- RoPE
+  {
+    const nsparity::Array& rm = Require(ref, "rope_meta");
+    const int heads = static_cast<int>(rm.data[2]);
+    const int pos0 = static_cast<int>(rm.data[4]);
+
+    const Tensor rx = ATensor(Require(ref, "rope_x"));
+    const Tensor rw = ATensor(Require(ref, "rope_w"));
+    Tensor ry, rdx;
+    RopeForward(rx, ry, heads, pos0);
+    RopeBackward(rw, rdx, heads, pos0);
+    out["rope_y"] = AArray(ry);
+    out["rope_dx"] = AArray(rdx);
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

@@ -4518,6 +4518,165 @@ void TestSwiGLU() {
             << std::flush;
 }
 
+/**
+ * @brief `RoPE`: rotación, y la propiedad que la hace valer.
+ *
+ * La paridad ya confirma la aritmética. Lo que se añade aquí es la razón de
+ * ser de RoPE: que el producto `q·k` dependa sólo de la **diferencia** de
+ * posiciones, no de las absolutas. Es lo que permite deslizar una ventana sin
+ * invalidar nada, y lo que a los embeddings aprendidos les cuesta caro —hoy
+ * obliga a reconstruir el KV-Cache casi en cada paso, 1.29 ms/token frente a
+ * 0.13—.
+ *
+ * Un test que sólo comprobara valores pasaría aunque la operación fuese otra
+ * rotación cualquiera. Ésta no.
+ */
+void TestRoPE() {
+  std::cout << "🧪 [Test 46] RoPE... " << std::flush;
+
+  const int B = 2, T = 5, HEADS = 2, HD = 8, C = HEADS * HD;
+
+  Tensor x({B, T, C});
+  for (size_t i = 0; i < x.TotalSize(); ++i) x[i] = 0.7f * std::sin(0.37f * i) + 0.1f;
+
+  // 1. Rotar y desrotar devuelve el punto de partida: la rotación es ortogonal.
+  {
+    Tensor y, vuelta;
+    RopeForward(x, y, HEADS, /*pos_inicial=*/3);
+    RopeBackward(y, vuelta, HEADS, /*pos_inicial=*/3);
+    double peor = 0.0;
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(vuelta[i]) - x[i]));
+    }
+    Check(peor < 1e-5, "rotar y desrotar no devuelve el original: " + std::to_string(peor));
+  }
+
+  // 2. Conserva la norma de cada cabeza, que es lo que caracteriza una rotación.
+  {
+    Tensor y;
+    RopeForward(x, y, HEADS, /*pos_inicial=*/7);
+    double peor = 0.0;
+    for (int bt = 0; bt < B * T; ++bt) {
+      for (int h = 0; h < HEADS; ++h) {
+        const size_t off = static_cast<size_t>(bt) * C + h * HD;
+        double na = 0.0, nb = 0.0;
+        for (int d = 0; d < HD; ++d) {
+          na += static_cast<double>(x[off + d]) * x[off + d];
+          nb += static_cast<double>(y[off + d]) * y[off + d];
+        }
+        peor = std::max(peor, std::abs(na - nb) / std::max(1.0, na));
+      }
+    }
+    Check(peor < 1e-5, "RoPE no conserva la norma: no es una rotación (" +
+                           std::to_string(peor) + ")");
+  }
+
+  // 3. LO QUE IMPORTA: el producto depende sólo de la diferencia de posiciones.
+  //    Se rotan dos vectores en (p, p+d) y en (p+k, p+k+d): el producto debe
+  //    coincidir. Con embeddings de posición aprendidos esto no se cumple.
+  {
+    const int hd = HD;
+    Tensor q({1, 1, hd}), k({1, 1, hd});
+    for (int i = 0; i < hd; ++i) {
+      q[i] = 0.5f * std::sin(1.1f * i) + 0.2f;
+      k[i] = 0.4f * std::cos(0.7f * i) - 0.1f;
+    }
+
+    auto producto = [&](int pq, int pk) {
+      Tensor rq, rk;
+      RopeForward(q, rq, /*n_head=*/1, pq);
+      RopeForward(k, rk, /*n_head=*/1, pk);
+      double acc = 0.0;
+      for (int i = 0; i < hd; ++i) acc += static_cast<double>(rq[i]) * rk[i];
+      return acc;
+    };
+
+    const double base = producto(2, 5);          // diferencia 3
+    for (int desplazamiento : {0, 4, 17, 100}) {
+      const double otro = producto(2 + desplazamiento, 5 + desplazamiento);
+      Check(std::abs(base - otro) / std::max(1.0, std::abs(base)) < 1e-4,
+            "el producto cambia al desplazar ambas posiciones: RoPE no está "
+            "codificando posición relativa (" + std::to_string(base) + " frente a " +
+            std::to_string(otro) + ")");
+    }
+
+    // Y con diferencia distinta SÍ debe cambiar, o no estaría codificando nada.
+    const double distinta = producto(2, 9);      // diferencia 7
+    Check(std::abs(base - distinta) > 1e-4,
+          "el producto no cambia con otra diferencia: RoPE no codifica posición");
+  }
+
+  // 4. La posición inicial importa: es lo que hay que pasar con KV-Cache.
+  {
+    Tensor y0, y5;
+    RopeForward(x, y0, HEADS, 0);
+    RopeForward(x, y5, HEADS, 5);
+    double peor = 0.0;
+    for (size_t i = 0; i < x.TotalSize(); ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(y0[i]) - y5[i]));
+    }
+    Check(peor > 1e-3,
+          "cambiar la posición inicial no altera nada: se estaría ignorando");
+  }
+
+  // 5. Los pares giran a VELOCIDADES DISTINTAS. Sin esto, RoPE seguiría siendo
+  //    una rotación ortogonal que codifica posición relativa —pasaría todas las
+  //    comprobaciones anteriores— pero habría perdido su escala de frecuencias,
+  //    que es lo que le permite distinguir distancias cortas de largas.
+  //
+  //    Se detectó al mutar: poner todos los ángulos iguales dejaba la prueba en
+  //    verde y sólo lo cazaba la paridad.
+  {
+    Tensor e({1, 1, HD});
+    e.Zeros();
+    e[0] = 1.0f;                     // primer par: (1, 0)
+    e[HD - 2] = 1.0f;                // último par: (1, 0)
+    Tensor r;
+    RopeForward(e, r, /*n_head=*/1, /*pos_inicial=*/1);
+
+    // El primer par gira θ=1 rad; el último, 1/base^((hd-2)/hd), casi nada.
+    const double giro_primero = std::abs(r[1]);
+    const double giro_ultimo = std::abs(r[HD - 1]);
+    Check(giro_primero > 0.5,
+          "el primer par apenas gira: " + std::to_string(giro_primero));
+    Check(giro_ultimo < giro_primero / 10.0,
+          "todos los pares giran igual: RoPE perdió su escala de frecuencias (" +
+              std::to_string(giro_primero) + " frente a " +
+              std::to_string(giro_ultimo) + ")");
+  }
+
+  // 6. El emparejamiento es de canales ADYACENTES, no la variante de LLaMA que
+  //    empareja `i` con `i + hd/2`. Las dos son rotaciones válidas y las dos
+  //    codifican posición relativa, así que sólo se distinguen mirando a dónde
+  //    va la energía. Con `x = e₀`, la componente que se activa debe ser la 1,
+  //    no la hd/2.
+  {
+    Tensor e({1, 1, HD});
+    e.Zeros();
+    e[0] = 1.0f;
+    Tensor r;
+    RopeForward(e, r, /*n_head=*/1, /*pos_inicial=*/1);
+    Check(std::abs(r[1]) > 0.5,
+          "la energía no va al canal adyacente: ¿convención de LLaMA?");
+    Check(std::abs(r[HD / 2]) < 1e-6,
+          "se activó el canal hd/2: es el emparejamiento de LLaMA, no el del "
+          "artículo, y no son intercambiables");
+  }
+
+  // Dimensión por cabeza impar: no hay con quién emparejar, debe abortar.
+  {
+    Tensor impar({1, 2, 6});
+    Tensor fuera;
+    bool protesto = false;
+    try { RopeForward(impar, fuera, /*n_head=*/2); }
+    catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "RoPE aceptó una dimensión por cabeza impar");
+  }
+
+  std::cout << "PASADO ✅ (ortogonal, conserva norma y codifica posición relativa)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -4568,6 +4727,7 @@ int main() {
   TestRemuestreo2D();
   TestCrossAttention();
   TestSwiGLU();
+  TestRoPE();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

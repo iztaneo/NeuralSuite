@@ -158,7 +158,50 @@ def main():
     y_sw = ld(nn.functional.silu(lg(xs)) * lu(xs))
     (y_sw * ws).sum().backward()
 
+    # --- RoPE.
+    #
+    # La referencia se escribe aqui con operaciones de torch en vez de tocar
+    # LLMRasec, que es el oraculo del proyecto y no se modifica. Para una
+    # operacion cerrada como esta basta: la formula esta en el articulo y lo que
+    # se contrasta es la aritmetica, no una implementacion ajena.
+    #
+    # Convencion: pares ADYACENTES (0,1), (2,3), ... que es la del articulo
+    # original. LLaMA usa la otra —empareja i con i+hd/2— y no son
+    # intercambiables. Aqui se fija la del articulo en los dos lados.
+    Br, Tr, Hr2, HDr = 2, 5, 2, 8
+    Cr = Hr2 * HDr
+    xr = torch.randn(Br, Tr, Cr, generator=g, dtype=torch.float32)
+    wr = torch.randn(Br, Tr, Cr, generator=g, dtype=torch.float32)
+    POS0 = 3                      # posicion inicial distinta de cero, a proposito
+
+    def rope_ref(v, pos0):
+        out = v.clone()
+        for t in range(v.shape[1]):
+            p = pos0 + t
+            for h in range(Hr2):
+                o = h * HDr
+                for i in range(HDr // 2):
+                    th = p / (10000.0 ** (2.0 * i / HDr))
+                    c, sn = float(np.cos(th)), float(np.sin(th))
+                    a = v[:, t, o + 2 * i].clone()
+                    b = v[:, t, o + 2 * i + 1].clone()
+                    out[:, t, o + 2 * i] = a * c - b * sn
+                    out[:, t, o + 2 * i + 1] = a * sn + b * c
+        return out
+
+    y_rope = rope_ref(xr, POS0)
+    # El gradiente es la rotacion por el angulo opuesto, o sea la misma
+    # operacion con el seno cambiado de signo. Se obtiene rotando con -pos.
+    xr_g = xr.clone().requires_grad_(True)
+    y_auto = rope_ref(xr_g, POS0)
+    (y_auto * wr).sum().backward()
+
     tensors = {
+        "rope_meta": np.array([Br, Tr, Hr2, HDr, POS0], dtype=np.float32),
+        "rope_x": xr.numpy(),
+        "rope_w": wr.numpy(),
+        "rope_y": y_rope.numpy(),
+        "rope_dx": xr_g.grad.detach().numpy(),
         "sw_meta": np.array([Ds, Hs, Ns], dtype=np.float32),
         "sw_x": xs.detach().numpy(),
         "sw_w": ws.numpy(),

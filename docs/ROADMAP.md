@@ -1092,37 +1092,52 @@ KV-Cache (medido: 9.6×, misma secuencia exacta), recorte de gradiente,
 planificador de tasa de aprendizaje, checkpoint/resume, paridad de entrenamiento
 con PyTorch y ahora corpus en español.
 
-- [ ] **RoPE** — los cinco requisitos están en
-      [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md). Ojo con el
-      error clásico: al usar el KV-Cache hay que rotar con la posición absoluta,
-      no con el índice dentro de la caché.
+- [x] **RoPE como primitiva verificada** (`RopeForward` / `RopeBackward`).
+      Codifica la posición rotando pares de canales adyacentes; el ángulo del
+      par `i` en la posición `p` es `p / base^(2i/hd)`, así que cada par gira a
+      su velocidad. De ahí sale la propiedad que le da valor: **el producto
+      `q·k` depende sólo de la diferencia de posiciones**, porque el producto
+      escalar de dos vectores rotados depende del ángulo relativo.
 
-      Ya no es sólo extrapolación: **arregla que el KV-Cache deje de acelerar
-      pasada la ventana**. Con posiciones aprendidas hay que reconstruir la caché
-      casi en cada paso (medido: 1.29 ms/token frente a 0.13 dentro de la
-      ventana); con posición relativa, deslizar no invalida nada.
-- [x] **SwiGLU**: `(SiLU(x·Wg) ⊙ x·Wu) · Wd`. Sustituye al feed-forward
-      `Linear → GELU → Linear`. La diferencia es la **puerta**: dos proyecciones
-      y una regula a la otra elemento a elemento, así que la red decide por canal
-      cuánto deja pasar en vez de aplicar la misma curva a todos.
+      La rotación es ortogonal, así que el backward es la rotación por el ángulo
+      opuesto. Paridad 6.9e-08 en la salida y 4.4e-08 en el gradiente.
 
-      El precio son tres matrices en vez de dos. Para que los parámetros no
-      crezcan, LLaMA usa un oculto de `8/3` de la dimensión en vez de `4`:
-      `3·(8/3) = 8` frente a `2·4 = 8`. Está en `SwiGLU::OcultoLlama()`, con la
-      cuenta a la vista en lugar de escondida.
+      **La referencia de PyTorch se escribió en el propio arnés de paridad, sin
+      tocar `LLMRasec`.** Para una operación cerrada como ésta basta: la fórmula
+      está en el artículo y lo que se contrasta es la aritmética, no una
+      implementación ajena.
 
-      **Paridad contra PyTorch, pero con una salvedad que conviene decir**: no
-      existe un `nn.SwiGLU`, así que la referencia se **compone** con `nn.Linear`
-      y `F.silu`. Es una garantía más débil que contrastar contra `nn.RMSNorm`
-      —donde la pieza la escribió otro—, aunque sigue siendo útil porque el
-      autograd de PyTorch deriva esa composición por su cuenta. Peor error
-      relativo 3.2e-07 en salida, `dx` y los tres gradientes de peso.
+      Dos mutaciones enseñaron un hueco de la prueba unitaria y conviene
+      registrarlo, porque es el mejor argumento a favor de tener las dos capas:
+      usar el emparejamiento de LLaMA —`i` con `i + hd/2`— y hacer que todos los
+      pares giren igual **pasaban la prueba unitaria** y sólo las cazaba la
+      paridad. Las dos siguen siendo rotaciones ortogonales que codifican
+      posición relativa, así que cumplían todo lo que la prueba comprobaba. Se
+      añadieron dos comprobaciones —que la energía vaya al canal adyacente y que
+      el primer par gire diez veces más que el último— y ahora las cuatro
+      mutaciones caen en ambas capas.
 
-      La prueba unitaria compensa esa debilidad con una propiedad que sólo
-      cumple la versión correcta: **con la puerta saturada en negativo la salida
-      se anula**, porque `SiLU(−30) ≈ 0` mata el producto. Si la activación
-      estuviera en la otra rama, la puerta pasaría su valor crudo y la salida se
-      dispararía. Cuatro mutaciones, las cuatro rojas en ambas capas.
+- [ ] **Integrar RoPE en el GPT.** La primitiva está lista; conectarla exige tres
+      decisiones que no son técnicas y hay que tomarlas antes:
+
+      - **Qué pasa con `wpe_`.** RoPE la hace redundante: mantener las dos es
+        sumar dos señales de posición distintas. Retirarla **cambia el número de
+        parámetros y rompe los pesos guardados**, incluido el modelo en español
+        de la Fase 12. Hay que versionar el formato o convertir.
+      - **La referencia de PyTorch.** La paridad del GPT compara contra
+        `LLMRasec`; si el C++ rota y el oráculo no, falla por diseño. O se
+        actualiza el oráculo —que hasta ahora se ha mantenido intacto a
+        propósito— o el GPT con RoPE necesita su propio caso de paridad.
+      - **El KV-Cache.** `ForwardWithKVCache(token, pos)` debe rotar con la
+        posición **real**, no con el índice dentro de la caché. La primitiva ya
+        acepta `pos_inicial` para eso, y una mutación que lo ignora queda en
+        rojo en ambas capas.
+
+      A cambio, es lo que arregla que el KV-Cache deje de acelerar pasada la
+      ventana: hoy hay que reconstruirlo casi en cada paso —1.29 ms/token frente
+      a 0.13 dentro de la ventana— porque las posiciones aprendidas cambian al
+      deslizar.
+
 - [ ] **GQA**
 - [x] **Perplejidad** como métrica, sobre validación y sobre prueba. La da
       `apps/eval_llm.cpp`, añadido al cerrar la Fase 12: recorre las tres

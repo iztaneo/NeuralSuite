@@ -257,6 +257,39 @@ void SiluForward(const Tensor& input, Tensor& output);
 void SiluBackward(const Tensor& dout, const Tensor& input, Tensor& dx);
 
 /**
+ * @brief RoPE: codifica la posicion rotando pares de canales.
+ *
+ * `x` es `[lote, pasos, n_head * hd]`. Cada cabeza se rota por su cuenta, y
+ * dentro de ella los canales se toman **de dos en dos y adyacentes** —(0,1),
+ * (2,3), ...—, que es la convencion del articulo original. LLaMA usa otra
+ * —parte la cabeza por la mitad y empareja `i` con `i + hd/2`— y **las dos no
+ * son intercambiables**: producen rotaciones distintas sobre los mismos
+ * numeros. Mezclarlas es el error silencioso de esta operacion, porque el
+ * resultado sigue siendo una rotacion valida y nada falla.
+ *
+ * El angulo del par `i` en la posicion `p` es `p / base^(2i/hd)`. Pares
+ * distintos giran a velocidades distintas, y de ahi sale que el producto
+ * `q·k` acabe dependiendo solo de la **diferencia** de posiciones: la posicion
+ * entra como una rotacion, y el producto escalar entre dos vectores rotados
+ * depende del angulo relativo. Por eso deslizar una ventana no invalida nada,
+ * que es lo que a los embeddings aprendidos les cuesta caro.
+ *
+ * `pos_inicial` es la posicion absoluta del primer paso. Con KV-Cache hay que
+ * pasar la posicion REAL en la secuencia, no el indice dentro de la cache: es
+ * el error clasico de esta combinacion.
+ *
+ * La rotacion es ortogonal, asi que su gradiente es la rotacion inversa. Eso
+ * hace el backward barato y da una propiedad comprobable: rotar y desrotar
+ * devuelve el punto de partida.
+ */
+void RopeForward(const Tensor& input, Tensor& output, int n_head, int pos_inicial = 0,
+                 float base = 10000.0f);
+
+/** @brief Gradiente de `RopeForward`: la rotacion por el angulo opuesto. */
+void RopeBackward(const Tensor& dout, Tensor& dx, int n_head, int pos_inicial = 0,
+                  float base = 10000.0f);
+
+/**
  * @brief Tanh Forward & Backward
  */
 void TanhForward(const Tensor& input, Tensor& output);

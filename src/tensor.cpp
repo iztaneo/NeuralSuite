@@ -646,4 +646,65 @@ void SiluBackward(const Tensor& dout, const Tensor& input, Tensor& dx) {
   });
 }
 
+namespace {
+
+// Nucleo comun del forward y el backward: rotar por +angulo o por -angulo.
+// La rotacion es ortogonal, asi que la transpuesta —que es lo que pide el
+// backward— es la rotacion por el angulo opuesto, y no hace falta mas.
+void RotarPares(const Tensor& entrada, Tensor& salida, int n_head, int pos_inicial,
+                float base, float signo) {
+  const std::vector<int>& forma = entrada.Shape();
+  if (forma.size() != 3) {
+    throw std::invalid_argument(
+        "RoPE: se esperaba [lote, pasos, canales] y hay " +
+        std::to_string(forma.size()) + " ejes.");
+  }
+  const int lote = forma[0], pasos = forma[1], canales = forma[2];
+  if (n_head <= 0 || canales % n_head != 0) {
+    throw std::invalid_argument("RoPE: los canales no se reparten en las cabezas.");
+  }
+  const int hd = canales / n_head;
+  if (hd % 2 != 0) {
+    throw std::invalid_argument(
+        "RoPE: la dimension por cabeza debe ser par para emparejar los canales; "
+        "vale " + std::to_string(hd) + ".");
+  }
+
+  salida.Resize(forma);
+  parallel::ParallelFor(lote * pasos, /*min_per_thread=*/16, [&](int desde, int hasta) {
+    for (int bt = desde; bt < hasta; ++bt) {
+      const int t = bt % pasos;
+      const int pos = pos_inicial + t;
+      const size_t base_idx = static_cast<size_t>(bt) * canales;
+
+      for (int h = 0; h < n_head; ++h) {
+        const size_t off = base_idx + static_cast<size_t>(h) * hd;
+        for (int i = 0; i < hd / 2; ++i) {
+          // El exponente usa 2i/hd: los primeros pares giran rapido y los
+          // ultimos casi no giran, que es lo que da la escala de frecuencias.
+          const float theta = static_cast<float>(
+              pos / std::pow(static_cast<double>(base), 2.0 * i / hd));
+          const float c = std::cos(theta), sn = std::sin(theta) * signo;
+          const float a = entrada[off + 2 * i];
+          const float b = entrada[off + 2 * i + 1];
+          salida[off + 2 * i] = a * c - b * sn;
+          salida[off + 2 * i + 1] = a * sn + b * c;
+        }
+      }
+    }
+  });
+}
+
+}  // namespace
+
+void RopeForward(const Tensor& input, Tensor& output, int n_head, int pos_inicial,
+                 float base) {
+  RotarPares(input, output, n_head, pos_inicial, base, +1.0f);
+}
+
+void RopeBackward(const Tensor& dout, Tensor& dx, int n_head, int pos_inicial,
+                  float base) {
+  RotarPares(dout, dx, n_head, pos_inicial, base, -1.0f);
+}
+
 }  // namespace neuralsuite
