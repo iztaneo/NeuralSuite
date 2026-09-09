@@ -4978,6 +4978,182 @@ void TestDeslizarConRoPE() {
   std::cout << "PASADO ✅ (desalojar equivale a reconstruir con una capa)\n" << std::flush;
 }
 
+/**
+ * @brief Lector de MNIST y `DataLoader`.
+ *
+ * Los archivos IDX se fabrican aquí, byte a byte, en vez de descargar MNIST.
+ * Eso hace la prueba reproducible y sin red, y de paso comprueba que el lector
+ * entiende el formato de verdad: si se escribiera la cabecera con la misma
+ * función que la lee, un error de endianness se cancelaría solo.
+ *
+ * Los enteros del formato van en **big-endian**, y ésa es su única trampa:
+ * leerlos como little-endian —lo nativo aquí— convierte 60 000 imágenes en
+ * 50 331 648, un número tan absurdo que revienta en la reserva de memoria en
+ * vez de dar datos malos. Peor sería que cuadrase.
+ */
+void TestMnistYDataLoader() {
+  std::cout << "🧪 [Test 49] Lector de MNIST y DataLoader... " << std::flush;
+  using namespace neuralsuite::data;
+
+  const std::string ruta_img = "/tmp/ns_test_idx_img.bin";
+  const std::string ruta_lab = "/tmp/ns_test_idx_lab.bin";
+  const int N = 7, FILAS = 4, COLS = 3;
+
+  // Big-endian escrito a mano, que es la convención del formato.
+  auto escribir_u32 = [](std::ofstream& f, uint32_t v) {
+    const uint8_t b[4] = {static_cast<uint8_t>(v >> 24), static_cast<uint8_t>(v >> 16),
+                          static_cast<uint8_t>(v >> 8), static_cast<uint8_t>(v)};
+    f.write(reinterpret_cast<const char*>(b), 4);
+  };
+
+  {
+    std::ofstream f(ruta_img, std::ios::binary);
+    escribir_u32(f, 0x00000803u);
+    escribir_u32(f, N); escribir_u32(f, FILAS); escribir_u32(f, COLS);
+    for (int i = 0; i < N * FILAS * COLS; ++i) {
+      const uint8_t v = static_cast<uint8_t>((i * 17) % 256);
+      f.write(reinterpret_cast<const char*>(&v), 1);
+    }
+  }
+  {
+    std::ofstream f(ruta_lab, std::ios::binary);
+    escribir_u32(f, 0x00000801u);
+    escribir_u32(f, N);
+    for (int i = 0; i < N; ++i) {
+      const uint8_t v = static_cast<uint8_t>(i % 10);
+      f.write(reinterpret_cast<const char*>(&v), 1);
+    }
+  }
+
+  // 1. Lectura correcta: forma, normalización y valores.
+  ConjuntoMnist mnist;
+  std::string err;
+  Check(LeerMnist(ruta_img, ruta_lab, &mnist, &err), "no se pudo leer el IDX: " + err);
+  Check(mnist.n == N, "número de ejemplos equivocado: " + std::to_string(mnist.n));
+  Check(mnist.imagenes.Shape() == std::vector<int>({N, 1, FILAS, COLS}),
+        "la forma no es [N, 1, filas, columnas]");
+  Check(mnist.etiquetas.Shape() == std::vector<int>({N}), "las etiquetas no son [N]");
+
+  for (int i = 0; i < N * FILAS * COLS; ++i) {
+    const float esperado = static_cast<float>((i * 17) % 256) / 255.0f;
+    Check(std::abs(mnist.imagenes[i] - esperado) < 1e-6,
+          "el píxel " + std::to_string(i) + " no se normalizó a [0,1]");
+  }
+  for (int i = 0; i < N; ++i) {
+    Check(mnist.etiquetas[i] == static_cast<float>(i % 10), "etiqueta equivocada");
+  }
+
+  // 2. Confundir los dos archivos es el error fácil, porque los nombres se
+  //    parecen. Debe decirlo, no cargar basura.
+  {
+    ConjuntoMnist otro;
+    std::string e2;
+    Check(!LeerMnist(ruta_lab, ruta_img, &otro, &e2),
+          "aceptó las etiquetas como si fueran imágenes");
+    Check(e2.find("ETIQUETAS") != std::string::npos,
+          "el error no explica que los archivos están intercambiados: " + e2);
+  }
+
+  // 3. Cuentas que no cuadran: imágenes y etiquetas de distinto tamaño.
+  {
+    const std::string corto = "/tmp/ns_test_idx_lab2.bin";
+    { std::ofstream f(corto, std::ios::binary);
+      escribir_u32(f, 0x00000801u); escribir_u32(f, N - 2);
+      for (int i = 0; i < N - 2; ++i) { const uint8_t v = 0; f.write((const char*)&v, 1); } }
+    ConjuntoMnist otro;
+    std::string e3;
+    Check(!LeerMnist(ruta_img, corto, &otro, &e3),
+          "emparejó 7 imágenes con 5 etiquetas");
+    std::remove(corto.c_str());
+  }
+
+  // --- DataLoader
+  // 4. Reparte todos los ejemplos, sin repetir ni perder ninguno.
+  {
+    DataLoader dl(mnist.imagenes, mnist.etiquetas, /*lote=*/2, /*barajar=*/true,
+                  /*semilla=*/99);
+    Check(dl.NumLotes() == 3, "con 7 ejemplos y lote 2 deberían salir 3 lotes completos");
+
+    std::vector<int> vistas(N, 0);
+    Tensor x, y;
+    for (int k = 0; k < dl.NumLotes(); ++k) {
+      dl.Lote(k, &x, &y);
+      Check(x.Shape()[0] == 2 && y.Shape()[0] == 2, "el lote no tiene el tamaño pedido");
+      for (int i = 0; i < 2; ++i) {
+        const int etiqueta = static_cast<int>(y[i]);
+        Check(etiqueta >= 0 && etiqueta < N, "etiqueta fuera de rango tras barajar");
+        vistas[etiqueta]++;
+      }
+    }
+    int repetidos = 0;
+    for (int v : vistas) if (v > 1) repetidos++;
+    Check(repetidos == 0, "algún ejemplo salió más de una vez en la misma época");
+  }
+
+  // 5. Reproducible: misma semilla, mismo orden. Y semillas distintas, distinto.
+  {
+    DataLoader a(mnist.imagenes, mnist.etiquetas, 2, true, 7);
+    DataLoader b(mnist.imagenes, mnist.etiquetas, 2, true, 7);
+    DataLoader c(mnist.imagenes, mnist.etiquetas, 2, true, 8);
+    Tensor xa, ya, xb, yb, xc, yc;
+    a.Lote(0, &xa, &ya); b.Lote(0, &xb, &yb); c.Lote(0, &xc, &yc);
+    bool iguales = true, distintos = false;
+    for (size_t i = 0; i < ya.TotalSize(); ++i) {
+      if (ya[i] != yb[i]) iguales = false;
+      if (ya[i] != yc[i]) distintos = true;
+    }
+    Check(iguales, "la misma semilla no da el mismo orden");
+    Check(distintos, "semillas distintas dan el mismo orden: ¿baraja de verdad?");
+  }
+
+  // 6. El barajado NO toca el generador global. Si lo tocara, cambiar el lote
+  //    alteraría la inicialización de los pesos y dos entrenamientos dejarían de
+  //    ser comparables por algo que no tiene que ver con lo que se cambió.
+  {
+    ManualSeed(4242);
+    Tensor antes({4});
+    antes.RandomNormal(0.0f, 1.0f);
+
+    ManualSeed(4242);
+    DataLoader ruido(mnist.imagenes, mnist.etiquetas, 3, true, 555);
+    Tensor tx, ty;
+    ruido.Lote(0, &tx, &ty);
+    ruido.SiguienteEpoca();
+    Tensor despues({4});
+    despues.RandomNormal(0.0f, 1.0f);
+
+    for (size_t i = 0; i < antes.TotalSize(); ++i) {
+      Check(antes[i] == despues[i],
+            "el DataLoader consumió del generador global: el entrenamiento dejaría "
+            "de ser reproducible al cambiar el lote");
+    }
+  }
+
+  // 7. Partir reparte los índices sin perder ni duplicar.
+  {
+    DataLoader dl(mnist.imagenes, mnist.etiquetas, 1, true, 3);
+    auto [grande, pequeno] = dl.Partir(0.3f);
+    Check(grande.Tamano() + pequeno.Tamano() == N,
+          "partir pierde o duplica ejemplos: " + std::to_string(grande.Tamano()) +
+              " + " + std::to_string(pequeno.Tamano()));
+    Check(pequeno.Tamano() > 0 && grande.Tamano() > 0, "una de las partes quedó vacía");
+  }
+
+  // 8. Pedir un lote fuera de rango aborta en vez de leer memoria ajena.
+  {
+    DataLoader dl(mnist.imagenes, mnist.etiquetas, 2, false, 1);
+    Tensor x, y;
+    bool protesto = false;
+    try { dl.Lote(dl.NumLotes(), &x, &y); } catch (const std::out_of_range&) { protesto = true; }
+    Check(protesto, "aceptó un índice de lote fuera de rango");
+  }
+
+  std::remove(ruta_img.c_str());
+  std::remove(ruta_lab.c_str());
+  std::cout << "PASADO ✅ (IDX big-endian, barajado reproducible y sin tocar el RNG global)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -5031,6 +5207,7 @@ int main() {
   TestRoPE();
   TestRoPEEnElGPT();
   TestDeslizarConRoPE();
+  TestMnistYDataLoader();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

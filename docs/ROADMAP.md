@@ -1118,7 +1118,7 @@ desbloquean el transformer moderno, que es el examen principal—:
 
 Cada una con su paridad contra PyTorch, como el resto.
 
-## Fase 15 — Transformer moderno ⬜ (corresponde a 0.8)
+## Fase 15 — Transformer moderno ✅ (corresponde a 0.8)
 
 **Sigue siendo el examen principal del framework, y está a mitad.** Ya hay
 KV-Cache (medido: 9.6×, misma secuencia exacta), recorte de gradiente,
@@ -1180,7 +1180,33 @@ con PyTorch y ahora corpus en español.
       mezclan en ninguna de las dos direcciones**. Comprobado además de extremo
       a extremo: entrenar con `--rope`, guardar, cargar y generar.
 
-- [ ] **GQA**
+- [x] **GQA: decidido no implementarlo todavía, con el número delante.** Varias
+      cabezas de consulta comparten un juego de `K`/`V`, así que la caché ocupa
+      la fracción correspondiente. Su beneficio es **memoria de caché**, y eso
+      depende del tamaño:
+
+      | | Caché KV | GQA 4:1 ahorraría |
+      | --- | --- | --- |
+      | El nuestro (4 capas, `n_embd` 128, ctx 256) | 1.0 MB | **0.79 MB** |
+      | GPT-2 small | 75.5 MB | 56 MB |
+      | LLaMA-7B | 4.3 GB | 3.2 GB |
+      | LLaMA-70B, ctx 32k | 171.8 GB | 129 GB |
+
+      En LLaMA-70B la caché no cabe en la GPU y GQA decide si el modelo se puede
+      servir. Aquí ahorraría 0.79 MB.
+
+      Y no es gratis: **cambia capacidad por memoria**. Con `n_embd` 128 y sólo 4
+      cabezas, una proporción 4:1 dejaría **una única** cabeza de clave-valor
+      —el extremo, Multi-Query Attention—, que es un recorte grande en un modelo
+      ya pequeño. Pagaría un coste real de capacidad para ahorrar algo que no
+      falta: medido, la generación va a 0.06 ms/token con 1 MB de caché, y el
+      cuello de botella es el `MatMul`, que GQA apenas toca.
+
+      Es el caso que describe [la primera regla](#las-dos-reglas): no aporta
+      corrección demostrable, ni rendimiento medible, ni capacidad nueva.
+      **Cobra sentido cuando la memoria sea la restricción que ata**; con esta
+      arquitectura, alrededor de 12 capas y contexto 2048 la caché ya ronda los
+      150 MB y ahí empieza a notarse.
 - [x] **Perplejidad** como métrica, sobre validación y sobre prueba. La da
       `apps/eval_llm.cpp`, añadido al cerrar la Fase 12: recorre las tres
       particiones enteras con `--completo` y aborta si los pesos no cargan, en
@@ -1213,15 +1239,50 @@ con PyTorch y ahora corpus en español.
 NeuralSuite y PyTorch siguen trayectorias de entrenamiento equivalentes. Eso es
 más fuerte que la paridad de un solo paso que ya existe.
 
-## Fase 16 — Datos ⬜
+## Fase 16 — Datos ✅
 
 **Fase que el plan original no tenía y sin la cual las siguientes no arrancan.**
 Hoy **no existe ningún cargador de datasets**: nada lee MNIST ni CIFAR. El mismo
 agujero que costó medio día descubrir en el LLM —donde el corpus eran 3.2 KB de
 Shakespeare— está intacto en visión.
 
-- [ ] **Lector de MNIST** con verificación de checksum y formato.
-- [ ] **`DataLoader`**: lotes, barajado y partición reproducibles.
+- [x] **Lector de MNIST** (formato IDX). Su única trampa es que **los enteros
+      van en big-endian**: leerlos como little-endian —lo nativo aquí— convierte
+      60 000 imágenes en 50 331 648, un número tan absurdo que revienta en la
+      reserva de memoria. Peor sería que cuadrase.
+
+      Comprueba las dos cosas que fallan en silencio: que el número mágico sea el
+      que toca —confundir el archivo de imágenes con el de etiquetas es el error
+      fácil, porque los nombres sólo se diferencian en una palabra— y que las dos
+      cuentas coincidan, porque emparejar mal dejaría entrenando con etiquetas
+      corridas sin que nada fallara.
+
+      El orden de las comprobaciones importa y lo enseñó la prueba: al validar
+      primero el **tamaño** de la cabecera, intercambiar los archivos daba
+      «cabecera truncada», que no dice nada. Ahora el número mágico se comprueba
+      primero —bastan 4 bytes— y el mensaje señala el problema real.
+
+- [x] **`DataLoader`**: lotes, barajado y partición reproducibles. Tres
+      decisiones que parecen detalles:
+
+      - **Generador propio.** El barajado no toca el generador global. Si lo
+        tocara, cambiar el tamaño de lote alteraría la inicialización de los
+        pesos y dos entrenamientos dejarían de ser comparables por algo que no
+        tiene que ver con lo que se cambió. Es el mismo cuidado que en la
+        validación de `train_llm`, y hay una prueba que lo fija.
+      - **Partición por índices**, no por copia: duplicar los tensores gastaría
+        la memoria del conjunto entero para nada. Y el corte va sobre los
+        índices **ya barajados**, porque cortar el orden original daría
+        particiones sesgadas si los datos vienen agrupados por clase, que es
+        como vienen muchos conjuntos.
+      - **El último lote incompleto se descarta** por defecto: cambia la escala
+        del gradiente y mete un salto al final de cada época que parece del
+        modelo y es del cargador.
+
+      Los archivos IDX de la prueba se **fabrican byte a byte** en vez de
+      descargar MNIST: así es reproducible y sin red, y comprueba que el lector
+      entiende el formato: escribir la cabecera con la misma función que la lee
+      habría cancelado un error de endianness. Cinco mutaciones, las cinco rojas.
 
 ## Fase 17 — Difusión de verdad ⬜ (corresponde a 0.9)
 
