@@ -232,7 +232,55 @@ def main():
     ang = pasos_te[:, None] * frec[None, :]
     emb_te = torch.cat([torch.sin(ang), torch.cos(ang)], dim=1)
 
+    # --- ResBlockTiempo.
+    #
+    # No hay modulo que importar: la referencia se COMPONE con nn.GroupNorm,
+    # F.silu, nn.Conv2d y nn.Linear siguiendo la estructura de DDPM. Es una
+    # garantia mas debil que contrastar contra una pieza ajena —igual que en
+    # SwiGLU— pero el autograd de PyTorch deriva la composicion por su cuenta,
+    # que es justo lo que aqui interesa: el backward de este bloque tiene cuatro
+    # ramas y es donde es facil equivocarse.
+    Nb, Cin, Cout, Hb, Wb, DT, G = 2, 4, 6, 8, 8, 16, 2
+    xb = torch.randn(Nb, Cin, Hb, Wb, generator=g, dtype=torch.float32,
+                     requires_grad=True)
+    tb = torch.randn(Nb, DT, generator=g, dtype=torch.float32, requires_grad=True)
+    wb = torch.randn(Nb, Cout, Hb, Wb, generator=g, dtype=torch.float32)
+
+    n1 = nn.GroupNorm(G, Cin, eps=EPS, dtype=torch.float32)
+    c1 = nn.Conv2d(Cin, Cout, 3, padding=1, dtype=torch.float32)
+    pt = nn.Linear(DT, Cout, dtype=torch.float32)
+    n2 = nn.GroupNorm(G, Cout, eps=EPS, dtype=torch.float32)
+    c2 = nn.Conv2d(Cout, Cout, 3, padding=1, dtype=torch.float32)
+    at = nn.Conv2d(Cin, Cout, 1, dtype=torch.float32)
+    with torch.no_grad():
+        for capa in (n1, n2):
+            capa.weight.copy_(torch.randn(capa.weight.shape, generator=g))
+            capa.bias.copy_(torch.randn(capa.bias.shape, generator=g))
+        for capa in (c1, c2, at, pt):
+            capa.weight.copy_(torch.randn(capa.weight.shape, generator=g) * 0.2)
+            capa.bias.copy_(torch.randn(capa.bias.shape, generator=g) * 0.2)
+
+    hb = c1(nn.functional.silu(n1(xb)))
+    hb = hb + pt(nn.functional.silu(tb))[:, :, None, None]   # por canal
+    hb = c2(nn.functional.silu(n2(hb)))
+    yb = hb + at(xb)
+    (yb * wb).sum().backward()
+
     tensors = {
+        "rb_meta": np.array([Nb, Cin, Cout, Hb, Wb, DT, G], dtype=np.float32),
+        "rb_x": xb.detach().numpy(),
+        "rb_t": tb.detach().numpy(),
+        "rb_w": wb.numpy(),
+        "rb_n1_g": n1.weight.detach().numpy(), "rb_n1_b": n1.bias.detach().numpy(),
+        "rb_n2_g": n2.weight.detach().numpy(), "rb_n2_b": n2.bias.detach().numpy(),
+        "rb_c1_w": c1.weight.detach().numpy(), "rb_c1_b": c1.bias.detach().numpy(),
+        "rb_c2_w": c2.weight.detach().numpy(), "rb_c2_b": c2.bias.detach().numpy(),
+        "rb_at_w": at.weight.detach().numpy(), "rb_at_b": at.bias.detach().numpy(),
+        "rb_pt_w": pt.weight.detach().T.contiguous().numpy(),
+        "rb_pt_b": pt.bias.detach().numpy(),
+        "rb_y": yb.detach().numpy(),
+        "rb_dx": xb.grad.detach().numpy(),
+        "rb_dt": tb.grad.detach().numpy(),
         "te_meta": np.array([DIM_T, len(pasos_te)], dtype=np.float32),
         "te_pasos": pasos_te.numpy(),
         "te_emb": emb_te.numpy(),

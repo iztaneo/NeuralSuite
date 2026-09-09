@@ -213,6 +213,47 @@ int main(int argc, char** argv) {
     out["te_emb"] = AArray(emb);
   }
 
+  // --- ResBlockTiempo
+  {
+    const nsparity::Array& rm = Require(ref, "rb_meta");
+    const int Cin = static_cast<int>(rm.data[1]);
+    const int Cout = static_cast<int>(rm.data[2]);
+    const int DT = static_cast<int>(rm.data[5]);
+    const int G = static_cast<int>(rm.data[6]);
+
+    diffusion::ResBlockTiempo rb(Cin, Cout, DT, G);
+    auto cargar_norm = [&](GroupNormLayer& capa, const char* g, const char* b) {
+      const Tensor tg = ATensor(Require(ref, g)), tb = ATensor(Require(ref, b));
+      std::memcpy(capa.Gamma().Data(), tg.Data(), tg.TotalSize() * sizeof(float));
+      std::memcpy(capa.Beta().Data(), tb.Data(), tb.TotalSize() * sizeof(float));
+    };
+    auto cargar_conv = [&](Conv2D& capa, const char* w, const char* b) {
+      const Tensor tw = ATensor(Require(ref, w)), tb = ATensor(Require(ref, b));
+      std::memcpy(capa.Weight().Data(), tw.Data(), tw.TotalSize() * sizeof(float));
+      std::memcpy(capa.Bias().Data(), tb.Data(), tb.TotalSize() * sizeof(float));
+    };
+    cargar_norm(rb.Norm1(), "rb_n1_g", "rb_n1_b");
+    cargar_norm(rb.Norm2(), "rb_n2_g", "rb_n2_b");
+    cargar_conv(rb.Conv1(), "rb_c1_w", "rb_c1_b");
+    cargar_conv(rb.Conv2(), "rb_c2_w", "rb_c2_b");
+    cargar_conv(*rb.Atajo(), "rb_at_w", "rb_at_b");
+    {
+      const Tensor pw = ATensor(Require(ref, "rb_pt_w"));
+      const Tensor pb = ATensor(Require(ref, "rb_pt_b"));
+      std::memcpy(rb.ProyTiempo().Weight().Data(), pw.Data(),
+                  pw.TotalSize() * sizeof(float));
+      std::memcpy(rb.ProyTiempo().Bias().Data(), pb.Data(),
+                  pb.TotalSize() * sizeof(float));
+    }
+
+    const Tensor rx = ATensor(Require(ref, "rb_x"));
+    const Tensor rt = ATensor(Require(ref, "rb_t"));
+    const Tensor rw = ATensor(Require(ref, "rb_w"));
+    out["rb_y"] = AArray(rb.Forward(rx, rt));
+    out["rb_dx"] = AArray(rb.Backward(rw));
+    out["rb_dt"] = AArray(rb.GradTiempo());
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

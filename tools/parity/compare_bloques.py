@@ -33,7 +33,8 @@ def main():
                "sw_y", "sw_dx", "sw_dWg", "sw_dWu", "sw_dWd",
                "rope_y", "rope_dx",
                "dif_beta", "dif_alpha_bar", "dif_xt", "dif_x0_rec",
-               "te_emb"):
+               "te_emb",
+               "rb_y", "rb_dx", "rb_dt"):
         if nombre not in cpp:
             print(f"  {nombre:<14} {'FALTA en la salida de C++':>38}")
             return 1

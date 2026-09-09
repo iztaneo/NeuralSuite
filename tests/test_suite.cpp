@@ -5448,6 +5448,134 @@ void TestTimeEmbedding() {
   std::cout << "PASADO ✅ (concatenado, continuo y con escala de frecuencias)\n" << std::flush;
 }
 
+/**
+ * @brief `ResBlockTiempo`: el bloque que se repite por toda la U-Net.
+ *
+ * Es la primera pieza de la fase que combina varias capas —`GroupNorm`, `SiLU`,
+ * `Conv2D` y la inyección del tiempo—, y su backward tiene cuatro ramas. La
+ * paridad ya confirma los números; esto añade las tres propiedades estructurales
+ * que un número correcto no garantiza.
+ */
+void TestResBlockTiempo() {
+  std::cout << "🧪 [Test 52] ResBlockTiempo... " << std::flush;
+  using namespace neuralsuite::diffusion;
+
+  const int N = 2, CIN = 4, COUT = 6, H = 8, W = 8, DT = 16, G = 2;
+
+  Tensor x({N, CIN, H, W}), t({N, DT}), w({N, COUT, H, W});
+  ManualSeed(61);
+  x.RandomNormal(0.0f, 1.0f);
+  t.RandomNormal(0.0f, 1.0f);
+  w.RandomNormal(0.0f, 1.0f);
+
+  ManualSeed(83);
+  ResBlockTiempo rb(CIN, COUT, DT, G);
+
+  const Tensor y = rb.Forward(x, t);
+  Check(y.Shape() == std::vector<int>({N, COUT, H, W}),
+        "la salida no conserva la resolución ni cambia a los canales pedidos");
+
+  const Tensor dx = rb.Backward(w);
+  const Tensor dt = rb.GradTiempo();
+  Check(dx.Shape() == x.Shape(), "dx no tiene la forma de la entrada");
+  Check(dt.Shape() == t.Shape(), "el gradiente del tiempo no tiene su forma");
+
+  // 1. Gradientes contra diferencias finitas, en las DOS entradas. Con cuatro
+  //    ramas en el backward, esto es lo que distingue "compila" de "deriva".
+  {
+    auto perdida = [&](const Tensor& xx, const Tensor& tt) {
+      const Tensor s = rb.Forward(xx, tt);
+      double l = 0.0;
+      for (size_t i = 0; i < s.TotalSize(); ++i) l += w[i] * s[i];
+      return l;
+    };
+    const float h = 1e-3f;
+    double peor_x = 0.0, peor_t = 0.0;
+    for (size_t i = 0; i < x.TotalSize(); i += 37) {
+      Tensor xp = x, xm = x;
+      xp[i] += h; xm[i] -= h;
+      const double num = (perdida(xp, t) - perdida(xm, t)) / (2.0 * h);
+      peor_x = std::max(peor_x, std::abs(num - dx[i]) / std::max(1.0, std::abs(num)));
+    }
+    for (size_t i = 0; i < t.TotalSize(); i += 5) {
+      Tensor tp = t, tm = t;
+      tp[i] += h; tm[i] -= h;
+      const double num = (perdida(x, tp) - perdida(x, tm)) / (2.0 * h);
+      peor_t = std::max(peor_t, std::abs(num - dt[i]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor_x < 1e-2, "el gradiente de la entrada no cuadra: " + std::to_string(peor_x));
+    Check(peor_t < 1e-2, "el gradiente del tiempo no cuadra: " + std::to_string(peor_t));
+  }
+
+  // 2. El tiempo se suma POR CANAL, no por píxel, y la consecuencia práctica
+  //    es que **el mismo bloque sirve para cualquier resolución**. Con
+  //    inyección por píxel la proyección tendría el tamaño del mapa y cambiar
+  //    de resolución dejaría de encajar.
+  //
+  //    La primera versión de esta comprobación miraba si el efecto del tiempo
+  //    era constante dentro de cada canal **a la salida**, y era incorrecta: la
+  //    suma es constante en la inyección, pero después pasa por `GroupNorm` y
+  //    una convolución 3×3 que la redistribuyen espacialmente. La propiedad se
+  //    cumple donde se inyecta, no donde se mide.
+  {
+    const int H2 = 16, W2 = 12;   // otra resolución, mismos pesos
+    Tensor x2({N, CIN, H2, W2});
+    ManualSeed(97);
+    x2.RandomNormal(0.0f, 1.0f);
+    const Tensor otra = rb.Forward(x2, t);
+    Check(otra.Shape() == std::vector<int>({N, COUT, H2, W2}),
+          "el bloque no funciona a otra resolución: ¿el tiempo entra por píxel?");
+
+    // Y la proyección del tiempo entrega un valor por canal, no por posición.
+    Check(rb.ProyTiempo().Weight().Shape() == std::vector<int>({DT, COUT}),
+          "la proyección del tiempo no es [dim_tiempo, canales]: su tamaño "
+          "dependería de la resolución");
+  }
+
+  // 3. El atajo existe y lleva convolución sólo cuando cambian los canales.
+  //    Con los mismos entra y sale, debe ser la identidad: es lo que hace que el
+  //    gradiente llegue intacto hacia abajo en una red profunda.
+  {
+    ManualSeed(83);
+    ResBlockTiempo igual(COUT, COUT, DT, G);
+    Check(igual.Atajo() == nullptr,
+          "con los mismos canales el atajo no debería llevar convolución");
+    ResBlockTiempo distinto(CIN, COUT, DT, G);
+    Check(distinto.Atajo() != nullptr,
+          "al cambiar de canales hace falta convolución en el atajo");
+  }
+
+  // 4. El residuo suma de verdad. Si la rama principal se anulara, la salida
+  //    debería ser exactamente el atajo; se comprueba poniendo a cero la última
+  //    convolución, que es lo único que separa ambas ramas.
+  {
+    ManualSeed(83);
+    ResBlockTiempo probe(CIN, COUT, DT, G);
+    probe.Conv2().Weight().Zeros();
+    probe.Conv2().Bias().Zeros();
+    const Tensor s = probe.Forward(x, t);
+    const Tensor atajo = probe.Atajo()->Forward(x);
+    double peor = 0.0;
+    for (size_t i = 0; i < s.TotalSize(); ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(s[i]) - atajo[i]));
+    }
+    Check(peor < 1e-5,
+          "con la rama principal anulada la salida no es el atajo: el residuo no "
+          "se está sumando (" + std::to_string(peor) + ")");
+  }
+
+  // 5. Llamar al Forward de una entrada sola no tiene sentido aquí y debe
+  //    decirlo, en vez de inventarse un tiempo.
+  {
+    bool protesto = false;
+    try { rb.Forward(x); } catch (const std::logic_error&) { protesto = true; }
+    Check(protesto, "aceptó un Forward sin el embedding del paso");
+  }
+
+  std::cout << "PASADO ✅ (dos gradientes, tiempo por canal y residuo que suma)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -5504,6 +5632,7 @@ int main() {
   TestMnistYDataLoader();
   TestDiffusionSchedule();
   TestTimeEmbedding();
+  TestResBlockTiempo();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

@@ -31,6 +31,7 @@
 
 // Specialized Neural Network Layers
 #include "data/dataloader.h"
+#include "diffusion/resblock.h"
 #include "diffusion/schedule.h"
 #include "diffusion/time_embedding.h"
 #include "data/mnist.h"

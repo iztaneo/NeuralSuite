@@ -1361,6 +1361,38 @@ juguete didáctico y se construye la implementación real:
       poner todas las frecuencias iguales pasaba desapercibido. Tres mutaciones,
       las tres rojas en ambas capas.
 - [ ] `DDPMSampler` y `DDIMSampler`.
+- [x] **`ResBlockTiempo`**, la pieza que se repite por toda la U-Net. Tercer
+      escalón, y el primero con peso real: combina `GroupNorm`, `SiLU`, `Conv2D`
+      y la inyección del paso, y su backward tiene cuatro ramas.
+
+      Tres decisiones que no son evidentes: **el tiempo se suma por canal, no por
+      píxel** —el paso es una propiedad de la imagen entera, y por eso el mismo
+      bloque sirve a cualquier resolución—; **el atajo lleva convolución sólo si
+      cambian los canales**, porque con los mismos la identidad es lo que deja
+      llegar el gradiente intacto hacia abajo; y la normalización va **antes** de
+      la activación, igual que en el transformer del proyecto.
+
+      Paridad: salida 1.3e-07, `dx` 1.8e-07, gradiente del tiempo 2.2e-07.
+      Referencia compuesta con `nn.GroupNorm`, `F.silu`, `nn.Conv2d` y
+      `nn.Linear` —no hay módulo que importar—, lo que es una garantía más débil
+      pero suficiente aquí, porque lo que interesa es que el autograd de PyTorch
+      derive la composición y contrastar contra eso el backward de cuatro ramas.
+
+      La prueba unitaria comprueba los gradientes de **las dos entradas** contra
+      diferencias finitas, que el residuo suma de verdad —anulando la última
+      convolución, la salida debe ser exactamente el atajo— y que el bloque
+      funciona a otra resolución con los mismos pesos.
+
+      Esa última comprobación sustituyó a una equivocada: la primera versión
+      exigía que el efecto del tiempo fuese constante dentro de cada canal **a la
+      salida**, y falló. La suma sí es constante donde se inyecta, pero después
+      pasa por `GroupNorm` y una convolución 3×3 que la redistribuyen. La
+      propiedad se cumple donde se inyecta, no donde se mide.
+
+      Cuatro mutaciones, las cuatro rojas en ambas capas: olvidar el atajo en el
+      backward, no sumar sobre las posiciones al propagar el tiempo, no sumar el
+      atajo en el forward, y derivar `SiLU` con la salida en vez de la entrada.
+
 - [ ] `UNet2D` — bloques residuales condicionados por tiempo, skips por `Concat`
       (de ahí la Fase 13), atención en el centro, up/downsampling.
 - [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
