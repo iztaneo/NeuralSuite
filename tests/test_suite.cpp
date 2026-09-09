@@ -5333,6 +5333,121 @@ void TestDiffusionSchedule() {
   std::cout << "PASADO ✅ (varianza preservada, ida y vuelta exacta y rangos)\n" << std::flush;
 }
 
+/**
+ * @brief `TimeEmbedding`: la escala de frecuencias, no sólo números distintos.
+ *
+ * La paridad ya confirma los valores. Lo que añade esta prueba es la propiedad
+ * que hace útil al embedding: que **pasos cercanos den vectores parecidos**.
+ * Cualquier función que devuelva algo distinto por cada `t` pasaría una prueba
+ * de valores; sólo una con escala de frecuencias da continuidad, que es lo que
+ * permite a la red interpolar entre pasos que no vio exactamente.
+ */
+void TestTimeEmbedding() {
+  std::cout << "🧪 [Test 51] TimeEmbedding... " << std::flush;
+  using namespace neuralsuite::diffusion;
+
+  const int DIM = 32;
+
+  // 1. Forma, y el caso t=0: senos a cero, cosenos a uno.
+  {
+    Tensor t({3});
+    t[0] = 0.0f; t[1] = 1.0f; t[2] = 50.0f;
+    Tensor emb;
+    TimeEmbedding(t, DIM, &emb);
+    Check(emb.Shape() == std::vector<int>({3, DIM}), "la forma no es [N, dim]");
+
+    for (int k = 0; k < DIM / 2; ++k) {
+      Check(std::abs(emb[k]) < 1e-6, "en t=0 los senos deberían valer 0");
+      Check(std::abs(emb[DIM / 2 + k] - 1.0f) < 1e-6,
+            "en t=0 los cosenos deberían valer 1");
+    }
+  }
+
+  // 2. Senos y cosenos CONCATENADOS, no intercalados. Se distingue mirando t=0:
+  //    con la convención correcta la primera mitad es toda cero y la segunda
+  //    toda uno; intercalados, se alternarían. Las dos variantes son embeddings
+  //    válidos, así que sin esto la mutación pasaría desapercibida.
+  {
+    Tensor t({1});
+    t[0] = 0.0f;
+    Tensor emb;
+    TimeEmbedding(t, DIM, &emb);
+    bool primera_mitad_cero = true, segunda_mitad_uno = true;
+    for (int k = 0; k < DIM / 2; ++k) {
+      if (std::abs(emb[k]) > 1e-6) primera_mitad_cero = false;
+      if (std::abs(emb[DIM / 2 + k] - 1.0f) > 1e-6) segunda_mitad_uno = false;
+    }
+    Check(primera_mitad_cero && segunda_mitad_uno,
+          "senos y cosenos parecen intercalados en vez de concatenados");
+  }
+
+  // 3. LA PROPIEDAD QUE IMPORTA: pasos cercanos, vectores cercanos. Se compara
+  //    la distancia de t=500 con t=501 frente a la de t=500 con t=900.
+  {
+    Tensor t({3});
+    t[0] = 500.0f; t[1] = 501.0f; t[2] = 900.0f;
+    Tensor emb;
+    TimeEmbedding(t, DIM, &emb);
+
+    auto distancia = [&](int a, int b) {
+      double s = 0.0;
+      for (int k = 0; k < DIM; ++k) {
+        const double d = static_cast<double>(emb[a * DIM + k]) - emb[b * DIM + k];
+        s += d * d;
+      }
+      return std::sqrt(s);
+    };
+    const double cerca = distancia(0, 1);
+    const double lejos = distancia(0, 2);
+    Check(cerca < lejos,
+          "t=501 no está más cerca de t=500 que t=900: no hay escala de "
+          "frecuencias (" + std::to_string(cerca) + " frente a " +
+              std::to_string(lejos) + ")");
+    Check(cerca > 0.0, "dos pasos distintos dan el mismo vector");
+  }
+
+  // 4. Los canales giran a velocidades muy distintas: el primero cambia mucho
+  //    entre pasos consecutivos y el último casi nada. Sin eso el embedding
+  //    seguiría siendo continuo pero perdería la escala, igual que pasaba en
+  //    RoPE con todos los pares a la misma frecuencia.
+  {
+    Tensor t({2});
+    t[0] = 0.0f; t[1] = 1.0f;
+    Tensor emb;
+    TimeEmbedding(t, DIM, &emb);
+    const double primero = std::abs(static_cast<double>(emb[DIM + 0]) - emb[0]);
+    const double ultimo = std::abs(
+        static_cast<double>(emb[DIM + DIM / 2 - 1]) - emb[DIM / 2 - 1]);
+    Check(primero > 0.5, "el primer canal apenas cambia entre pasos consecutivos");
+    Check(ultimo < primero / 100.0,
+          "todos los canales giran igual: se perdió la escala de frecuencias (" +
+              std::to_string(primero) + " frente a " + std::to_string(ultimo) + ")");
+  }
+
+  // 5. Cada componente está acotada en [-1, 1], porque son senos y cosenos.
+  {
+    Tensor t({4});
+    for (int i = 0; i < 4; ++i) t[i] = static_cast<float>(i * 333);
+    Tensor emb;
+    TimeEmbedding(t, DIM, &emb);
+    for (size_t i = 0; i < emb.TotalSize(); ++i) {
+      Check(emb[i] >= -1.0001f && emb[i] <= 1.0001f,
+            "una componente se sale de [-1, 1]: " + std::to_string(emb[i]));
+    }
+  }
+
+  // 6. Dimensión impar: no hay forma de repartir a medias. Debe abortar.
+  {
+    Tensor t({1});
+    Tensor fuera;
+    bool protesto = false;
+    try { TimeEmbedding(t, 7, &fuera); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "aceptó una dimensión impar");
+  }
+
+  std::cout << "PASADO ✅ (concatenado, continuo y con escala de frecuencias)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -5388,6 +5503,7 @@ int main() {
   TestDeslizarConRoPE();
   TestMnistYDataLoader();
   TestDiffusionSchedule();
+  TestTimeEmbedding();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

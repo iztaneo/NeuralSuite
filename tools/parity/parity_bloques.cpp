@@ -203,6 +203,16 @@ int main(int argc, char** argv) {
     out["dif_x0_rec"] = AArray(x0_rec);
   }
 
+  // --- TimeEmbedding
+  {
+    const nsparity::Array& tm = Require(ref, "te_meta");
+    const int dim = static_cast<int>(tm.data[0]);
+    const Tensor pasos = ATensor(Require(ref, "te_pasos"));
+    Tensor emb;
+    diffusion::TimeEmbedding(pasos, dim, &emb);
+    out["te_emb"] = AArray(emb);
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

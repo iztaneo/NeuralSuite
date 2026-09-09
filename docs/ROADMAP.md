@@ -1337,7 +1337,29 @@ juguete didáctico y se construye la implementación real:
       vez de `double` se desvía 7.1e-07 en relativo —medido—, así que no es un
       defecto. El comentario del código decía que float «pierde dígitos justo
       donde más importa» y era falso; corregido.
-- [ ] `SinusoidalTimeEmbedding`.
+- [x] **`TimeEmbedding` sinusoidal.** Segundo escalón. La U-Net necesita saber en
+      qué paso está, porque quitar ruido cuando queda mucho no se parece a
+      quitarlo cuando queda poco. Pasarle el número crudo no sirve: un escalar
+      entre 0 y 999 entra con una escala que no se parece a la de las
+      activaciones, y una sola dimensión da muy poca señal para condicionar
+      cientos de canales.
+
+      La solución es la misma que la posición en un transformer: proyectar el
+      paso sobre senos y cosenos de periodos muy distintos, de modo que **pasos
+      cercanos den vectores parecidos**. Eso es lo que permite a la red
+      interpolar entre pasos que no vio exactamente.
+
+      Convención de DDPM: primero todos los senos, luego todos los cosenos,
+      **concatenados, no intercalados**. La variante intercalada es igual de
+      válida y produce un embedding igual de suave, así que mezclarlas no rompe
+      nada visible y no coincide con ninguna referencia. Se fija explícitamente
+      en los dos lados de la paridad.
+
+      Paridad 8.6e-06. La prueba unitaria añade la continuidad —que `t=501` esté
+      más cerca de `t=500` que `t=900`— y que los canales giren a velocidades
+      muy distintas, que es la misma comprobación que hizo falta en RoPE cuando
+      poner todas las frecuencias iguales pasaba desapercibido. Tres mutaciones,
+      las tres rojas en ambas capas.
 - [ ] `DDPMSampler` y `DDIMSampler`.
 - [ ] `UNet2D` — bloques residuales condicionados por tiempo, skips por `Concat`
       (de ahí la Fase 13), atención en el centro, up/downsampling.

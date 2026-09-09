@@ -21,6 +21,7 @@ Uso:
 """
 
 import argparse
+import math
 import os
 import sys
 
@@ -218,7 +219,23 @@ def main():
     xt_d = torch.sqrt(ab_sel) * x0d + torch.sqrt(1.0 - ab_sel) * ruido_d
     x0_rec = (xt_d - torch.sqrt(1.0 - ab_sel) * ruido_d) / torch.sqrt(ab_sel)
 
+    # --- TimeEmbedding sinusoidal.
+    #
+    # Convencion de DDPM: primero todos los senos, luego todos los cosenos. La
+    # variante intercalada es igual de valida y no coincide con esta, asi que se
+    # fija explicitamente en los dos lados.
+    DIM_T = 32
+    pasos_te = torch.tensor([0.0, 1.0, 7.0, 50.0, 500.0, 999.0], dtype=torch.float32)
+    mitad = DIM_T // 2
+    frec = torch.exp(-math.log(10000.0) *
+                     torch.arange(mitad, dtype=torch.float32) / mitad)
+    ang = pasos_te[:, None] * frec[None, :]
+    emb_te = torch.cat([torch.sin(ang), torch.cos(ang)], dim=1)
+
     tensors = {
+        "te_meta": np.array([DIM_T, len(pasos_te)], dtype=np.float32),
+        "te_pasos": pasos_te.numpy(),
+        "te_emb": emb_te.numpy(),
         "dif_meta": np.array([PASOS, Nd, Cd, Hd, Wd], dtype=np.float32),
         "dif_beta": betas_ref.to(torch.float32).numpy(),
         "dif_alpha_bar": ab_ref.to(torch.float32).numpy(),
