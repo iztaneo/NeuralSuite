@@ -121,8 +121,20 @@ class UNet2D : public Module {
    * y producir un modelo silenciosamente equivocado.
    */
   ///@{
-  bool GuardarPesos(const std::string& ruta);
-  bool CargarPesos(const std::string& ruta);
+  /**
+   * @param extra metadatos adicionales que se escriben en el archivo junto a
+   *        los de la arquitectura. Sirve para sellar un checkpoint con un
+   *        identificador comun a los varios archivos que lo forman.
+   */
+  bool GuardarPesos(const std::string& ruta,
+                    const std::map<std::string, std::string>& extra = {});
+
+  /**
+   * @param leidos si se da, recibe todos los metadatos del archivo, incluidos
+   *        los que la arquitectura no exige.
+   */
+  bool CargarPesos(const std::string& ruta,
+                   std::map<std::string, std::string>* leidos = nullptr);
 
   /** @brief Lo que el archivo declara esperar: canales, dim del tiempo, grupos. */
   [[nodiscard]] std::map<std::string, std::string> MetadatosArquitectura() const;

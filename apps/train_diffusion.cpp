@@ -30,6 +30,7 @@
 
 #include <array>
 #include <map>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -186,56 +187,113 @@ int main(int argc, char** argv) {
     return std::array<std::string, 3>{base, base + ".ema", base + ".opt"};
   };
   int it_inicial = 1;
+
+  // Un checkpoint son tres archivos, y escribirlos en su sitio uno detras de
+  // otro deja una ventana de varios segundos en la que un corte los mezcla:
+  // pesos nuevos con estado de Adam viejo, por ejemplo. Los tres son
+  // estructuralmente validos por separado, asi que reanudar de esa mezcla no
+  // daria ningun error; solo entrenaria mal.
+  //
+  // Por eso se escriben primero como `.tmp` y solo se mueven a su sitio cuando
+  // los tres estan completos. `std::rename` es atomico dentro del mismo sistema
+  // de archivos, asi que la ventana pasa de segundos a los microsegundos entre
+  // los tres renombrados. Esa ventana residual no se puede cerrar sin soporte
+  // del sistema de archivos, y no se pretende: lo que la cubre es el sello.
+  //
+  // El sello es un `checkpoint_id` unico por llamada a `guardar()`, escrito en
+  // los tres archivos. Al reanudar tienen que coincidir. Con eso, una mezcla no
+  // se entrena en silencio: aborta diciendo que los archivos no son del mismo
+  // checkpoint.
   auto guardar = [&](int it) {
-    const auto r = rutas(archivo);
-    bool ok = unet.GuardarPesos(r[0]);
+    const auto dst = rutas(archivo);
+    std::array<std::string, 3> tmp;
+    for (int k = 0; k < 3; ++k) tmp[k] = dst[k] + ".tmp";
+
+    const uint64_t id =
+        (static_cast<uint64_t>(it) << 40) ^
+        static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
+    const std::map<std::string, std::string> sello = {
+        {"checkpoint_id", std::to_string(id)}, {"iteracion", std::to_string(it)}};
+
+    bool ok = unet.GuardarPesos(tmp[0], sello);
     ema.Intercambiar();
-    ok = unet.GuardarPesos(r[1]) && ok;      // la sombra, con los mismos nombres
+    ok = unet.GuardarPesos(tmp[1], sello) && ok;   // la sombra, mismos nombres
     ema.Intercambiar();
+
     std::vector<nsf::NamedTensor> est;
     auto ms = opt.EstadoM(), vs = opt.EstadoV();
     for (size_t i = 0; i < ms.size(); ++i) {
       est.push_back({"m." + std::to_string(i), ms[i]});
       est.push_back({"v." + std::to_string(i), vs[i]});
     }
-    const auto res = nsf::Save(r[2], est,
-                               {{"arch", "adamw"},
-                                {"pasos_opt", std::to_string(opt.PasosDados())},
-                                {"pasos_ema", std::to_string(ema.Pasos())},
-                                {"iteracion", std::to_string(it)}});
-    if (!res) std::fprintf(stderr, "  aviso: no se pudo guardar el estado del optimizador: %s\n",
+    std::map<std::string, std::string> meta_opt = sello;
+    meta_opt["arch"] = "adamw";
+    meta_opt["pasos_opt"] = std::to_string(opt.PasosDados());
+    meta_opt["pasos_ema"] = std::to_string(ema.Pasos());
+    const auto res = nsf::Save(tmp[2], est, meta_opt);
+    ok = ok && res.ok;
+    if (!res) std::fprintf(stderr, "  no se pudo escribir el estado del optimizador: %s\n",
                            res.error.c_str());
-    return ok && res.ok;
+
+    if (!ok) {
+      // El checkpoint anterior sigue intacto: no se ha movido nada.
+      for (const std::string& f : tmp) std::remove(f.c_str());
+      std::fprintf(stderr, "  checkpoint descartado; el anterior sigue en pie\n");
+      return false;
+    }
+    for (int k = 0; k < 3; ++k) {
+      if (std::rename(tmp[k].c_str(), dst[k].c_str()) != 0) {
+        std::fprintf(stderr, "  no se pudo mover %s a su sitio\n", tmp[k].c_str());
+        return false;
+      }
+    }
+    return true;
   };
+
   if (reanudar) {
     const auto r = rutas(archivo);
-    if (!unet.CargarPesos(r[0])) {
+    std::map<std::string, std::string> m_pesos, m_ema, m_opt;
+    if (!unet.CargarPesos(r[0], &m_pesos)) {
       std::fprintf(stderr, "No se pudo reanudar desde %s\n", r[0].c_str());
       return 1;
     }
     // La sombra se lee cargandola en el modelo y sacandola con el intercambio,
     // que reutiliza la comprobacion de nombres en vez de leer el archivo a pelo.
     ema.Intercambiar();
-    if (!unet.CargarPesos(r[1])) {
+    if (!unet.CargarPesos(r[1], &m_ema)) {
       std::fprintf(stderr, "No se pudo leer la EMA de %s\n", r[1].c_str());
       return 1;
     }
     ema.Intercambiar();
+
     std::vector<nsf::NamedTensor> est;
     auto ms = opt.EstadoM(), vs = opt.EstadoV();
     for (size_t i = 0; i < ms.size(); ++i) {
       est.push_back({"m." + std::to_string(i), ms[i]});
       est.push_back({"v." + std::to_string(i), vs[i]});
     }
-    std::map<std::string, std::string> meta;
-    const auto res = nsf::Load(r[2], est, {{"arch", "adamw"}}, &meta);
+    const auto res = nsf::Load(r[2], est, {{"arch", "adamw"}}, &m_opt);
     if (!res) {
       std::fprintf(stderr, "No se pudo leer el estado del optimizador: %s\n", res.error.c_str());
       return 1;
     }
-    opt.FijarPasosDados(std::stoi(meta["pasos_opt"]));
-    ema.FijarPasos(std::stoi(meta["pasos_ema"]));
-    it_inicial = std::stoi(meta["iteracion"]) + 1;
+
+    // El sello. Sin esto, una mezcla de dos checkpoints se cargaria sin
+    // protestar: los tres archivos son validos por separado.
+    const std::string id = m_pesos["checkpoint_id"];
+    if (id.empty() || m_ema["checkpoint_id"] != id || m_opt["checkpoint_id"] != id) {
+      std::fprintf(stderr,
+                   "Los tres archivos no son del mismo checkpoint (pesos '%s', "
+                   "EMA '%s', optimizador '%s'). Probablemente un corte durante "
+                   "el guardado; usa un checkpoint anterior.\n",
+                   id.c_str(), m_ema["checkpoint_id"].c_str(),
+                   m_opt["checkpoint_id"].c_str());
+      return 1;
+    }
+
+    opt.FijarPasosDados(std::stoi(m_opt["pasos_opt"]));
+    ema.FijarPasos(std::stoi(m_opt["pasos_ema"]));
+    it_inicial = std::stoi(m_opt["iteracion"]) + 1;
     std::printf("  reanudado en la iteracion %d (Adam %d pasos, EMA %d)\n",
                 it_inicial, opt.PasosDados(), ema.Pasos());
   }
@@ -323,18 +381,29 @@ int main(int argc, char** argv) {
     const Tensor pred = unet.Forward(xt, t);
 
     // MSE contra el ruido, con su derivada: 2 (pred - eps) / n.
+    //
+    // La perdida se acumula POR EJEMPLO y no solo en total, porque las franjas
+    // de t se reparten por ejemplo. La primera version sumaba la perdida del
+    // lote entero a la franja de cada muestra: entonces `t bajo` y `t alto`
+    // eran las dos la misma cifra —la del lote— pesada por cuantas muestras de
+    // cada tipo tenia cada lote, asi que se movian juntas y las diferencias que
+    // mostraban venian de la composicion de los lotes, no de la dificultad de
+    // cada franja. Justo lo contrario de lo que la columna decia medir.
     double perdida = 0.0;
-    for (size_t i = 0; i < elems; ++i) {
-      const double d = static_cast<double>(pred[i]) - eps[i];
-      perdida += d * d;
-      dout[i] = static_cast<float>(2.0 * d / static_cast<double>(elems));
-    }
-    perdida /= static_cast<double>(elems);
-
     for (int b = 0; b < lote_real; ++b) {
-      if (t[b] < pasos / 2) { sum_baja += perdida; ++n_baja; }
-      else { sum_alta += perdida; ++n_alta; }
+      double l_b = 0.0;
+      const size_t base = static_cast<size_t>(b) * PX;
+      for (int q = 0; q < PX; ++q) {
+        const double d = static_cast<double>(pred[base + q]) - eps[base + q];
+        l_b += d * d;
+        dout[base + q] = static_cast<float>(2.0 * d / static_cast<double>(elems));
+      }
+      l_b /= static_cast<double>(PX);
+      perdida += l_b;
+      if (t[b] < pasos / 2) { sum_baja += l_b; ++n_baja; }
+      else { sum_alta += l_b; ++n_alta; }
     }
+    perdida /= static_cast<double>(lote_real);
 
     opt.ZeroGrad();
     unet.Backward(dout);

@@ -5997,6 +5997,25 @@ void TestEmaYPersistencia() {
     std::remove(ruta.c_str());
   }
 
+  // 4b. Metadatos extra en los pesos, ida y vuelta. Es el contrato del que
+  //     depende el sello del checkpoint: un `checkpoint_id` comun escrito en
+  //     los tres archivos y comprobado al reanudar. Sin el, un corte a mitad
+  //     del guardado deja pesos nuevos con estado de Adam viejo, los tres
+  //     archivos son validos por separado y reanudar de esa mezcla no da
+  //     ningun error: solo entrena mal.
+  {
+    ManualSeed(13);
+    UNet2D u(1, 8, 16, 2);
+    const std::string ruta = "/tmp/ns_test_sello.nsf";
+    Check(u.GuardarPesos(ruta, {{"checkpoint_id", "424242"}}), "no se pudo guardar con sello");
+    std::map<std::string, std::string> leidos;
+    Check(u.CargarPesos(ruta, &leidos), "no se pudo cargar");
+    Check(leidos["checkpoint_id"] == "424242",
+          "el sello no sobrevivio a la ida y vuelta");
+    Check(leidos["canales"] == "8", "los metadatos de arquitectura no vienen");
+    std::remove(ruta.c_str());
+  }
+
   // 5. `Load` devuelve los metadatos del archivo, no solo comprueba los
   //    exigidos: es lo que permite guardar el numero de iteracion dentro del
   //    propio checkpoint en vez de en un archivo al lado que se desincronice.

@@ -158,16 +158,19 @@ std::vector<Tensor*> UNet2D::GetGradients() {
   return out;
 }
 
-bool UNet2D::GuardarPesos(const std::string& ruta) {
-  const auto r = nsf::Save(ruta, nsf::FromNamedParameters(NamedParameters()),
-                           MetadatosArquitectura());
+bool UNet2D::GuardarPesos(const std::string& ruta,
+                          const std::map<std::string, std::string>& extra) {
+  std::map<std::string, std::string> meta = MetadatosArquitectura();
+  for (const auto& kv : extra) meta[kv.first] = kv.second;
+  const auto r = nsf::Save(ruta, nsf::FromNamedParameters(NamedParameters()), meta);
   if (!r) std::cerr << "UNet2D: error al guardar: " << r.error << "\n";
   return r.ok;
 }
 
-bool UNet2D::CargarPesos(const std::string& ruta) {
+bool UNet2D::CargarPesos(const std::string& ruta,
+                         std::map<std::string, std::string>* leidos) {
   const auto r = nsf::Load(ruta, nsf::FromNamedParameters(NamedParameters()),
-                           MetadatosArquitectura());
+                           MetadatosArquitectura(), leidos);
   if (!r) std::cerr << "UNet2D: error al cargar: " << r.error << "\n";
   return r.ok;
 }

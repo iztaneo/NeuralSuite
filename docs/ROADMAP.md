@@ -1564,6 +1564,45 @@ juguete didáctico y se construye la implementación real:
       iteración dentro del propio checkpoint en vez de en un archivo al lado que
       se pueda desincronizar.
 
+- [x] **Dos correcciones de una revisión externa, antes de lanzar el run largo.**
+      Las dos ciertas, y una de ellas invalidaba una métrica que yo venía
+      imprimiendo desde el escalón 4.
+
+      **El checkpoint no era «los tres o ninguno», por mucho que lo dijera el
+      comentario.** `guardar()` escribía los tres archivos secuencialmente en su
+      sitio definitivo, así que un corte a mitad dejaba pesos nuevos con estado
+      de Adam viejo. Los tres son válidos por separado, así que **reanudar de
+      esa mezcla no daba ningún error: solo entrenaba mal.** Ahora se escriben
+      como `.tmp` y solo se mueven cuando los tres están completos, y los tres
+      llevan un `checkpoint_id` común que se comprueba al reanudar. Los tres
+      renombrados no son atómicos *como grupo* —eso no se puede cerrar sin
+      soporte del sistema de archivos y no se pretende—; lo que cubre esa
+      ventana de microsegundos es el sello. Probado mezclando a mano archivos de
+      dos checkpoints: aborta con código 1 nombrando los tres identificadores.
+
+      **`t bajo` / `t alto` estaban mal calculados.** Sumaban la pérdida del
+      **lote entero** a la franja de cada muestra, así que las dos columnas eran
+      la misma cifra pesada por la composición del lote. Debí sospecharlo: en
+      todas las corridas se movían juntas (0.1155/0.0981, 0.0586/0.0501…).
+      Corregido a pérdida por ejemplo, ahora separan de verdad —0.0821 frente a
+      0.0086, un factor 10— y **coinciden con la evaluación por franjas**, que
+      es la comprobación de que están bien.
+
+      Importa acotar el daño: la conclusión de que la pérdida baja más con `t`
+      grande **no venía de esas columnas** sino de la evaluación final por
+      franjas, que sortea todos los `t` del lote dentro de la misma franja y
+      siempre estuvo bien. Los 0.1397 vs 0.0417 del escalón 4 se mantienen.
+
+      **Y una tercera observación que se midió en vez de aceptarse.** La revisión
+      señalaba que la validación usa un corte contiguo del final en vez de
+      `DataLoader::Partir()`. El principio es correcto —si el `DataLoader` se
+      queda solo en su prueba, los dos caminos divergen— pero el riesgo concreto
+      no existe en MNIST: las últimas 5000 imágenes tienen la misma distribución
+      de clases que el conjunto entero (12.6% de desviación frente al 12.4% del
+      total, que es el desbalance natural de MNIST). Queda anotado como lo
+      siguiente a integrar, no como un bloqueo.
+
+- [ ] Usar `DataLoader::Partir()` en `train_diffusion` en vez del corte contiguo.
 - [ ] DDPM sobre MNIST completo (escalón 5).
 - [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
 
