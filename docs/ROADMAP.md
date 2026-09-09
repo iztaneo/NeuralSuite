@@ -1310,8 +1310,33 @@ Shakespeare— está intacto en visión.
 La demo actual es un `beta = 0.3f` fijo y un MLP pequeño. Se conserva como
 juguete didáctico y se construye la implementación real:
 
-- [ ] `DiffusionSchedule` — `beta[t]`, `alpha[t]`, `alpha_bar[t]`, `q_sample()`,
-      `predict_x0()`, `step()`.
+- [x] **`DiffusionSchedule`** — `beta[t]`, `alpha[t]`, `alpha_bar[t]`,
+      `QSample()` y `PredecirX0()`. Primer escalón de la fase, con su examen:
+      paridad contra PyTorch.
+
+      `alpha_bar` es lo que hace práctico entrenar: permite saltar directamente
+      al paso `t` sin recorrer los anteriores, así que cada ejemplo del lote
+      puede llevar su propio `t` sorteado. Sin ese atajo habría que simular `t`
+      pasos por muestra.
+
+      **Paridad**: `beta` 9.3e-08, `alpha_bar` 6.0e-08 —con los 1000 pasos
+      acumulados—, `q_sample` 5.8e-07 y la reconstrucción de `x0` 5.1e-06.
+
+      La prueba unitaria fija lo que la paridad no mira: que **la varianza se
+      conserva**. Que los coeficientes sean `sqrt(ab)` y `sqrt(1−ab)` en vez de
+      `ab` y `1−ab` es justo lo que mantiene la escala de `x_0` a lo largo del
+      proceso; sin las raíces la señal se apagaría antes de lo que dice el
+      calendario y el modelo vería entradas de otra escala, sin que nada
+      fallara. Se comprueba midiendo la varianza en seis pasos distintos, que en
+      `t=0` la imagen se parece a sí misma y que en el último ya no, y que
+      `PredecirX0` deshace `QSample` exactamente.
+
+      Cuatro mutaciones. Tres rojas en ambas capas: quitar las raíces, no
+      acumular `alpha_bar`, y usar el paso del primer ejemplo para todo el lote.
+      **La cuarta no muerde, y está bien que no lo haga**: acumular en `float` en
+      vez de `double` se desvía 7.1e-07 en relativo —medido—, así que no es un
+      defecto. El comentario del código decía que float «pierde dígitos justo
+      donde más importa» y era falso; corregido.
 - [ ] `SinusoidalTimeEmbedding`.
 - [ ] `DDPMSampler` y `DDIMSampler`.
 - [ ] `UNet2D` — bloques residuales condicionados por tiempo, skips por `Concat`

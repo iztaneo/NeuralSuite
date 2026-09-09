@@ -184,6 +184,25 @@ int main(int argc, char** argv) {
     out["rope_dx"] = AArray(rdx);
   }
 
+  // --- DiffusionSchedule
+  {
+    const nsparity::Array& dm = Require(ref, "dif_meta");
+    const int pasos = static_cast<int>(dm.data[0]);
+
+    diffusion::DiffusionSchedule cal(pasos);
+    out["dif_beta"] = AArray(cal.Beta());
+    out["dif_alpha_bar"] = AArray(cal.AlphaBar());
+
+    const Tensor x0 = ATensor(Require(ref, "dif_x0"));
+    const Tensor ruido = ATensor(Require(ref, "dif_ruido"));
+    const Tensor t = ATensor(Require(ref, "dif_pasos"));
+    Tensor xt, x0_rec;
+    cal.QSample(x0, ruido, t, &xt);
+    cal.PredecirX0(xt, ruido, t, &x0_rec);
+    out["dif_xt"] = AArray(xt);
+    out["dif_x0_rec"] = AArray(x0_rec);
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

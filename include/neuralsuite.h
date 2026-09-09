@@ -31,6 +31,7 @@
 
 // Specialized Neural Network Layers
 #include "data/dataloader.h"
+#include "diffusion/schedule.h"
 #include "data/mnist.h"
 #include "layers/attention.h"
 #include "layers/conv2d.h"

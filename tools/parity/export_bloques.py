@@ -196,7 +196,37 @@ def main():
     y_auto = rope_ref(xr_g, POS0)
     (y_auto * wr).sum().backward()
 
+    # --- DiffusionSchedule.
+    #
+    # La referencia se construye con operaciones de torch siguiendo el articulo
+    # de DDPM. No hay un modulo que importar: el calendario es aritmetica, y lo
+    # que se contrasta es esa aritmetica —en particular el producto acumulado,
+    # que con 1000 pasos es donde float pierde digitos—.
+    PASOS = 1000
+    betas_ref = torch.linspace(1e-4, 0.02, PASOS, dtype=torch.float64)
+    alphas_ref = 1.0 - betas_ref
+    ab_ref = torch.cumprod(alphas_ref, dim=0)
+
+    # q_sample sobre un lote con un paso distinto por ejemplo, que es como se
+    # entrena: sortear un t por muestra en vez de recorrerlos todos.
+    Nd, Cd, Hd, Wd = 4, 1, 5, 6
+    x0d = torch.randn(Nd, Cd, Hd, Wd, generator=g, dtype=torch.float32)
+    ruido_d = torch.randn(Nd, Cd, Hd, Wd, generator=g, dtype=torch.float32)
+    pasos_d = torch.tensor([0, 7, 500, PASOS - 1], dtype=torch.long)
+
+    ab_sel = ab_ref[pasos_d].to(torch.float32).view(Nd, 1, 1, 1)
+    xt_d = torch.sqrt(ab_sel) * x0d + torch.sqrt(1.0 - ab_sel) * ruido_d
+    x0_rec = (xt_d - torch.sqrt(1.0 - ab_sel) * ruido_d) / torch.sqrt(ab_sel)
+
     tensors = {
+        "dif_meta": np.array([PASOS, Nd, Cd, Hd, Wd], dtype=np.float32),
+        "dif_beta": betas_ref.to(torch.float32).numpy(),
+        "dif_alpha_bar": ab_ref.to(torch.float32).numpy(),
+        "dif_x0": x0d.numpy(),
+        "dif_ruido": ruido_d.numpy(),
+        "dif_pasos": pasos_d.to(torch.float32).numpy(),
+        "dif_xt": xt_d.numpy(),
+        "dif_x0_rec": x0_rec.numpy(),
         "rope_meta": np.array([Br, Tr, Hr2, HDr, POS0], dtype=np.float32),
         "rope_x": xr.numpy(),
         "rope_w": wr.numpy(),

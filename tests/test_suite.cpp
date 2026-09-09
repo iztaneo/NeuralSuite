@@ -5195,6 +5195,144 @@ void TestMnistYDataLoader() {
             << std::flush;
 }
 
+/**
+ * @brief `DiffusionSchedule`: el calendario de ruido y su ida y vuelta.
+ *
+ * La paridad ya confirma los números contra PyTorch. Lo que añade esta prueba
+ * son las propiedades que hacen que el calendario **sirva**, y que un conjunto
+ * de números correcto no garantiza por sí solo.
+ *
+ * La principal es que **la varianza se conserva**. Que los coeficientes sean
+ * `sqrt(ab)` y `sqrt(1-ab)` en vez de `ab` y `1-ab` no es un detalle de
+ * notación: es lo que hace que `x_t` mantenga la escala de `x_0` a lo largo de
+ * todo el proceso. Con la versión sin raíces la señal se apagaría mucho antes de
+ * lo que dice el calendario y el modelo vería entradas de otra escala. Es un
+ * error fácil y silencioso, porque el resultado sigue pareciendo ruido.
+ */
+void TestDiffusionSchedule() {
+  std::cout << "🧪 [Test 50] DiffusionSchedule... " << std::flush;
+  using namespace neuralsuite::diffusion;
+
+  const int PASOS = 1000;
+  DiffusionSchedule cal(PASOS);
+
+  // 1. El calendario es monótono y acaba practicamente en ruido puro.
+  {
+    Check(cal.Pasos() == PASOS, "el número de pasos no es el pedido");
+    for (int t = 1; t < PASOS; ++t) {
+      Check(cal.Beta()[t] >= cal.Beta()[t - 1], "beta no crece de forma monótona");
+      Check(cal.AlphaBar()[t] <= cal.AlphaBar()[t - 1],
+            "alpha_bar no decrece: la señal tendría que ir desapareciendo");
+    }
+    Check(cal.AlphaBar()[0] > 0.999f, "el primer paso ya destruye demasiada señal");
+    // Si el último alpha_bar no llega cerca de cero, el paso final no es ruido
+    // puro y el muestreo arrancaría de una distribución que el modelo no vio.
+    Check(cal.AlphaBar()[PASOS - 1] < 1e-4f,
+          "alpha_bar final vale " + std::to_string(cal.AlphaBar()[PASOS - 1]) +
+              "; el último paso no es ruido puro");
+  }
+
+  // 2. LA PROPIEDAD QUE IMPORTA: la varianza se conserva. Con x0 y ruido de
+  //    varianza 1 e independientes, x_t debe tener varianza ~1 en TODO t.
+  {
+    const int N = 6, D = 4000;
+    Tensor x0({N, D}), ruido({N, D}), t({N});
+    ManualSeed(71);
+    x0.RandomNormal(0.0f, 1.0f);
+    ruido.RandomNormal(0.0f, 1.0f);
+    const int pasos_prueba[N] = {0, 1, 100, 500, 900, PASOS - 1};
+    for (int i = 0; i < N; ++i) t[i] = static_cast<float>(pasos_prueba[i]);
+
+    Tensor xt;
+    cal.QSample(x0, ruido, t, &xt);
+
+    for (int i = 0; i < N; ++i) {
+      double suma = 0.0, suma2 = 0.0;
+      for (int k = 0; k < D; ++k) {
+        const double v = xt[static_cast<size_t>(i) * D + k];
+        suma += v;
+        suma2 += v * v;
+      }
+      const double var = suma2 / D - (suma / D) * (suma / D);
+      Check(std::abs(var - 1.0) < 0.12,
+            "en el paso " + std::to_string(pasos_prueba[i]) +
+                " la varianza vale " + std::to_string(var) +
+                "; el calendario no preserva la escala");
+    }
+  }
+
+  // 3. En t=0 apenas hay ruido, y en el último paso apenas queda señal. Es lo
+  //    que separa un calendario que funciona de uno que sólo tiene la forma.
+  {
+    const int D = 2000;
+    Tensor x0({2, D}), ruido({2, D}), t({2});
+    ManualSeed(11);
+    x0.RandomNormal(0.0f, 1.0f);
+    ruido.RandomNormal(0.0f, 1.0f);
+    t[0] = 0.0f;
+    t[1] = static_cast<float>(PASOS - 1);
+
+    Tensor xt;
+    cal.QSample(x0, ruido, t, &xt);
+
+    double sim_inicio = 0.0, sim_final = 0.0, n0 = 0.0, n1 = 0.0;
+    for (int k = 0; k < D; ++k) {
+      sim_inicio += static_cast<double>(xt[k]) * x0[k];
+      n0 += static_cast<double>(x0[k]) * x0[k];
+      sim_final += static_cast<double>(xt[D + k]) * x0[D + k];
+      n1 += static_cast<double>(x0[D + k]) * x0[D + k];
+    }
+    Check(sim_inicio / n0 > 0.98, "en t=0 la imagen ya se parece poco a sí misma");
+    Check(std::abs(sim_final / n1) < 0.1,
+          "en el último paso todavía queda señal reconocible: " +
+              std::to_string(sim_final / n1));
+  }
+
+  // 4. `PredecirX0` deshace `QSample` exactamente cuando se le da el ruido real.
+  //    Es la comprobación de ida y vuelta, y falla si alguna de las dos usa una
+  //    raíz distinta o el paso equivocado.
+  {
+    const int N = 4, D = 50;
+    Tensor x0({N, D}), ruido({N, D}), t({N});
+    ManualSeed(23);
+    x0.RandomNormal(0.0f, 1.0f);
+    ruido.RandomNormal(0.0f, 1.0f);
+    const int ps[N] = {0, 3, 250, 800};
+    for (int i = 0; i < N; ++i) t[i] = static_cast<float>(ps[i]);
+
+    Tensor xt, recuperado;
+    cal.QSample(x0, ruido, t, &xt);
+    cal.PredecirX0(xt, ruido, t, &recuperado);
+
+    double peor = 0.0;
+    for (size_t i = 0; i < x0.TotalSize(); ++i) {
+      peor = std::max(peor, std::abs(static_cast<double>(recuperado[i]) - x0[i]));
+    }
+    Check(peor < 2e-3, "la ida y vuelta no recupera x0: " + std::to_string(peor));
+  }
+
+  // 5. Un paso fuera de rango leería del calendario donde no debe y daría una
+  //    imagen con el ruido de otro momento, sin fallar. Debe abortar.
+  {
+    Tensor x0({1, 3}), ruido({1, 3}), t({1}), fuera;
+    t[0] = static_cast<float>(PASOS);
+    bool protesto = false;
+    try { cal.QSample(x0, ruido, t, &fuera); } catch (const std::out_of_range&) { protesto = true; }
+    Check(protesto, "aceptó un paso fuera del calendario");
+  }
+
+  // 6. Un beta imposible rompería el calendario en silencio: con beta >= 1 el
+  //    alpha sería <= 0 y su raíz, NaN.
+  {
+    bool protesto = false;
+    try { DiffusionSchedule mala(10, 0.5f, 1.5f); }
+    catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "aceptó beta fuera de (0, 1)");
+  }
+
+  std::cout << "PASADO ✅ (varianza preservada, ida y vuelta exacta y rangos)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -5249,6 +5387,7 @@ int main() {
   TestRoPEEnElGPT();
   TestDeslizarConRoPE();
   TestMnistYDataLoader();
+  TestDiffusionSchedule();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {
