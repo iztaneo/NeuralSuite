@@ -44,6 +44,7 @@
 #include "layers/maxpool2d.h"
 #include "layers/resample2d.h"
 #include "layers/residual.h"
+#include "layers/swiglu.h"
 // Reusable Neural Network Models
 #include "models/ocr.h"
 namespace neuralsuite {

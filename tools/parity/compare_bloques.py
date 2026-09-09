@@ -29,7 +29,8 @@ def main():
     for nombre in ("rms_y", "rms_dx", "rms_dgamma", "silu_y", "silu_dx",
                "gn_y", "gn_dx", "gn_dgamma", "gn_dbeta",
                "up_y", "up_dx", "dn_y", "dn_dx",
-               "ca_y", "ca_dq", "ca_dctx"):
+               "ca_y", "ca_dq", "ca_dctx",
+               "sw_y", "sw_dx", "sw_dWg", "sw_dWu", "sw_dWd"):
         if nombre not in cpp:
             print(f"  {nombre:<14} {'FALTA en la salida de C++':>38}")
             return 1

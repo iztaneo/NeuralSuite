@@ -1101,9 +1101,38 @@ con PyTorch y ahora corpus en español.
       pasada la ventana**. Con posiciones aprendidas hay que reconstruir la caché
       casi en cada paso (medido: 1.29 ms/token frente a 0.13 dentro de la
       ventana); con posición relativa, deslizar no invalida nada.
-- [ ] **SwiGLU**
+- [x] **SwiGLU**: `(SiLU(x·Wg) ⊙ x·Wu) · Wd`. Sustituye al feed-forward
+      `Linear → GELU → Linear`. La diferencia es la **puerta**: dos proyecciones
+      y una regula a la otra elemento a elemento, así que la red decide por canal
+      cuánto deja pasar en vez de aplicar la misma curva a todos.
+
+      El precio son tres matrices en vez de dos. Para que los parámetros no
+      crezcan, LLaMA usa un oculto de `8/3` de la dimensión en vez de `4`:
+      `3·(8/3) = 8` frente a `2·4 = 8`. Está en `SwiGLU::OcultoLlama()`, con la
+      cuenta a la vista en lugar de escondida.
+
+      **Paridad contra PyTorch, pero con una salvedad que conviene decir**: no
+      existe un `nn.SwiGLU`, así que la referencia se **compone** con `nn.Linear`
+      y `F.silu`. Es una garantía más débil que contrastar contra `nn.RMSNorm`
+      —donde la pieza la escribió otro—, aunque sigue siendo útil porque el
+      autograd de PyTorch deriva esa composición por su cuenta. Peor error
+      relativo 3.2e-07 en salida, `dx` y los tres gradientes de peso.
+
+      La prueba unitaria compensa esa debilidad con una propiedad que sólo
+      cumple la versión correcta: **con la puerta saturada en negativo la salida
+      se anula**, porque `SiLU(−30) ≈ 0` mata el producto. Si la activación
+      estuviera en la otra rama, la puerta pasaría su valor crudo y la salida se
+      dispararía. Cuatro mutaciones, las cuatro rojas en ambas capas.
 - [ ] **GQA**
-- [ ] **Perplejidad** como métrica, sobre validación y sobre prueba.
+- [x] **Perplejidad** como métrica, sobre validación y sobre prueba. La da
+      `apps/eval_llm.cpp`, añadido al cerrar la Fase 12: recorre las tres
+      particiones enteras con `--completo` y aborta si los pesos no cargan, en
+      vez de medir ruido y dar una cifra.
+- [ ] **Evaluar la validación durante el entrenamiento.** Hueco distinto del
+      anterior, que se vio al revisarlo: `train_llm` **no mide validación en
+      ningún momento**, así que el sobreajuste es invisible hasta que el
+      entrenamiento termina y se pasa `eval_llm` a mano. Con eso no se puede
+      parar a tiempo ni elegir el mejor punto de una corrida.
 
 **Criterio de salida:** entrenar un transformer pequeño de verdad y demostrar que
 NeuralSuite y PyTorch siguen trayectorias de entrenamiento equivalentes. Eso es

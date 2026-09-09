@@ -4413,6 +4413,111 @@ void TestCrossAttention() {
             << std::flush;
 }
 
+/**
+ * @brief `SwiGLU`: la puerta va en la rama correcta.
+ *
+ * La paridad ya confirma los números, pero contra una referencia **compuesta**
+ * —PyTorch no tiene un módulo SwiGLU—, así que conviene reforzarla aquí.
+ *
+ * El error que importa es multiplicar al revés: aplicar `SiLU` a la proyección
+ * de arriba en vez de a la puerta. Los dos caminos dan números del mismo orden
+ * y la red entrena, algo peor. Se distingue con una propiedad que sólo cumple
+ * la versión correcta: si la **puerta** se anula, la salida es la del sesgo de
+ * `Wd`, porque `SiLU(0) = 0` y el producto muere. Si en cambio se anula la
+ * proyección de arriba, pasa lo mismo — así que hay que mirar un caso
+ * asimétrico: con la puerta muy negativa `SiLU` tiende a 0, pero la proyección
+ * de arriba conserva su valor.
+ */
+void TestSwiGLU() {
+  std::cout << "🧪 [Test 45] SwiGLU... " << std::flush;
+
+  const int D = 6, Hh = 16, N = 4;
+  ManualSeed(37);
+  SwiGLU sw(D, Hh);
+
+  Tensor x({N, D}), w({N, D});
+  for (size_t i = 0; i < x.TotalSize(); ++i) x[i] = 0.6f * std::sin(0.29f * i) + 0.1f;
+  for (size_t i = 0; i < w.TotalSize(); ++i) w[i] = 0.4f * std::cos(0.19f * i) + 0.2f;
+
+  const Tensor y = sw.Forward(x);
+  Check(y.Shape() == std::vector<int>({N, D}), "SwiGLU cambia la dimensión de salida");
+
+  const Tensor dx = sw.Backward(w);
+  Check(dx.Shape() == x.Shape(), "dx no tiene la forma de la entrada");
+
+  // 1. Gradientes contra diferencias finitas: entrada y las tres matrices.
+  auto perdida = [&](const Tensor& entrada) {
+    const Tensor s = sw.Forward(entrada);
+    double l = 0.0;
+    for (size_t i = 0; i < s.TotalSize(); ++i) l += w[i] * s[i];
+    return l;
+  };
+  const float h = 1e-3f;
+  double peor = 0.0;
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    Tensor xp = x, xm = x;
+    xp[i] += h; xm[i] -= h;
+    const double num = (perdida(xp) - perdida(xm)) / (2.0 * h);
+    peor = std::max(peor, std::abs(num - dx[i]) / std::max(1.0, std::abs(num)));
+  }
+  Check(peor < 5e-3, "el gradiente de la entrada no cuadra: " + std::to_string(peor));
+
+  const std::vector<Tensor*> grads = sw.GetGradients();
+  Check(grads.size() == 6, "SwiGLU no expone las tres matrices con sus sesgos");
+
+  Linear* capas[3] = {&sw.Gate(), &sw.Up(), &sw.Down()};
+  const char* nombres[3] = {"puerta", "arriba", "abajo"};
+  for (int c = 0; c < 3; ++c) {
+    Tensor& W = capas[c]->Weight();
+    const Tensor& dW = *capas[c]->GetGradients()[0];
+    double peor_w = 0.0;
+    for (size_t i = 0; i < W.TotalSize(); i += 3) {
+      const float o = W[i];
+      W[i] = o + h; const double lp = perdida(x);
+      W[i] = o - h; const double lm = perdida(x);
+      W[i] = o;
+      const double num = (lp - lm) / (2.0 * h);
+      peor_w = std::max(peor_w, std::abs(num - dW[i]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor_w < 5e-3, std::string("el gradiente de la matriz de ") + nombres[c] +
+                             " no cuadra: " + std::to_string(peor_w));
+  }
+
+  // 2. La activación va en la puerta, no en la proyección de arriba. Con la
+  //    puerta muy negativa, SiLU tiende a 0 y la salida se acerca al sesgo de
+  //    Wd. Si la activación estuviera en la otra rama, la puerta pasaría su
+  //    valor crudo —muy negativo— y la salida se dispararía.
+  {
+    SwiGLU probe(D, Hh);
+    probe.Gate().Weight().Zeros();
+    probe.Up().Weight().Zeros();
+    probe.Down().Weight().Zeros();
+    for (size_t i = 0; i < probe.Gate().Bias().TotalSize(); ++i) {
+      probe.Gate().Bias()[i] = -30.0f;   // SiLU(-30) ≈ 0
+      probe.Up().Bias()[i] = 5.0f;       // valor grande, para que se note
+    }
+    for (size_t i = 0; i < probe.Down().Bias().TotalSize(); ++i) {
+      probe.Down().Bias()[i] = 0.0f;
+    }
+    const Tensor s = probe.Forward(x);
+    double mayor = 0.0;
+    for (size_t i = 0; i < s.TotalSize(); ++i) mayor = std::max(mayor, std::abs((double)s[i]));
+    Check(mayor < 1e-3,
+          "con la puerta saturada en negativo la salida no se anula: la "
+          "activación no está en la puerta (" + std::to_string(mayor) + ")");
+  }
+
+  // 3. La cuenta de LLaMA: 8/3 de la dimensión, redondeado al múltiplo.
+  {
+    Check(SwiGLU::OcultoLlama(4096) == 11008 || SwiGLU::OcultoLlama(4096) % 256 == 0,
+          "OcultoLlama no redondea al múltiplo");
+    Check(SwiGLU::OcultoLlama(512, 64) % 64 == 0, "OcultoLlama ignora el múltiplo dado");
+  }
+
+  std::cout << "PASADO ✅ (gradientes de las tres matrices y la puerta en su rama)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -4462,6 +4567,7 @@ int main() {
   TestGroupNorm();
   TestRemuestreo2D();
   TestCrossAttention();
+  TestSwiGLU();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

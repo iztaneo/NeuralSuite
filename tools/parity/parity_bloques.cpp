@@ -145,6 +145,30 @@ int main(int argc, char** argv) {
     out["ca_dctx"] = AArray(ca.GradContexto());
   }
 
+  // --- SwiGLU
+  {
+    const nsparity::Array& sm = Require(ref, "sw_meta");
+    const int D = static_cast<int>(sm.data[0]);
+    const int Hh = static_cast<int>(sm.data[1]);
+
+    SwiGLU sw(D, Hh);
+    auto copiar = [](Linear& capa, const Tensor& w, const Tensor& b) {
+      std::memcpy(capa.Weight().Data(), w.Data(), w.TotalSize() * sizeof(float));
+      std::memcpy(capa.Bias().Data(), b.Data(), b.TotalSize() * sizeof(float));
+    };
+    copiar(sw.Gate(), ATensor(Require(ref, "sw_Wg")), ATensor(Require(ref, "sw_bg")));
+    copiar(sw.Up(), ATensor(Require(ref, "sw_Wu")), ATensor(Require(ref, "sw_bu")));
+    copiar(sw.Down(), ATensor(Require(ref, "sw_Wd")), ATensor(Require(ref, "sw_bd")));
+
+    const Tensor sx = ATensor(Require(ref, "sw_x"));
+    const Tensor sw_w = ATensor(Require(ref, "sw_w"));
+    out["sw_y"] = AArray(sw.Forward(sx));
+    out["sw_dx"] = AArray(sw.Backward(sw_w));
+    out["sw_dWg"] = AArray(*sw.Gate().GetGradients()[0]);
+    out["sw_dWu"] = AArray(*sw.Up().GetGradients()[0]);
+    out["sw_dWd"] = AArray(*sw.Down().GetGradients()[0]);
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

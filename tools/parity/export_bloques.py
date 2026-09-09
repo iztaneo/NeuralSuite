@@ -136,7 +136,43 @@ def main():
     Wq, Wk, Wv = mha.in_proj_weight.detach().chunk(3, dim=0)
     bq, bk, bv = mha.in_proj_bias.detach().chunk(3, dim=0)
 
+    # --- SwiGLU.
+    #
+    # PyTorch no tiene un modulo SwiGLU, asi que la referencia se COMPONE con
+    # nn.Linear y F.silu. Conviene decirlo: no es lo mismo que contrastar contra
+    # nn.RMSNorm, donde la referencia es una pieza que alguien mas escribio.
+    # Aqui lo que se valida es que nuestra composicion y su gradiente coincidan
+    # con los de PyTorch sobre las mismas operaciones, que sigue siendo util
+    # —el autograd de PyTorch deriva la composicion por su cuenta— pero es una
+    # garantia mas debil.
+    Ds, Hs, Ns = 6, 16, 4
+    xs = torch.randn(Ns, Ds, generator=g, dtype=torch.float32, requires_grad=True)
+    ws = torch.randn(Ns, Ds, generator=g, dtype=torch.float32)
+    lg = nn.Linear(Ds, Hs, dtype=torch.float32)
+    lu = nn.Linear(Ds, Hs, dtype=torch.float32)
+    ld = nn.Linear(Hs, Ds, dtype=torch.float32)
+    with torch.no_grad():
+        for capa, (fi, fo) in ((lg, (Ds, Hs)), (lu, (Ds, Hs)), (ld, (Hs, Ds))):
+            capa.weight.copy_(torch.randn(fo, fi, generator=g))
+            capa.bias.copy_(torch.randn(fo, generator=g))
+    y_sw = ld(nn.functional.silu(lg(xs)) * lu(xs))
+    (y_sw * ws).sum().backward()
+
     tensors = {
+        "sw_meta": np.array([Ds, Hs, Ns], dtype=np.float32),
+        "sw_x": xs.detach().numpy(),
+        "sw_w": ws.numpy(),
+        "sw_Wg": lg.weight.detach().T.contiguous().numpy(),
+        "sw_Wu": lu.weight.detach().T.contiguous().numpy(),
+        "sw_Wd": ld.weight.detach().T.contiguous().numpy(),
+        "sw_bg": lg.bias.detach().numpy(),
+        "sw_bu": lu.bias.detach().numpy(),
+        "sw_bd": ld.bias.detach().numpy(),
+        "sw_y": y_sw.detach().numpy(),
+        "sw_dx": xs.grad.detach().numpy(),
+        "sw_dWg": lg.weight.grad.detach().T.contiguous().numpy(),
+        "sw_dWu": lu.weight.grad.detach().T.contiguous().numpy(),
+        "sw_dWd": ld.weight.grad.detach().T.contiguous().numpy(),
         "ca_meta": np.array([E, Hh, B2, Tq, Tc], dtype=np.float32),
         "ca_q": qx.detach().numpy(),
         "ca_ctx": cx.detach().numpy(),
