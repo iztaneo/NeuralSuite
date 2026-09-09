@@ -21,14 +21,15 @@ def main():
     cpp = nsparity.read(args.cpp)
 
     print("=" * 72)
-    print("PARIDAD BLOQUES: RMSNorm, SiLU, GroupNorm y remuestreo 2D frente a NeuralSuite")
+    print("PARIDAD BLOQUES: RMSNorm, SiLU, GroupNorm, remuestreo 2D y CrossAttention")
     print("=" * 72)
     print(f"  {'tensor':<14} {'error abs':>12} {'error rel':>12}   veredicto")
 
     peor, peor_nombre = 0.0, ""
     for nombre in ("rms_y", "rms_dx", "rms_dgamma", "silu_y", "silu_dx",
                "gn_y", "gn_dx", "gn_dgamma", "gn_dbeta",
-               "up_y", "up_dx", "dn_y", "dn_dx"):
+               "up_y", "up_dx", "dn_y", "dn_dx",
+               "ca_y", "ca_dq", "ca_dctx"):
         if nombre not in cpp:
             print(f"  {nombre:<14} {'FALTA en la salida de C++':>38}")
             return 1

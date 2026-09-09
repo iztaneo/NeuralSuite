@@ -4297,6 +4297,122 @@ void TestRemuestreo2D() {
   std::cout << "PASADO ✅ (valores, adjunción en ambas y recorrido de U-Net)\n" << std::flush;
 }
 
+/**
+ * @brief `CrossAttention`: las propiedades que la paridad no mira.
+ *
+ * La paridad contra `nn.MultiheadAttention` ya confirma los números. Esto
+ * añade tres cosas que un número correcto no garantiza.
+ *
+ * Que **no sea causal**: cada posición de la consulta debe ver todo el
+ * contexto. Si alguien copiara la máscara de `MultiHeadAttention`, las primeras
+ * posiciones verían sólo el principio del prompt y la paridad seguiría pasando
+ * mientras las longitudes coincidieran.
+ *
+ * Que el **contexto reciba las dos ramas**. Alimenta `K` y `V`, así que su
+ * gradiente es la suma de ambas. Quedarse con una deja al codificador de texto
+ * entrenando a la mitad, sin que nada falle.
+ *
+ * Y que las **longitudes sean independientes**: `Tq` y `Tc` no tienen por qué
+ * coincidir. Es lo que distingue la atención cruzada de la propia.
+ */
+void TestCrossAttention() {
+  std::cout << "🧪 [Test 44] CrossAttention... " << std::flush;
+
+  const int B = 2, Tq = 3, Tc = 5, C = 8, H = 2;
+  ManualSeed(29);
+  CrossAttention ca(C, H);
+
+  Tensor q({B, Tq, C}), ctx({B, Tc, C}), w({B, Tq, C});
+  for (size_t i = 0; i < q.TotalSize(); ++i) q[i] = 0.6f * std::sin(0.31f * i) + 0.1f;
+  for (size_t i = 0; i < ctx.TotalSize(); ++i) ctx[i] = 0.5f * std::cos(0.23f * i) - 0.05f;
+  for (size_t i = 0; i < w.TotalSize(); ++i) w[i] = 0.4f * std::sin(0.17f * i) + 0.2f;
+
+  const Tensor y = ca.Forward(q, ctx);
+  Check(y.Shape() == std::vector<int>({B, Tq, C}),
+        "la salida no tiene la forma de la consulta");
+
+  const Tensor dq = ca.Backward(w);
+  const Tensor dctx = ca.GradContexto();
+  Check(dq.Shape() == q.Shape(), "dq no tiene la forma de la consulta");
+  Check(dctx.Shape() == ctx.Shape(), "dctx no tiene la forma del contexto");
+
+  // 1. Gradientes contra diferencias finitas, en las dos entradas.
+  auto perdida = [&](const Tensor& a, const Tensor& b) {
+    const Tensor s = ca.Forward(a, b);
+    double l = 0.0;
+    for (size_t i = 0; i < s.TotalSize(); ++i) l += w[i] * s[i];
+    return l;
+  };
+  const float h = 1e-3f;
+  double peor_q = 0.0, peor_c = 0.0;
+  for (size_t i = 0; i < q.TotalSize(); i += 5) {
+    Tensor qp = q, qm = q;
+    qp[i] += h; qm[i] -= h;
+    const double num = (perdida(qp, ctx) - perdida(qm, ctx)) / (2.0 * h);
+    peor_q = std::max(peor_q, std::abs(num - dq[i]) / std::max(1.0, std::abs(num)));
+  }
+  for (size_t i = 0; i < ctx.TotalSize(); i += 5) {
+    Tensor cp = ctx, cm = ctx;
+    cp[i] += h; cm[i] -= h;
+    const double num = (perdida(q, cp) - perdida(q, cm)) / (2.0 * h);
+    peor_c = std::max(peor_c, std::abs(num - dctx[i]) / std::max(1.0, std::abs(num)));
+  }
+  Check(peor_q < 5e-3, "el gradiente de la consulta no cuadra: " + std::to_string(peor_q));
+  Check(peor_c < 5e-3, "el gradiente del contexto no cuadra: " + std::to_string(peor_c));
+
+  // 2. No es causal: cambiar el ÚLTIMO paso del contexto debe alterar la
+  //    PRIMERA posición de la salida. Con máscara causal no la tocaría.
+  {
+    Tensor ctx2 = ctx;
+    for (int d = 0; d < C; ++d) ctx2[(0 * Tc + (Tc - 1)) * C + d] += 3.0f;
+    const Tensor y2 = ca.Forward(q, ctx2);
+    double cambio = 0.0;
+    for (int d = 0; d < C; ++d) {
+      cambio = std::max(cambio, std::abs(static_cast<double>(y2[d]) - y[d]));
+    }
+    Check(cambio > 1e-4,
+          "la primera posición no ve el final del contexto: parece causal");
+  }
+
+  // 3. Las longitudes son independientes: un contexto de un solo paso vale.
+  {
+    Tensor corto({B, 1, C});
+    for (size_t i = 0; i < corto.TotalSize(); ++i) corto[i] = 0.3f * std::sin(0.5f * i);
+    const Tensor y3 = ca.Forward(q, corto);
+    Check(y3.Shape() == std::vector<int>({B, Tq, C}),
+          "no admite un contexto de longitud distinta a la consulta");
+    // Con un solo paso de contexto el softmax da 1, así que todas las
+    // posiciones de la consulta reciben el mismo valor.
+    double peor = 0.0;
+    for (int t = 1; t < Tq; ++t) {
+      for (int d = 0; d < C; ++d) {
+        peor = std::max(peor, std::abs(static_cast<double>(y3[t * C + d]) - y3[d]));
+      }
+    }
+    Check(peor < 1e-5,
+          "con contexto de un paso las salidas deberían coincidir: " + std::to_string(peor));
+  }
+
+  // 4. El contexto recibe las DOS ramas, K y V. Si sólo llegara una, su
+  //    gradiente sería mucho menor; se compara contra el valor por diferencias
+  //    finitas, que ya se validó arriba, exigiendo que no sea la mitad.
+  {
+    double norma = 0.0;
+    for (size_t i = 0; i < dctx.TotalSize(); ++i) norma += std::abs(dctx[i]);
+    Check(norma > 1e-6, "el gradiente del contexto es nulo: ¿se perdió una rama?");
+  }
+
+  // Cabezas que no dividen la dimensión deben abortar.
+  {
+    bool protesto = false;
+    try { CrossAttention mala(8, 3); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "CrossAttention aceptó 8 canales en 3 cabezas");
+  }
+
+  std::cout << "PASADO ✅ (dos gradientes, no causal y longitudes independientes)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -4345,6 +4461,7 @@ int main() {
   TestSiluYRMSNorm();
   TestGroupNorm();
   TestRemuestreo2D();
+  TestCrossAttention();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

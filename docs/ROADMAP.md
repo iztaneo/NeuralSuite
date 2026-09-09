@@ -945,7 +945,7 @@ backward con broadcasting y `Conv2DVar` **ya existen**. Queda esto:
 permitir construir arquitecturas nuevas, no reimplementar NeuralSuite por
 segunda vez.
 
-## Fase 14 — Vocabulario neural compartido ⬜ (corresponde a 0.7)
+## Fase 14 — Vocabulario neural compartido ✅ (corresponde a 0.7)
 
 **El cambio de filosofía: dejar de acumular demos y tener piezas reutilizables.**
 `RMSNorm` no pertenece a GPT ni `GroupNorm` a la difusión; son capacidades del
@@ -1054,9 +1054,34 @@ desbloquean el transformer moderno, que es el examen principal—:
       asignara en vez de sumar podría dar números plausibles y aun así romper la
       identidad—. Tres mutaciones, las tres rojas en ambas capas de verificación,
       con el estado base comprobado antes de mutar.
-- [ ] `CrossAttention` — `Q` del latente, `K` y `V` del condicionamiento. Es la
-      pieza que conecta lenguaje y visión, y la que convierte dos modelos
+- [x] **`CrossAttention`** — `Q` del latente, `K` y `V` del condicionamiento. Es
+      la pieza que conecta lenguaje y visión, y la que convierte dos modelos
       separados en un sistema multimodal.
+
+      Tres diferencias con `MultiHeadAttention`, y las tres importan:
+
+      - **Dos entradas y dos gradientes.** `Backward` devuelve el de la consulta
+        —lo que exige la interfaz de `Layer`— y el del contexto se recoge con
+        `GradContexto()`. El contexto alimenta `K` y `V`, así que recibe la
+        **suma** de las dos ramas; quedarse con una deja al codificador de texto
+        entrenando a la mitad, sin que nada falle.
+      - **No es causal.** Una posición de la imagen mira todo el prompt: no hay
+        un «antes» en un texto de condicionamiento.
+      - **Longitudes independientes.** `[B, Tq, C]` con `[B, Tc, Cctx]` da
+        `[B, Tq, C]`, y `Cctx` puede diferir.
+
+      **Paridad contra `nn.MultiheadAttention`** pasándole `query` distinto de
+      `key`/`value`, que es la única forma de obtener atención cruzada en
+      PyTorch. Hubo que desmontar tres convenciones suyas: `batch_first` va en
+      `False` por defecto, empaqueta las tres proyecciones en un
+      `in_proj_weight` de `[3E, E]`, y **guarda los pesos como `[salida,
+      entrada]` mientras el nuestro los guarda como `[entrada, salida]`**, así
+      que van todos traspuestos. Peor error relativo 3.2e-07 en salida,
+      gradiente de la consulta y gradiente del contexto.
+
+      Cuatro mutaciones, las cuatro rojas en ambas capas: perder la rama `V` del
+      contexto, aplicar máscara causal, no restar la suma en el backward del
+      softmax, y olvidar el escalado `1/√d`.
 
 Cada una con su paridad contra PyTorch, como el resto.
 

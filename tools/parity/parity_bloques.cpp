@@ -120,6 +120,31 @@ int main(int argc, char** argv) {
     out["dn_dx"] = AArray(dn.Backward(dw));
   }
 
+  // --- CrossAttention
+  {
+    const nsparity::Array& cm = Require(ref, "ca_meta");
+    const int E = static_cast<int>(cm.data[0]);
+    const int Hh = static_cast<int>(cm.data[1]);
+
+    CrossAttention ca(E, Hh);
+    auto copiar = [](Linear& capa, const Tensor& w, const Tensor& b) {
+      std::memcpy(capa.Weight().Data(), w.Data(), w.TotalSize() * sizeof(float));
+      std::memcpy(capa.Bias().Data(), b.Data(), b.TotalSize() * sizeof(float));
+    };
+    copiar(ca.QProj(), ATensor(Require(ref, "ca_Wq")), ATensor(Require(ref, "ca_bq")));
+    copiar(ca.KProj(), ATensor(Require(ref, "ca_Wk")), ATensor(Require(ref, "ca_bk")));
+    copiar(ca.VProj(), ATensor(Require(ref, "ca_Wv")), ATensor(Require(ref, "ca_bv")));
+    copiar(ca.OProj(), ATensor(Require(ref, "ca_Wo")), ATensor(Require(ref, "ca_bo")));
+
+    const Tensor qx = ATensor(Require(ref, "ca_q"));
+    const Tensor cx = ATensor(Require(ref, "ca_ctx"));
+    const Tensor wx = ATensor(Require(ref, "ca_w"));
+
+    out["ca_y"] = AArray(ca.Forward(qx, cx));
+    out["ca_dq"] = AArray(ca.Backward(wx));
+    out["ca_dctx"] = AArray(ca.GradContexto());
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

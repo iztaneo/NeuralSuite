@@ -105,7 +105,52 @@ def main():
     y_dn = nn.AvgPool2d(2)(xd)
     (y_dn * wd).sum().backward()
 
+    # --- CrossAttention contra nn.MultiheadAttention.
+    #
+    # PyTorch no tiene una CrossAttention de una pieza: se consigue pasandole
+    # `query` distinto de `key`/`value`. Tres convenciones suyas hay que
+    # desmontar, y las tres son sitios donde es facil equivocarse:
+    #
+    #  - `batch_first=False` por defecto, o sea [T, B, C]. Se pone en True.
+    #  - Empaqueta las tres proyecciones en `in_proj_weight` de [3E, E], en
+    #    orden q, k, v.
+    #  - `nn.Linear` guarda el peso como [salida, entrada] y el nuestro como
+    #    [entrada, salida], asi que TODOS van traspuestos.
+    #
+    # Como `key` y `value` son el mismo tensor, su `.grad` acumula las dos
+    # ramas: es exactamente lo que debe devolver nuestro GradContexto().
+    E, Hh, B2, Tq, Tc = 8, 2, 2, 3, 5
+    mha = nn.MultiheadAttention(E, Hh, batch_first=True, dtype=torch.float32)
+    with torch.no_grad():
+        mha.in_proj_weight.copy_(torch.randn(3 * E, E, generator=g))
+        mha.in_proj_bias.copy_(torch.randn(3 * E, generator=g))
+        mha.out_proj.weight.copy_(torch.randn(E, E, generator=g))
+        mha.out_proj.bias.copy_(torch.randn(E, generator=g))
+
+    qx = torch.randn(B2, Tq, E, generator=g, dtype=torch.float32, requires_grad=True)
+    cx = torch.randn(B2, Tc, E, generator=g, dtype=torch.float32, requires_grad=True)
+    wx = torch.randn(B2, Tq, E, generator=g, dtype=torch.float32)
+    y_ca, _ = mha(qx, cx, cx, need_weights=False)
+    (y_ca * wx).sum().backward()
+
+    Wq, Wk, Wv = mha.in_proj_weight.detach().chunk(3, dim=0)
+    bq, bk, bv = mha.in_proj_bias.detach().chunk(3, dim=0)
+
     tensors = {
+        "ca_meta": np.array([E, Hh, B2, Tq, Tc], dtype=np.float32),
+        "ca_q": qx.detach().numpy(),
+        "ca_ctx": cx.detach().numpy(),
+        "ca_w": wx.numpy(),
+        # Traspuestos a la convencion [entrada, salida] de nuestro Linear.
+        "ca_Wq": Wq.T.contiguous().numpy(),
+        "ca_Wk": Wk.T.contiguous().numpy(),
+        "ca_Wv": Wv.T.contiguous().numpy(),
+        "ca_Wo": mha.out_proj.weight.detach().T.contiguous().numpy(),
+        "ca_bq": bq.numpy(), "ca_bk": bk.numpy(), "ca_bv": bv.numpy(),
+        "ca_bo": mha.out_proj.bias.detach().numpy(),
+        "ca_y": y_ca.detach().numpy(),
+        "ca_dq": qx.grad.detach().numpy(),
+        "ca_dctx": cx.grad.detach().numpy(),
         "up_x": xu.detach().numpy(),
         "up_w": wu.numpy(),
         "up_meta": np.array([Nr, Cr, Hr, Wr], dtype=np.float32),

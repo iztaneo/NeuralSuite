@@ -32,6 +32,7 @@
 // Specialized Neural Network Layers
 #include "layers/attention.h"
 #include "layers/conv2d.h"
+#include "layers/cross_attention.h"
 #include "layers/embedding.h"
 #include "layers/rmsnorm.h"
 #include "layers/embedding_autograd.h"
