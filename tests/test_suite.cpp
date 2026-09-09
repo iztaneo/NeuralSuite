@@ -5878,6 +5878,145 @@ void TestMuestreadores() {
             << std::flush;
 }
 
+/**
+ * @brief `EMA` y la persistencia de `UNet2D`: lo que hace viable un run largo.
+ *
+ * Las dos piezas existen por la misma razon: un entrenamiento de horas que se
+ * corta y no deja nada, o que deja algo que no se puede continuar, ha perdido
+ * las horas. Y ninguna de las dos la vigila la perdida —los pesos promediados
+ * no intervienen en ella—, asi que si no se comprueban aqui no se comprueban.
+ */
+void TestEmaYPersistencia() {
+  std::cout << "🧪 [Test 55] EMA y persistencia... " << std::flush;
+  using namespace neuralsuite::diffusion;
+
+  // 1. La sombra arranca en los pesos iniciales, no en cero. Arrancar en cero
+  //    haria que los primeros promedios fuesen una fraccion de los pesos y el
+  //    modelo promediado no seria un modelo.
+  {
+    Tensor p({4});
+    for (int i = 0; i < 4; ++i) p[i] = 1.0f + i;
+    EMA ema({&p}, 0.9f);
+    for (int i = 0; i < 4; ++i) {
+      Check(ema.Sombra()[0][i] == p[i], "la sombra no arranca en los pesos iniciales");
+    }
+  }
+
+  // 2. `Intercambiar()` dos veces tiene que dejarlo todo como estaba: es lo que
+  //    permite muestrear con la EMA a mitad de entrenamiento y seguir.
+  {
+    Tensor p({6});
+    p.RandomNormal(0.0f, 1.0f);
+    const Tensor copia = p;
+    EMA ema({&p}, 0.9f);
+    p.RandomNormal(0.0f, 1.0f);      // los pesos avanzan
+    const Tensor vivos = p;
+    ema.Intercambiar();
+    bool distinto = false;
+    for (size_t i = 0; i < p.TotalSize(); ++i) if (p[i] != vivos[i]) distinto = true;
+    Check(distinto, "el primer Intercambiar no cambio nada");
+    for (size_t i = 0; i < p.TotalSize(); ++i) {
+      Check(p[i] == copia[i], "tras intercambiar no estan los pesos promediados");
+    }
+    ema.Intercambiar();
+    for (size_t i = 0; i < p.TotalSize(); ++i) {
+      Check(p[i] == vivos[i], "el segundo Intercambiar no devolvio los pesos vivos");
+    }
+  }
+
+  // 3. La rampa de calentamiento. Con un decaimiento fijo de 0.999 la sombra
+  //    tarda del orden de mil pasos en despegarse de los pesos iniciales, asi
+  //    que muestrear de la EMA al principio daria ruido y pareceria que el
+  //    entrenamiento no avanza. La rampa `(1+n)/(10+n)` lo evita, y esto lo
+  //    mide en vez de suponerlo.
+  {
+    Tensor p({1});
+    p[0] = 0.0f;
+    EMA ema({&p}, 0.999f);
+    p[0] = 1.0f;                       // el peso salta a su valor "aprendido"
+    for (int i = 0; i < 20; ++i) ema.Actualizar();
+    const float s = ema.Sombra()[0][0];
+    Check(s > 0.5f, "tras 20 pasos la sombra sigue en " + std::to_string(s) +
+                        ": la rampa de calentamiento no esta actuando");
+    Check(ema.Pasos() == 20, "el contador de pasos no cuadra");
+    // Y el contador es restaurable, que es lo que hace que reanudar conserve el
+    // promedio en vez de reiniciar la rampa.
+    ema.FijarPasos(5000);
+    Check(ema.Pasos() == 5000, "FijarPasos no restaura el contador");
+  }
+
+  {
+    bool protesto = false;
+    Tensor p({2});
+    try { EMA({&p}, 1.0f); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "acepto un decaimiento de 1, que congelaria la sombra para siempre");
+  }
+
+  // 4. Ida y vuelta de los pesos de la U-Net, y que un archivo de otra
+  //    arquitectura se rechace en vez de leerse como numeros del tamano
+  //    correcto y dar un modelo silenciosamente equivocado.
+  {
+    ManualSeed(91);
+    UNet2D a(1, 8, 16, 2);
+    Check(a.NamedParameters().size() == a.GetParameters().size(),
+          "los nombres y los pesos no cuadran en numero");
+    Check(a.GetParameters().size() == a.GetGradients().size(),
+          "pesos y gradientes no cuadran: las listas se han vuelto a separar");
+
+    const std::string ruta = "/tmp/ns_test_unet.nsf";
+    Check(a.GuardarPesos(ruta), "no se pudo guardar");
+
+    ManualSeed(77);
+    UNet2D b(1, 8, 16, 2);
+    Tensor x({1, 1, 8, 8}), t({1});
+    x.RandomNormal(0.0f, 1.0f);
+    t[0] = 7.0f;
+    const Tensor ya = a.Forward(x, t);
+    double antes = 0.0;
+    {
+      const Tensor yb = b.Forward(x, t);
+      for (size_t i = 0; i < ya.TotalSize(); ++i) {
+        antes = std::max(antes, std::abs(static_cast<double>(ya[i]) - yb[i]));
+      }
+    }
+    Check(antes > 1e-3, "las dos redes ya salian iguales: la comparacion de "
+                        "abajo no probaria nada");
+
+    Check(b.CargarPesos(ruta), "no se pudo cargar");
+    const Tensor yb = b.Forward(x, t);
+    double despues = 0.0;
+    for (size_t i = 0; i < ya.TotalSize(); ++i) {
+      despues = std::max(despues, std::abs(static_cast<double>(ya[i]) - yb[i]));
+    }
+    Check(despues == 0.0, "la ida y vuelta no es exacta (" + std::to_string(despues) + ")");
+
+    UNet2D otra(1, 16, 16, 2);
+    Check(!otra.CargarPesos(ruta),
+          "acepto pesos de otra arquitectura: el archivo declara los canales y "
+          "hay que comprobarlos");
+    std::remove(ruta.c_str());
+  }
+
+  // 5. `Load` devuelve los metadatos del archivo, no solo comprueba los
+  //    exigidos: es lo que permite guardar el numero de iteracion dentro del
+  //    propio checkpoint en vez de en un archivo al lado que se desincronice.
+  {
+    Tensor v({3});
+    v.RandomNormal(0.0f, 1.0f);
+    const std::string ruta = "/tmp/ns_test_meta.nsf";
+    Check(nsf::Save(ruta, {{"v", &v}}, {{"arch", "x"}, {"iteracion", "1234"}}).ok,
+          "no se pudo guardar el archivo de metadatos");
+    std::map<std::string, std::string> leidos;
+    Check(nsf::Load(ruta, {{"v", &v}}, {{"arch", "x"}}, &leidos).ok, "no se pudo leer");
+    Check(leidos["iteracion"] == "1234",
+          "Load no devolvio los metadatos que no se le exigieron");
+    std::remove(ruta.c_str());
+  }
+
+  std::cout << "PASADO ✅ (sombra, rampa, ida y vuelta exacta y arquitectura comprobada)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -5937,6 +6076,7 @@ int main() {
   TestResBlockTiempo();
   TestUNet2D();
   TestMuestreadores();
+  TestEmaYPersistencia();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

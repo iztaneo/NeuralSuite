@@ -1502,6 +1502,68 @@ juguete didáctico y se construye la implementación real:
       casi perfecta, y lo único que sirve para generar es la desviación pequeña
       respecto a ella. Por eso una pérdida baja en esa franja no dice nada.
 
+- [x] **Lo que hacía falta antes de un entrenamiento de horas.** Seis huecos que
+      un run de minutos no expone y uno de cinco horas sí. Se revisaron sobre el
+      código, no de memoria.
+
+      1. **`UNet2D` no era serializable.** No era `Module` y no tenía
+         `GuardarPesos`/`CargarPesos`: `train_diffusion` entrenaba y **no dejaba
+         nada en disco**. Ahora deriva de `Module` y registra sus ocho
+         submódulos, así que `GetParameters()` y `GetGradients()` se derivan de
+         `Parameters()` en vez de ser dos listas escritas a mano en paralelo
+         —exactamente lo que el docstring de `Layer` advierte—. 62 tensores con
+         su ruta (`res_baja0.conv1.weight`); cargar pesos de otra arquitectura
+         se rechaza nombrando el motivo.
+      2. **Checkpoint periódico y reanudación** (`--guardar_cada`, `--reanudar`,
+         `--parar_en`). Un checkpoint son tres archivos: pesos, sombra de la EMA
+         y estado de Adam. Los tres o ninguno — guardar solo los pesos permite
+         muestrear pero no continuar, porque `m` y `v` de Adam son medias
+         móviles y reanudar con ellas a cero da una sacudida justo al retomar.
+         Se añadieron accesores de estado a `AdamW` para eso.
+      3. **EMA de los pesos.** No es un adorno en difusión: el gradiente ve un
+         `t` sorteado y un ruido nuevo en cada paso, así que los pesos finales
+         oscilan alrededor del bueno. Lleva rampa de calentamiento
+         `(1+n)/(10+n)`: con decaimiento fijo la sombra arrastra los pesos
+         **iniciales al azar** durante ~1000 pasos, y muestrear de ella al
+         principio daría ruido y parecería que el entrenamiento no avanza.
+      4. **Schedule de learning rate**: calentamiento lineal y coseno hasta
+         `--lr_min`, el patrón que ya usaba `train_llm`.
+      5. **Validación** (`--n_validacion`): imágenes que el optimizador no ve,
+         con `t` barrido y ruido fijo entre evaluaciones para que la curva se
+         mueva por el modelo y no por el sorteo.
+      6. **Muestreo periódico** con los pesos de la EMA durante el
+         entrenamiento: dos segundos por vistazo, y evita descubrir a las cinco
+         horas que no iba a ninguna parte.
+
+      **Reanudar es byte a byte idéntico a no haber parado**, en los tres
+      archivos. Llegar ahí obligó a corregir dos cosas y a desechar una medición
+      propia:
+
+      - La primera comparación daba distinto y **la culpa era del experimento**:
+        a la corrida interrumpida le había pasado `--iteraciones 150`, así que
+        su coseno decaía en 150 pasos y no en 300. Era otro entrenamiento, no un
+        fallo del checkpoint. De ahí `--parar_en`, que corta sin tocar el plan.
+      - El estado del RNG no se guardaba. En vez de guardarlo, **cada iteración
+        se siembra en función de `(semilla, it)`**: la iteración *n* usa el
+        mismo lote y el mismo ruido se llegue de un tirón o reanudando, y no hay
+        estado que sincronizar. Guardar el estado habría exigido acordarse del
+        `mt19937` global *y* del generador de lotes, y además la evaluación y el
+        muestreo periódicos tocan el global por el camino.
+      - Con eso, pesos y estado de Adam salían idénticos y **la EMA no**:
+        guardaba los valores de la sombra pero no su contador de pasos, así que
+        al reanudar la rampa se reiniciaba y la sombra se reenganchaba de golpe
+        a los pesos vivos. **Ninguna pérdida lo detecta**, porque la pérdida se
+        calcula con los pesos vivos; se encontró comparando los archivos byte a
+        byte contra un run sin cortes.
+
+      Prueba 55 en la suite: la sombra arranca en los pesos iniciales, dos
+      `Intercambiar()` son la identidad, la rampa mide (no supone) que tras 20
+      pasos la sombra ya se movió, la ida y vuelta de los pesos es exacta y una
+      arquitectura distinta se rechaza. `nsf::Load` devuelve ahora también los
+      metadatos que no se le exigen, que es lo que permite guardar el número de
+      iteración dentro del propio checkpoint en vez de en un archivo al lado que
+      se pueda desincronizar.
+
 - [ ] DDPM sobre MNIST completo (escalón 5).
 - [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
 

@@ -5,6 +5,9 @@
 
 #include "diffusion/unet.h"
 
+#include <iostream>
+#include <map>
+#include "serialization.h"
 #include <stdexcept>
 #include <string>
 
@@ -30,7 +33,19 @@ UNet2D::UNet2D(int canales_imagen, int canales, int dim_t, int grupos)
       res_alta0_(canales + canales, canales, dim_t, grupos),
       bajar0_(2), bajar1_(2), subir1_(2), subir0_(2),
       norm_salida_(grupos, canales),
-      conv_salida_(canales, canales_imagen, 3, 1, 1) {}
+      conv_salida_(canales, canales_imagen, 3, 1, 1) {
+  // El orden de registro es el orden de `Parameters()` y el de los nombres en
+  // el archivo de pesos. Solo se registra lo que tiene parametros: el
+  // remuestreo no tiene ninguno.
+  Register(&conv_entrada_, "conv_entrada");
+  Register(&res_baja0_, "res_baja0");
+  Register(&res_baja1_, "res_baja1");
+  Register(&res_centro_, "res_centro");
+  Register(&res_alta1_, "res_alta1");
+  Register(&res_alta0_, "res_alta0");
+  Register(&norm_salida_, "norm_salida");
+  Register(&conv_salida_, "conv_salida");
+}
 
 Tensor UNet2D::Forward(const Tensor& x, const Tensor& pasos) {
   if (x.Shape().size() != 4) {
@@ -133,34 +148,36 @@ Tensor UNet2D::Backward(const Tensor& dout) {
 
 std::vector<Tensor*> UNet2D::GetParameters() {
   std::vector<Tensor*> out;
-  auto anadir = [&](std::vector<Tensor*> v) {
-    out.insert(out.end(), v.begin(), v.end());
-  };
-  anadir(conv_entrada_.GetParameters());
-  anadir(res_baja0_.GetParameters());
-  anadir(res_baja1_.GetParameters());
-  anadir(res_centro_.GetParameters());
-  anadir(res_alta1_.GetParameters());
-  anadir(res_alta0_.GetParameters());
-  anadir(norm_salida_.GetParameters());
-  anadir(conv_salida_.GetParameters());
+  for (Parameter* p : Parameters()) out.push_back(&p->Value());
   return out;
 }
 
 std::vector<Tensor*> UNet2D::GetGradients() {
   std::vector<Tensor*> out;
-  auto anadir = [&](std::vector<Tensor*> v) {
-    out.insert(out.end(), v.begin(), v.end());
-  };
-  anadir(conv_entrada_.GetGradients());
-  anadir(res_baja0_.GetGradients());
-  anadir(res_baja1_.GetGradients());
-  anadir(res_centro_.GetGradients());
-  anadir(res_alta1_.GetGradients());
-  anadir(res_alta0_.GetGradients());
-  anadir(norm_salida_.GetGradients());
-  anadir(conv_salida_.GetGradients());
+  for (Parameter* p : Parameters()) out.push_back(&p->Grad());
   return out;
+}
+
+bool UNet2D::GuardarPesos(const std::string& ruta) {
+  const auto r = nsf::Save(ruta, nsf::FromNamedParameters(NamedParameters()),
+                           MetadatosArquitectura());
+  if (!r) std::cerr << "UNet2D: error al guardar: " << r.error << "\n";
+  return r.ok;
+}
+
+bool UNet2D::CargarPesos(const std::string& ruta) {
+  const auto r = nsf::Load(ruta, nsf::FromNamedParameters(NamedParameters()),
+                           MetadatosArquitectura());
+  if (!r) std::cerr << "UNet2D: error al cargar: " << r.error << "\n";
+  return r.ok;
+}
+
+std::map<std::string, std::string> UNet2D::MetadatosArquitectura() const {
+  return {{"arch", "unet2d"},
+          {"canales_imagen", std::to_string(canales_imagen_)},
+          {"canales", std::to_string(canales_)},
+          {"dim_t", std::to_string(dim_t_)},
+          {"grupos", std::to_string(grupos_)}};
 }
 
 size_t UNet2D::NumParametros() {

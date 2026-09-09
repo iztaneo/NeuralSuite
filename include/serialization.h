@@ -171,9 +171,15 @@ inline Result Save(const std::string& path, const std::vector<NamedTensor>& tens
  * Falla, indicando el motivo, si el archivo no es NSF, si su version no es la
  * soportada, si algun metadato esperado no coincide, si falta un tensor, si su
  * forma difiere, o si la suma de comprobacion no cuadra.
+ *
+ * `metadata_leidos`, si se da, recibe **todos** los metadatos del archivo, no
+ * solo los exigidos. Es lo que permite guardar en el propio checkpoint cosas
+ * como el numero de iteracion y volver a leerlas al reanudar, sin inventar un
+ * segundo archivo al lado que se pueda desincronizar del primero.
  */
 inline Result Load(const std::string& path, const std::vector<NamedTensor>& tensors,
-                   const std::map<std::string, std::string>& expected_metadata) {
+                   const std::map<std::string, std::string>& expected_metadata,
+                   std::map<std::string, std::string>* metadata_leidos = nullptr) {
   std::ifstream in(path, std::ios::binary);
   if (!in) return Result::Fail("No se pudo abrir para lectura: " + path);
 
@@ -207,6 +213,12 @@ inline Result Load(const std::string& path, const std::vector<NamedTensor>& tens
     }
     metadata[key] = value;
   }
+
+  // El archivo puede llevar mas metadatos de los que el modelo exige —el numero
+  // de iteracion de un checkpoint, por ejemplo— y quien carga puede quererlos.
+  // Se entregan antes de comprobar nada: si la comprobacion falla, lo que el
+  // archivo dice ser es justo la informacion que hace falta para entenderlo.
+  if (metadata_leidos != nullptr) *metadata_leidos = metadata;
 
   // La comprobacion que da sentido al formato: el archivo debe corresponder a
   // la arquitectura que se esta construyendo.

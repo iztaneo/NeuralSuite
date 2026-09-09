@@ -28,6 +28,8 @@
 
 #include "neuralsuite.h"
 
+#include <array>
+#include <map>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -70,6 +72,11 @@ int main(int argc, char** argv) {
   int n_imagenes = 16, iteraciones = 400, lote = 8, canales = 32, dim_t = 64;
   int pasos = 200, grupos = 8, semilla = 7, reportar_cada = 25;
   float lr = 2e-3f, beta_fin = 0.0f;   // 0 = elegir segun los pasos
+  float lr_min = 0.0f, ema_decaimiento = 0.999f;
+  int calentamiento = 0, guardar_cada = 0, evaluar_cada = 0, muestrear_cada = 0;
+  int n_validacion = 0, parar_en = 0;
+  std::string archivo = "release/unet_mnist.nsf";
+  bool reanudar = false;
 
   for (int i = 1; i < argc; ++i) {
     auto sig = [&](const char* q) -> const char* {
@@ -84,6 +91,16 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--pasos")) pasos = std::atoi(sig("--pasos"));
     else if (!std::strcmp(argv[i], "--lr")) lr = static_cast<float>(std::atof(sig("--lr")));
     else if (!std::strcmp(argv[i], "--beta_fin")) beta_fin = static_cast<float>(std::atof(sig("--beta_fin")));
+    else if (!std::strcmp(argv[i], "--lr_min")) lr_min = static_cast<float>(std::atof(sig("--lr_min")));
+    else if (!std::strcmp(argv[i], "--calentamiento")) calentamiento = std::atoi(sig("--calentamiento"));
+    else if (!std::strcmp(argv[i], "--ema")) ema_decaimiento = static_cast<float>(std::atof(sig("--ema")));
+    else if (!std::strcmp(argv[i], "--guardar_cada")) guardar_cada = std::atoi(sig("--guardar_cada"));
+    else if (!std::strcmp(argv[i], "--evaluar_cada")) evaluar_cada = std::atoi(sig("--evaluar_cada"));
+    else if (!std::strcmp(argv[i], "--muestrear_cada")) muestrear_cada = std::atoi(sig("--muestrear_cada"));
+    else if (!std::strcmp(argv[i], "--n_validacion")) n_validacion = std::atoi(sig("--n_validacion"));
+    else if (!std::strcmp(argv[i], "--archivo")) archivo = sig("--archivo");
+    else if (!std::strcmp(argv[i], "--parar_en")) parar_en = std::atoi(sig("--parar_en"));
+    else if (!std::strcmp(argv[i], "--reanudar")) reanudar = true;
     else if (!std::strcmp(argv[i], "--semilla")) semilla = std::atoi(sig("--semilla"));
     else if (!std::strcmp(argv[i], "--reportar_cada")) reportar_cada = std::atoi(sig("--reportar_cada"));
     else { std::fprintf(stderr, "Opcion desconocida: %s\n", argv[i]); return 1; }
@@ -98,24 +115,47 @@ int main(int argc, char** argv) {
   }
   const int H = 28, W = 28, PX = H * W;
   const int disponibles = datos.imagenes.Shape()[0];
-  const int N = (n_imagenes <= 0 || n_imagenes > disponibles) ? disponibles : n_imagenes;
+  const int total = (n_imagenes <= 0 || n_imagenes > disponibles) ? disponibles : n_imagenes;
+
+  // Validacion: imagenes que el optimizador NO ve. Sin esto la unica perdida
+  // que se mide es la de las mismas imagenes con las que se entrena, que baja
+  // aunque el modelo solo este memorizando. Con 16 imagenes memorizar es el
+  // objetivo y no hace falta; con 60 000 hay que poder distinguirlo.
+  //
+  // Se cogen del FINAL del conjunto, no del principio: MNIST no viene ordenado
+  // por clase, pero coger un bloque contiguo del principio es la clase de atajo
+  // que un dia se encuentra con un conjunto que si lo esta.
+  if (n_validacion < 0) n_validacion = 0;
+  if (n_validacion >= total) {
+    std::fprintf(stderr, "n_validacion (%d) no puede llegar a las imagenes totales (%d)\n",
+                 n_validacion, total);
+    return 1;
+  }
+  const int N = total - n_validacion;
 
   // MNIST llega en [0, 1]; la difusion asume datos centrados en cero, asi que
   // se pasa a [-1, 1]. Si no, la red tendria que aprender el desplazamiento y
   // el ruido gaussiano no encajaria con la varianza que el schedule supone.
-  Tensor x0({N, 1, H, W});
-  for (int i = 0; i < N; ++i) {
-    for (int p = 0; p < PX; ++p) {
-      x0[static_cast<size_t>(i) * PX + p] =
-          2.0f * datos.imagenes[static_cast<size_t>(i) * PX + p] - 1.0f;
+  auto normalizar = [&](int desde, int cuantas) {
+    Tensor t({cuantas, 1, H, W});
+    for (int i = 0; i < cuantas; ++i) {
+      for (int p = 0; p < PX; ++p) {
+        t[static_cast<size_t>(i) * PX + p] =
+            2.0f * datos.imagenes[static_cast<size_t>(desde + i) * PX + p] - 1.0f;
+      }
     }
-  }
+    return t;
+  };
+  const Tensor x0 = normalizar(0, N);
+  const Tensor x0_val = normalizar(N, n_validacion);
 
   std::printf("============================================================\n");
   std::printf("  Difusion sobre MNIST\n");
-  std::printf("  imagenes %d de %d | lote %d | iteraciones %d\n", N, disponibles, lote, iteraciones);
+  std::printf("  imagenes %d de %d (%d de validacion) | lote %d | iteraciones %d\n",
+              N, disponibles, n_validacion, lote, iteraciones);
   std::printf("  canales %d | pasos de ruido %d | lr %.0e | semilla %d\n", canales, pasos, lr, semilla);
   if (N <= 64) std::printf("  MODO PUERTA: se busca memorizar, no generalizar\n");
+  std::printf("  archivo %s%s\n", archivo.c_str(), reanudar ? " (reanudando)" : "");
   std::printf("============================================================\n");
 
   // Las betas del articulo (1e-4 a 0.02) estan calibradas para 1000 pasos. Con
@@ -137,7 +177,69 @@ int main(int argc, char** argv) {
                 resto < 0.03f ? "ok" : "<-- DEMASIADO: x_T no es ruido puro");
   }
   AdamW opt(unet.GetParameters(), unet.GetGradients(), lr);
-  std::printf("  parametros: %zu\n\n", unet.NumParametros());
+  EMA ema(unet.GetParameters(), ema_decaimiento);
+  std::printf("  parametros: %zu | EMA %.4f\n", unet.NumParametros(), ema_decaimiento);
+
+  // Un checkpoint es el modelo, la sombra de la EMA y el estado de Adam. Los
+  // tres o ninguno: guardar solo los pesos permite muestrear pero no continuar.
+  auto rutas = [&](const std::string& base) {
+    return std::array<std::string, 3>{base, base + ".ema", base + ".opt"};
+  };
+  int it_inicial = 1;
+  auto guardar = [&](int it) {
+    const auto r = rutas(archivo);
+    bool ok = unet.GuardarPesos(r[0]);
+    ema.Intercambiar();
+    ok = unet.GuardarPesos(r[1]) && ok;      // la sombra, con los mismos nombres
+    ema.Intercambiar();
+    std::vector<nsf::NamedTensor> est;
+    auto ms = opt.EstadoM(), vs = opt.EstadoV();
+    for (size_t i = 0; i < ms.size(); ++i) {
+      est.push_back({"m." + std::to_string(i), ms[i]});
+      est.push_back({"v." + std::to_string(i), vs[i]});
+    }
+    const auto res = nsf::Save(r[2], est,
+                               {{"arch", "adamw"},
+                                {"pasos_opt", std::to_string(opt.PasosDados())},
+                                {"pasos_ema", std::to_string(ema.Pasos())},
+                                {"iteracion", std::to_string(it)}});
+    if (!res) std::fprintf(stderr, "  aviso: no se pudo guardar el estado del optimizador: %s\n",
+                           res.error.c_str());
+    return ok && res.ok;
+  };
+  if (reanudar) {
+    const auto r = rutas(archivo);
+    if (!unet.CargarPesos(r[0])) {
+      std::fprintf(stderr, "No se pudo reanudar desde %s\n", r[0].c_str());
+      return 1;
+    }
+    // La sombra se lee cargandola en el modelo y sacandola con el intercambio,
+    // que reutiliza la comprobacion de nombres en vez de leer el archivo a pelo.
+    ema.Intercambiar();
+    if (!unet.CargarPesos(r[1])) {
+      std::fprintf(stderr, "No se pudo leer la EMA de %s\n", r[1].c_str());
+      return 1;
+    }
+    ema.Intercambiar();
+    std::vector<nsf::NamedTensor> est;
+    auto ms = opt.EstadoM(), vs = opt.EstadoV();
+    for (size_t i = 0; i < ms.size(); ++i) {
+      est.push_back({"m." + std::to_string(i), ms[i]});
+      est.push_back({"v." + std::to_string(i), vs[i]});
+    }
+    std::map<std::string, std::string> meta;
+    const auto res = nsf::Load(r[2], est, {{"arch", "adamw"}}, &meta);
+    if (!res) {
+      std::fprintf(stderr, "No se pudo leer el estado del optimizador: %s\n", res.error.c_str());
+      return 1;
+    }
+    opt.FijarPasosDados(std::stoi(meta["pasos_opt"]));
+    ema.FijarPasos(std::stoi(meta["pasos_ema"]));
+    it_inicial = std::stoi(meta["iteracion"]) + 1;
+    std::printf("  reanudado en la iteracion %d (Adam %d pasos, EMA %d)\n",
+                it_inicial, opt.PasosDados(), ema.Pasos());
+  }
+  std::printf("\n");
 
   Rng rng{static_cast<uint32_t>(semilla) * 2654435761u + 1u};
   const int lote_real = std::min(lote, N);
@@ -150,7 +252,65 @@ int main(int argc, char** argv) {
   // Franjas de t, para no promediar dos regimenes distintos en un solo numero.
   double sum_baja = 0, sum_alta = 0; int n_baja = 0, n_alta = 0;
 
-  for (int it = 1; it <= iteraciones; ++it) {
+  // Perdida sobre un conjunto dado, con t barrido de forma determinista y
+  // ruido fijo: si el ruido cambiara entre evaluaciones, la curva se movería
+  // por el sorteo y no por el modelo, y no se podrian comparar dos momentos.
+  auto evaluar = [&](const Tensor& conjunto, int cuantas, uint32_t sem) {
+    if (cuantas == 0) return -1.0;
+    Rng r2{sem * 2654435761u + 7u};
+    Tensor xe({lote_real, 1, H, W}), ee({lote_real, 1, H, W}), xte, te({lote_real});
+    double acc = 0.0; int veces = 0;
+    ManualSeed(sem);
+    for (int rep = 0; rep < 16; ++rep) {
+      for (int b = 0; b < lote_real; ++b) {
+        std::memcpy(&xe[static_cast<size_t>(b) * PX],
+                    &conjunto[static_cast<size_t>(r2.Entero(cuantas)) * PX],
+                    static_cast<size_t>(PX) * sizeof(float));
+        te[b] = static_cast<float>(r2.Entero(pasos));
+      }
+      ee.RandomNormal(0.0f, 1.0f);
+      schedule.QSample(xe, ee, te, &xte);
+      const Tensor pr = unet.Forward(xte, te);
+      double l = 0.0;
+      for (size_t i = 0; i < elems; ++i) { const double d = pr[i] - ee[i]; l += d * d; }
+      acc += l / static_cast<double>(elems); ++veces;
+    }
+    return acc / veces;
+  };
+
+  // `--parar_en` corta antes sin tocar el plan: el coseno del learning rate
+  // sigue calculandose sobre `iteraciones`, asi que parar y reanudar da el
+  // mismo entrenamiento que no parar. Bajar `--iteraciones` en su lugar seria
+  // otro entrenamiento distinto, con el decaimiento comprimido.
+  const int ultima = (parar_en > 0 && parar_en < iteraciones) ? parar_en : iteraciones;
+
+  for (int it = it_inicial; it <= ultima; ++it) {
+    // Cada iteracion se siembra en funcion de (semilla, it), no del estado que
+    // arrastre el generador. Asi la iteracion n usa el mismo lote y el mismo
+    // ruido tanto si se llega de un tiron como reanudando, que es lo unico que
+    // hace que un checkpoint sea equivalente a no haber parado. La alternativa
+    // —guardar el estado del mt19937 global y el del generador de lotes— exige
+    // acordarse de los dos, y ademas la evaluacion y el muestreo periodicos
+    // tocan el global por el camino.
+    const uint32_t sem_it = (static_cast<uint32_t>(semilla) * 0x9E3779B1u) ^
+                            (static_cast<uint32_t>(it) * 0x85EBCA6Bu);
+    ManualSeed(sem_it);
+    rng.s = sem_it | 1u;   // xorshift no admite el cero
+
+    // Calentamiento lineal y despues coseno hasta `lr_min`. El calentamiento no
+    // es cosmetico: Adam arranca con m = v = 0 y la correccion de sesgo hace
+    // que los primeros pasos sean del tamano maximo, justo cuando los pesos son
+    // aleatorios y el gradiente no apunta a nada util.
+    float lr_ahora = lr;
+    if (calentamiento > 0 && it <= calentamiento) {
+      lr_ahora = lr * static_cast<float>(it) / static_cast<float>(calentamiento);
+    } else if (iteraciones > calentamiento) {
+      const float avance = static_cast<float>(it - calentamiento) /
+                           static_cast<float>(iteraciones - calentamiento);
+      lr_ahora = lr_min + 0.5f * (lr - lr_min) * (1.0f + std::cos(3.14159265f * avance));
+    }
+    opt.SetLearningRate(lr_ahora);
+
     for (int b = 0; b < lote_real; ++b) {
       const int idx = rng.Entero(N);
       std::memcpy(&xb[static_cast<size_t>(b) * PX], &x0[static_cast<size_t>(idx) * PX],
@@ -179,6 +339,7 @@ int main(int argc, char** argv) {
     opt.ZeroGrad();
     unet.Backward(dout);
     opt.Step();
+    ema.Actualizar();
 
     if (it % reportar_cada == 0 || it == 1) {
       const double seg = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -187,7 +348,57 @@ int main(int argc, char** argv) {
                   n_baja ? sum_baja / n_baja : 0.0, n_alta ? sum_alta / n_alta : 0.0, seg);
       sum_baja = sum_alta = 0; n_baja = n_alta = 0;
     }
+
+    // 5. Validacion: la unica curva que distingue aprender de memorizar.
+    if (evaluar_cada > 0 && it % evaluar_cada == 0) {
+      const double l_tr = evaluar(x0, N, 4242u);
+      const double l_va = evaluar(x0_val, n_validacion, 4242u);
+      if (l_va >= 0.0) {
+        std::printf("  eval %5d | entren. %.4f | valid. %.4f | brecha %+.4f\n",
+                    it, l_tr, l_va, l_va - l_tr);
+      } else {
+        std::printf("  eval %5d | entren. %.4f | (sin validacion)\n", it, l_tr);
+      }
+    }
+
+    // 6. Muestrear con los pesos de la EMA, que son con los que se muestrea de
+    //    verdad. Ver el progreso en imagenes durante el entrenamiento cuesta
+    //    unos segundos y evita descubrir al final que no iba a ninguna parte.
+    if (muestrear_cada > 0 && it % muestrear_cada == 0) {
+      ema.Intercambiar();
+      Predictor red = [&](const Tensor& xx, const Tensor& tt) { return unet.Forward(xx, tt); };
+      DDIMSampler vistazo(schedule, std::max(2, pasos / 10), 0.0f);
+      vistazo.RecortarX0(true);
+      Tensor r1({1, 1, H, W});
+      ManualSeed(static_cast<uint32_t>(semilla) + 5000u);
+      r1.RandomNormal(0.0f, 1.0f);
+      const Tensor y = vistazo.Muestrear(red, r1, RuidoNulo());
+      std::printf("  muestra en la iteracion %d (EMA, DDIM):\n", it);
+      Dibujar(y, 0, H, W);
+      ema.Intercambiar();
+    }
+
+    // 2. Checkpoint. Sin esto, un run de horas que se corte no deja nada.
+    if (guardar_cada > 0 && it % guardar_cada == 0) {
+      if (guardar(it)) std::printf("  checkpoint en la iteracion %d -> %s\n", it, archivo.c_str());
+    }
   }
+
+  // Si la ultima iteracion ya cayo en un multiplo de `guardar_cada`, el
+  // checkpoint acaba de escribirse: repetirlo cuesta un segundo y, sobre todo,
+  // hace dudar de si son dos cosas distintas al leer el log.
+  const bool ya_guardado = guardar_cada > 0 && ultima % guardar_cada == 0;
+  if (!ya_guardado) {
+    if (guardar(ultima)) {
+      std::printf("\n  guardado en %s (+ .ema, +.opt) tras la iteracion %d de %d\n",
+                  archivo.c_str(), ultima, iteraciones);
+    }
+  }
+
+  // A partir de aqui se mide y se muestrea con la EMA, que es lo que se usaria
+  // en produccion. Medir con los pesos vivos y muestrear con los promediados
+  // seria informar de dos modelos distintos como si fueran uno.
+  ema.Intercambiar();
 
   // Evaluacion final por franjas, con ruido nuevo y t barrido de forma
   // determinista: la perdida de entrenamiento se mide sobre lo que toco el

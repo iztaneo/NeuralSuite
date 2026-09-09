@@ -9,7 +9,9 @@
 #ifndef NEURAL_SUITE_INCLUDE_DIFFUSION_UNET_H_
 #define NEURAL_SUITE_INCLUDE_DIFFUSION_UNET_H_
 
+#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "../layer.h"
@@ -60,7 +62,7 @@ namespace diffusion {
  * si no puede memorizar ocho digitos, hay un defecto en la arquitectura, en el
  * backward o en el entrenamiento, y ninguna cantidad de epocas lo va a arreglar.
  */
-class UNet2D {
+class UNet2D : public Module {
  public:
   /**
    * @param canales resolucion base; los niveles usan `canales` y `2*canales`.
@@ -94,9 +96,37 @@ class UNet2D {
   ResBlockTiempo& ResAlta0() { return res_alta0_; }
   ///@}
 
+  /**
+   * @name Pesos y gradientes
+   *
+   * Se derivan de `Parameters()`, que sale de los `Register()` del constructor.
+   * Antes eran dos listas escritas a mano en paralelo —exactamente lo que el
+   * docstring de `Layer` advierte—: anadir un submodulo obligaba a acordarse de
+   * tocar las dos, y olvidar una habria dejado un peso sin optimizar sin que
+   * nada fallase.
+   */
+  ///@{
   [[nodiscard]] std::vector<Tensor*> GetParameters();
   [[nodiscard]] std::vector<Tensor*> GetGradients();
   [[nodiscard]] size_t NumParametros();
+  ///@}
+
+  /**
+   * @name Persistencia
+   *
+   * Sin esto un entrenamiento de horas no deja nada en disco. El formato es el
+   * mismo NSF del resto del proyecto: los pesos van con su ruta en el arbol
+   * (`res_baja0.conv1.weight`), asi que cargar un archivo de otra arquitectura
+   * falla al comprobar los nombres en vez de leer numeros del tamano correcto
+   * y producir un modelo silenciosamente equivocado.
+   */
+  ///@{
+  bool GuardarPesos(const std::string& ruta);
+  bool CargarPesos(const std::string& ruta);
+
+  /** @brief Lo que el archivo declara esperar: canales, dim del tiempo, grupos. */
+  [[nodiscard]] std::map<std::string, std::string> MetadatosArquitectura() const;
+  ///@}
 
  private:
   int canales_imagen_, canales_, dim_t_, grupos_;
