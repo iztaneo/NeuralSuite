@@ -1185,11 +1185,29 @@ con PyTorch y ahora corpus en español.
       `apps/eval_llm.cpp`, añadido al cerrar la Fase 12: recorre las tres
       particiones enteras con `--completo` y aborta si los pesos no cargan, en
       vez de medir ruido y dar una cifra.
-- [ ] **Evaluar la validación durante el entrenamiento.** Hueco distinto del
-      anterior, que se vio al revisarlo: `train_llm` **no mide validación en
-      ningún momento**, así que el sobreajuste es invisible hasta que el
-      entrenamiento termina y se pasa `eval_llm` a mano. Con eso no se puede
-      parar a tiempo ni elegir el mejor punto de una corrida.
+- [x] **Evaluar la validación durante el entrenamiento.** `train_llm --val_path
+      <texto> --eval_cada <n>`. Antes el sobreajuste era invisible hasta que el
+      entrenamiento terminaba y se pasaba `eval_llm` a mano.
+
+      **Las ventanas de validación son fijas y no tocan el generador aleatorio**,
+      y eso no es un detalle. Si salieran del mismo generador que los lotes de
+      entrenamiento, evaluar cambiaría la secuencia de números que consume el
+      bucle principal y **el entrenamiento dejaría de ser reproducible por culpa
+      de la medición**. Comprobado de extremo a extremo: dos corridas iguales,
+      una con validación y otra sin ella, dan **pesos con el mismo `md5`** y las
+      mismas pérdidas paso a paso.
+
+      Muestra el cambio **respecto a la evaluación anterior**, no la brecha con
+      la pérdida de entrenamiento. La primera versión mostraba esa brecha y en
+      una prueba real salió **negativa dos veces de cuatro**, porque compara
+      contra un solo lote y ése es ruidoso; invitaba a leer «validación mejor que
+      entrenamiento» cuando sólo era el lote que tocó. El cambio entre
+      evaluaciones sí es comparable, porque las ventanas son siempre las mismas.
+
+      Sobre el corpus español, 400 iteraciones: la validación baja `0.075 →
+      0.038 → 0.016` mientras la pérdida de entrenamiento rebota. Eso es
+      exactamente lo que aporta —una señal limpia donde la del lote no lo es— y
+      avisa con `<- posible sobreajuste` en cuanto sube.
 
 **Criterio de salida:** entrenar un transformer pequeño de verdad y demostrar que
 NeuralSuite y PyTorch siguen trayectorias de entrenamiento equivalentes. Eso es

@@ -9,6 +9,8 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <random>
 #include <sstream>
@@ -29,6 +31,9 @@ struct TrainArgs {
   std::string out_file = ReleasePath("model_cpp.bin");
   std::string vocab_file = ReleasePath("vocab_cpp.txt");
   bool use_rope = false;
+  std::string val_path;          // vacio = no evaluar validacion
+  int eval_cada = 250;
+  int eval_lotes = 20;
   int max_iters = 1000;
   int batch_size = 16;
   int block_size = 64;
@@ -53,6 +58,8 @@ void PrintUsage(const char* prog_name) {
             << "  --out_file <path>       Ruta de guardado del modelo (default: release/model_cpp.bin)\n"
             << "  --vocab_file <path>     Ruta de guardado del vocabulario (default: release/vocab_cpp.txt)\n"
             << "  --rope                  Posicion por rotacion (RoPE) en vez de aprendida\n"
+            << "  --val_path <path>       Texto de validacion; se evalua durante el entrenamiento\n"
+            << "  --eval_cada <int>       Cada cuantas iteraciones evaluar (default: 250)\n"
             << "  --help                  Muestra este mensaje de ayuda\n";
 }
 
@@ -81,6 +88,10 @@ TrainArgs ParseTrainArgs(int argc, char** argv) {
       args.learning_rate = std::stof(argv[++i]);
     } else if (arg == "--out_file" && i + 1 < argc) {
       args.out_file = argv[++i];
+    } else if (arg == "--val_path" && i + 1 < argc) {
+      args.val_path = argv[++i];
+    } else if (arg == "--eval_cada" && i + 1 < argc) {
+      args.eval_cada = std::stoi(argv[++i]);
     } else if (arg == "--rope") {
       // Entrenar con posicion por rotacion en vez de aprendida. Los pesos que
       // salgan NO son compatibles con los de un modelo sin RoPE, y al reves
@@ -142,6 +153,51 @@ void ClipGradients(const std::vector<Parameter*>& params, float max_norm = 1.0f)
   }
 }
 
+namespace {
+
+/**
+ * @brief Perdida media sobre `n_lotes` ventanas de `texto`, sin entrenar.
+ *
+ * Las ventanas se toman en posiciones FIJAS y repartidas por todo el texto, sin
+ * tocar el generador aleatorio. Dos razones, y las dos importan:
+ *
+ *  - Si salieran del mismo generador que los lotes de entrenamiento, evaluar
+ *    **cambiaria la trayectoria del entrenamiento**: la secuencia de numeros
+ *    que consume el bucle principal seria otra segun se evalue o no. El
+ *    entrenamiento dejaria de ser reproducible por culpa de la medicion.
+ *  - Con ventanas fijas, dos evaluaciones seguidas miden lo mismo, asi que una
+ *    bajada de la perdida es del modelo y no del muestreo.
+ */
+float EvaluarValidacion(neuralsuite::GPTModel& modelo,
+                        neuralsuite::CrossEntropyLoss& criterio,
+                        const std::vector<int>& tokens, int lote, int block_size,
+                        int vocab_size, int n_lotes) {
+  const size_t por_lote = static_cast<size_t>(lote) * block_size;
+  if (tokens.size() < por_lote + 1) return -1.0f;
+
+  const size_t ventanas = (tokens.size() - 1) / por_lote;
+  const size_t usadas = std::min(ventanas, static_cast<size_t>(n_lotes));
+  if (usadas == 0) return -1.0f;
+  const size_t salto = ventanas / usadas;
+
+  double suma = 0.0;
+  for (size_t w = 0; w < usadas; ++w) {
+    const size_t o = w * salto * por_lote;
+    neuralsuite::Tensor X({lote, block_size}), Y({lote * block_size});
+    for (size_t i = 0; i < por_lote; ++i) {
+      X[i] = static_cast<float>(tokens[o + i]);
+      Y[i] = static_cast<float>(tokens[o + i + 1]);
+    }
+    const neuralsuite::Tensor logits = modelo.Forward(X);
+    neuralsuite::Tensor logits_2d({lote * block_size, vocab_size});
+    std::memcpy(logits_2d.Data(), logits.Data(), logits.TotalSize() * sizeof(float));
+    suma += criterio.Forward(logits_2d, Y);
+  }
+  return static_cast<float>(suma / usadas);
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
   TrainArgs args = ParseTrainArgs(argc, argv);
 
@@ -198,6 +254,25 @@ int main(int argc, char** argv) {
   AdamW optimizer(params, base_lr);
   CrossEntropyLoss criterion;
 
+  // Validacion opcional. Se tokeniza con el MISMO tokenizador: uno construido
+  // sobre el texto de validacion tendria otro vocabulario y las cifras no serian
+  // comparables.
+  std::vector<int> val_tokens;
+  float val_previa = -1.0f;      // para mostrar si la validacion sube o baja
+  if (!args.val_path.empty()) {
+    std::ifstream vf(args.val_path);
+    if (!vf) {
+      std::cerr << "ERROR: no se pudo abrir '" << args.val_path << "'.\n";
+      return 1;
+    }
+    std::stringstream vb;
+    vb << vf.rdbuf();
+    val_tokens = tokenizer.Encode(vb.str());
+    std::cout << "📊 Validacion: " << val_tokens.size() << " tokens desde '"
+              << args.val_path << "', cada " << args.eval_cada << " iteraciones.\n"
+              << std::flush;
+  }
+
   int max_iters = args.max_iters;
   int batch_size = args.batch_size;
   int block_size = config.block_size;
@@ -246,6 +321,32 @@ int main(int argc, char** argv) {
       auto current_time = std::chrono::high_resolution_clock::now();
       double elapsed = std::chrono::duration<double>(current_time - start_time).count();
       std::cout << "Step " << iter << "/" << max_iters << " | Loss LLM: " << loss << " | LR: " << lr << " | Tiempo: " << elapsed << "s\n" << std::flush;
+    }
+
+    // La validacion dice lo que la perdida de entrenamiento no puede: si el
+    // modelo esta aprendiendo el idioma o memorizando el corpus. Sin esto el
+    // sobreajuste solo se ve cuando el entrenamiento ya termino.
+    if (!val_tokens.empty() && (iter % args.eval_cada == 0 || iter == max_iters)) {
+      const float val_loss = EvaluarValidacion(model, criterion, val_tokens, batch_size,
+                                               block_size, config.vocab_size,
+                                               args.eval_lotes);
+      if (val_loss >= 0.0f) {
+        // Se muestra el cambio respecto a la evaluacion anterior, NO la brecha
+        // con la perdida de entrenamiento. La brecha compara contra un solo
+        // lote, que es ruidoso: en una prueba real salio negativa dos veces de
+        // cuatro, lo que invita a leer "validacion mejor que entrenamiento"
+        // cuando solo era el lote que toco. El cambio entre evaluaciones si es
+        // comparable, porque las ventanas de validacion son siempre las mismas.
+        std::cout << "   ↳ validacion | perdida " << val_loss << " | perplejidad "
+                  << std::exp(val_loss);
+        if (val_previa >= 0.0f) {
+          const float delta = val_loss - val_previa;
+          std::cout << " | " << (delta < 0 ? "baja " : "SUBE ") << std::abs(delta)
+                    << (delta > 0 ? "  <- posible sobreajuste" : "");
+        }
+        std::cout << "\n" << std::flush;
+        val_previa = val_loss;
+      }
     }
   }
 
