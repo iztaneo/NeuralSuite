@@ -105,6 +105,21 @@ int main(int argc, char** argv) {
     out["gn_dbeta"] = AArray(*gn.GetGradients()[1]);
   }
 
+  // --- Upsample2D y Downsample2D
+  {
+    const Tensor ux = ATensor(Require(ref, "up_x"));
+    const Tensor uw = ATensor(Require(ref, "up_w"));
+    Upsample2D up(2);
+    out["up_y"] = AArray(up.Forward(ux));
+    out["up_dx"] = AArray(up.Backward(uw));
+
+    const Tensor dxin = ATensor(Require(ref, "dn_x"));
+    const Tensor dw = ATensor(Require(ref, "dn_w"));
+    Downsample2D dn(2);
+    out["dn_y"] = AArray(dn.Forward(dxin));
+    out["dn_dx"] = AArray(dn.Backward(dw));
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

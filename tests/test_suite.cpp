@@ -4170,6 +4170,133 @@ void TestGroupNorm() {
             << std::flush;
 }
 
+/**
+ * @brief `Upsample2D` y `Downsample2D`, y la simetría que las une.
+ *
+ * La paridad contra `nn.Upsample` y `nn.AvgPool2d` ya confirma los valores. Lo
+ * que añade esta prueba es la propiedad que la paridad no mira: que **son
+ * adjuntas una de otra**. Para cualquier `x` e `y`,
+ *
+ *     <Upsample(x), y> == <x, Upsample^T(y)>
+ *
+ * y el `Upsample^T` es justamente su backward. Comprobarlo es más fuerte que
+ * comparar números sueltos: si el backward asignara en vez de sumar, los
+ * valores podrían parecer razonables y el producto interno no cuadraría.
+ *
+ * Esa identidad es la razón de que el error clásico sea grave. En `Upsample`
+ * cada píxel de entrada aparece `f²` veces, así que hacia atrás hay que
+ * **sumar**; asignar deja el gradiente `f²` veces más pequeño. En `Downsample`
+ * pasa lo simétrico: olvidar el `1/f²` lo deja `f²` veces más grande. En los dos
+ * casos la red sigue entrenando, algo peor, y nada que no mire el gradiente lo
+ * nota.
+ */
+void TestRemuestreo2D() {
+  std::cout << "🧪 [Test 43] Upsample2D y Downsample2D... " << std::flush;
+
+  const int N = 2, C = 3, H = 4, W = 6, F = 2;
+
+  Tensor x({N, C, H, W});
+  for (size_t i = 0; i < x.TotalSize(); ++i) {
+    x[i] = 0.7f * std::sin(0.37f * static_cast<float>(i)) + 0.1f;
+  }
+
+  // --- Upsample: cada píxel se repite F*F veces, en su bloque.
+  {
+    Upsample2D up(F);
+    const Tensor y = up.Forward(x);
+    Check(y.Shape() == std::vector<int>({N, C, H * F, W * F}),
+          "Upsample2D no multiplica la resolución");
+
+    for (int p = 0; p < N * C; ++p) {
+      for (int fy = 0; fy < H; ++fy) {
+        for (int fx = 0; fx < W; ++fx) {
+          const float v = x[(static_cast<size_t>(p) * H + fy) * W + fx];
+          for (int dy = 0; dy < F; ++dy) {
+            for (int dx = 0; dx < F; ++dx) {
+              const size_t k = (static_cast<size_t>(p) * H * F + fy * F + dy) * W * F +
+                               fx * F + dx;
+              Check(y[k] == v, "Upsample2D no repite el píxel en todo su bloque");
+            }
+          }
+        }
+      }
+    }
+
+    // Adjunción: <Upsample(x), g> debe valer lo mismo que <x, Upsample^T(g)>.
+    Tensor g(y.Shape());
+    for (size_t i = 0; i < g.TotalSize(); ++i) {
+      g[i] = 0.5f * std::cos(0.19f * static_cast<float>(i)) + 0.2f;
+    }
+    const Tensor dx = up.Backward(g);
+    Check(dx.Shape() == x.Shape(), "Upsample2D: dx no tiene la forma de la entrada");
+
+    double izq = 0.0, der = 0.0;
+    for (size_t i = 0; i < y.TotalSize(); ++i) izq += static_cast<double>(y[i]) * g[i];
+    for (size_t i = 0; i < x.TotalSize(); ++i) der += static_cast<double>(x[i]) * dx[i];
+    Check(std::abs(izq - der) / std::max(1.0, std::abs(izq)) < 1e-5,
+          "Upsample2D no es adjunta de su backward: " + std::to_string(izq) +
+              " frente a " + std::to_string(der));
+  }
+
+  // --- Downsample: promedia bloques, y reparte el gradiente entre ellos.
+  {
+    Downsample2D dn(F);
+    const Tensor y = dn.Forward(x);
+    Check(y.Shape() == std::vector<int>({N, C, H / F, W / F}),
+          "Downsample2D no divide la resolución");
+
+    for (int p = 0; p < N * C; ++p) {
+      for (int fy = 0; fy < H / F; ++fy) {
+        for (int fx = 0; fx < W / F; ++fx) {
+          double media = 0.0;
+          for (int dy = 0; dy < F; ++dy) {
+            for (int dx = 0; dx < F; ++dx) {
+              media += x[(static_cast<size_t>(p) * H + fy * F + dy) * W + fx * F + dx];
+            }
+          }
+          media /= F * F;
+          const size_t k = (static_cast<size_t>(p) * (H / F) + fy) * (W / F) + fx;
+          Check(std::abs(media - y[k]) < 1e-5,
+                "Downsample2D no promedia el bloque (¿toma el máximo?)");
+        }
+      }
+    }
+
+    Tensor g(y.Shape());
+    for (size_t i = 0; i < g.TotalSize(); ++i) {
+      g[i] = 0.4f * std::sin(0.29f * static_cast<float>(i)) - 0.15f;
+    }
+    const Tensor dx = dn.Backward(g);
+
+    double izq = 0.0, der = 0.0;
+    for (size_t i = 0; i < y.TotalSize(); ++i) izq += static_cast<double>(y[i]) * g[i];
+    for (size_t i = 0; i < x.TotalSize(); ++i) der += static_cast<double>(x[i]) * dx[i];
+    Check(std::abs(izq - der) / std::max(1.0, std::abs(izq)) < 1e-5,
+          "Downsample2D no es adjunta de su backward: " + std::to_string(izq) +
+              " frente a " + std::to_string(der));
+  }
+
+  // Bajar y subir devuelve la forma original: es el recorrido de una U-Net.
+  {
+    Downsample2D dn(F);
+    Upsample2D up(F);
+    const Tensor vuelta = up.Forward(dn.Forward(x));
+    Check(vuelta.Shape() == x.Shape(),
+          "bajar y subir no recupera la forma de partida");
+  }
+
+  // Una resolución que no es múltiplo del factor debe abortar, no recortar.
+  {
+    Downsample2D dn(F);
+    Tensor impar({1, 1, 5, 4});
+    bool protesto = false;
+    try { dn.Forward(impar); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "Downsample2D aceptó una altura que no es múltiplo del factor");
+  }
+
+  std::cout << "PASADO ✅ (valores, adjunción en ambas y recorrido de U-Net)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -4217,6 +4344,7 @@ int main() {
   TestBackwardConSemilla();
   TestSiluYRMSNorm();
   TestGroupNorm();
+  TestRemuestreo2D();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

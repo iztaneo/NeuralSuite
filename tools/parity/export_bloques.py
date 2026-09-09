@@ -1,4 +1,4 @@
-"""Exporta RMSNorm, SiLU y GroupNorm de PyTorch para compararlos con los de C++.
+"""Exporta RMSNorm, SiLU, GroupNorm y el remuestreo 2D, para comparar con C++.
 
 Por qué hace falta, si ya hay gradient check: un gradient check confirma que el
 backward deriva el forward **que se escribió**, no que ese forward sea realmente
@@ -87,7 +87,34 @@ def main():
     y_gn = gn(xg)
     (y_gn * wg).sum().backward()
 
+    # --- Upsample2D (vecino mas proximo) y Downsample2D (promedio).
+    #
+    # Son adjuntas una de otra salvo el factor 1/f^2, asi que se exportan juntas:
+    # el gradiente de una es la operacion de la otra. Comparar las dos contra
+    # PyTorch cierra las dos mitades de esa simetria.
+    Nr, Cr, Hr, Wr = 2, 3, 4, 6
+    xu = torch.randn(Nr, Cr, Hr, Wr, generator=g, dtype=torch.float32,
+                     requires_grad=True)
+    wu = torch.randn(Nr, Cr, Hr * 2, Wr * 2, generator=g, dtype=torch.float32)
+    y_up = nn.Upsample(scale_factor=2, mode="nearest")(xu)
+    (y_up * wu).sum().backward()
+
+    xd = torch.randn(Nr, Cr, Hr, Wr, generator=g, dtype=torch.float32,
+                     requires_grad=True)
+    wd = torch.randn(Nr, Cr, Hr // 2, Wr // 2, generator=g, dtype=torch.float32)
+    y_dn = nn.AvgPool2d(2)(xd)
+    (y_dn * wd).sum().backward()
+
     tensors = {
+        "up_x": xu.detach().numpy(),
+        "up_w": wu.numpy(),
+        "up_meta": np.array([Nr, Cr, Hr, Wr], dtype=np.float32),
+        "up_y": y_up.detach().numpy(),
+        "up_dx": xu.grad.detach().numpy(),
+        "dn_x": xd.detach().numpy(),
+        "dn_w": wd.numpy(),
+        "dn_y": y_dn.detach().numpy(),
+        "dn_dx": xd.grad.detach().numpy(),
         "gn_x": xg.detach().numpy(),
         "gn_w": wg.numpy(),
         "gn_gamma": gn.weight.detach().numpy(),

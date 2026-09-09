@@ -1025,8 +1025,35 @@ desbloquean el transformer moderno, que es el examen principal—:
       Tres mutaciones, y las tres caen en **ambas** capas: aplicar gamma por
       grupo, normalizar por canal en vez de por grupo, y omitir el término de la
       varianza en `dx`.
-- [ ] `Upsample2D`
-- [ ] `Downsample2D`
+- [x] **`Upsample2D`** (vecino más próximo) y **`Downsample2D`** (promedio de
+      bloques). Son los bloques de subida y bajada de una U-Net, y se hicieron
+      juntas porque **son adjuntas una de otra** salvo el factor `1/f²`: donde
+      una copia, la otra suma; donde una promedia, la otra reparte.
+
+      Esa simetría es también la de sus errores. En `Upsample` cada píxel
+      aparece `f²` veces, así que hacia atrás hay que **sumar**; asignar deja el
+      gradiente `f²` veces más pequeño. En `Downsample` pasa lo contrario:
+      olvidar el `1/f²` lo deja `f²` veces más grande. En los dos casos la red
+      sigue entrenando, algo peor, y nada que no mire el gradiente lo nota. Es
+      el mismo error que en `Gather` con un token repetido.
+
+      `Downsample2D` promedia en vez de tomar el máximo —que es lo que hace
+      `MaxPool2D`— porque el máximo tira información de golpe y su gradiente
+      llega a un solo píxel de cada bloque; en una red generativa eso deja
+      huecos sin señal. Y exige que la resolución sea múltiplo del factor: un
+      borde sobrante habría que recortarlo o rellenarlo, y las dos opciones
+      cambian el resultado en silencio, así que aborta.
+
+      **Paridad exacta** contra `nn.Upsample` y `nn.AvgPool2d`: `0.000e+00` en
+      las cuatro salidas, porque son copias y promedios de potencias de dos y no
+      hay redondeo de por medio.
+
+      La prueba unitaria añade lo que la paridad no mira: que se cumpla
+      `⟨Upsample(x), g⟩ = ⟨x, Upsampleᵀ(g)⟩` en las dos capas. Comprobar la
+      adjunción es más fuerte que comparar valores sueltos —un backward que
+      asignara en vez de sumar podría dar números plausibles y aun así romper la
+      identidad—. Tres mutaciones, las tres rojas en ambas capas de verificación,
+      con el estado base comprobado antes de mutar.
 - [ ] `CrossAttention` — `Q` del latente, `K` y `V` del condicionamiento. Es la
       pieza que conecta lenguaje y visión, y la que convierte dos modelos
       separados en un sistema multimodal.
