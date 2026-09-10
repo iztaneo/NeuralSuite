@@ -1603,7 +1603,72 @@ juguete didáctico y se construye la implementación real:
       siguiente a integrar, no como un bloqueo.
 
 - [ ] Usar `DataLoader::Partir()` en `train_diffusion` en vez del corte contiguo.
-- [ ] DDPM sobre MNIST completo (escalón 5).
+- [ ] **DDPM sobre MNIST completo (escalón 5).** Todo lo que necesita está
+      construido y verificado; falta lanzarlo. El plan, con los números medidos
+      en esta máquina y no estimados:
+
+      | canales | lote | ms/iter | img/s | 1 época (60k) | params | checkpoint |
+      | --- | --- | --- | --- | --- | --- | --- |
+      | 32 | 8 | 62.5 | 128 | 7.8 min | 246 273 | 3.8 MB |
+      | 32 | 16 | 125.0 | 128 | 7.8 min | | |
+      | **32** | **32** | **225.0** | **142** | **7.0 min** | | |
+      | 64 | 16 | 365.0 | 44 | 22.8 min | 951 297 | 14.5 MB |
+      | 64 | 32 | 662.5 | 48 | 20.7 min | | |
+
+      El tamaño de lote casi no cambia el rendimiento con 32 canales (128 → 142
+      img/s), así que elegir 32 es gratis y reduce el ruido del gradiente, que
+      en difusión importa porque cada paso ve un `t` distinto.
+
+      **80 000 iteraciones = 45 épocas ≈ 5 h**, en segundo plano con log:
+
+      ```bash
+      mkdir -p release logs
+      nohup ./bin/train_diffusion \
+        --n_imagenes 0 --n_validacion 3000 \
+        --canales 32 --pasos 1000 --lote 32 \
+        --iteraciones 80000 --calentamiento 1000 \
+        --lr 2e-4 --lr_min 1e-5 --ema 0.9995 \
+        --evaluar_cada 2000 --muestrear_cada 5000 \
+        --guardar_cada 2000 --archivar_cada 10000 \
+        --archivo release/unet_mnist.nsf \
+        > logs/difusion_mnist.log 2>&1 &
+      ```
+
+      Por qué cada cosa:
+
+      - **`--pasos 1000`** y no los 200 que se validaron. Se midió que **no
+        cuesta nada en entrenamiento** —el coste no depende de `T`, cada muestra
+        lleva un solo `t`— y es la configuración del artículo. El muestreo con
+        DDPM sí se encarece ×5, pero para eso está DDIM. La contrapartida real
+        es que cada `t` concreto recibe 5× menos cobertura; se asume porque el
+        *time embedding* es continuo (Test 51) y la red interpola entre vecinos.
+      - **`--lr 2e-4`** y no el 2e-3 del sobreajuste: aquello eran 16 imágenes
+        memorizadas, esto son 57 000 diversas.
+      - **`--ema 0.9995`** da una ventana de ~2000 pasos sobre 80 000. El 0.9999
+        del artículo está pensado para 800 000.
+      - **`--archivar_cada 10000`**: 8 copias de 3.8 MB = 30 MB. La rotativa se
+        sobrescribe cada 2000 para poder reanudar tras un corte; las archivadas
+        existen porque si el modelo empeora al final —que en difusión pasa—
+        sobrescribir habría borrado el momento bueno. Cada copia archivada es un
+        trío completo con su propio sello, así que **se puede reanudar desde
+        cualquiera de ellas**.
+      - **`--parar_en`** para trocearlo. El coseno del learning rate se calcula
+        sobre `--iteraciones`, así que el total hay que fijarlo ahora: reanudar
+        con un número mayor daría otra curva. Parar antes sí se puede, pero
+        entonces el coseno no habrá terminado de decaer.
+
+      **Criterio de éxito, acordado antes y no después:**
+
+      1. La **brecha de validación** se mantiene cerca de cero. Si se abre, está
+         memorizando.
+      2. Las **muestras cada 5000 iteraciones** pasan de manchas a trazos y de
+         trazos a dígitos legibles.
+      3. **Reanudar a mitad** y comprobar que sigue igual.
+      4. El **examen**: generar con DDPM y con DDIM, y medir la distancia a la
+         imagen más cercana del conjunto — que ahora debe ser **grande**, al
+         revés que en la puerta de sobreajuste. Si es pequeña, está copiando en
+         vez de generando. Ese cambio de signo conviene tenerlo claro de
+         antemano.
 - [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
 
   **El orden importa, y cada escalón lleva su examen.** Construir la U-Net entera

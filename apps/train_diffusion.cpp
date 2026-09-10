@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
   float lr = 2e-3f, beta_fin = 0.0f;   // 0 = elegir segun los pasos
   float lr_min = 0.0f, ema_decaimiento = 0.999f;
   int calentamiento = 0, guardar_cada = 0, evaluar_cada = 0, muestrear_cada = 0;
+  int archivar_cada = 0;
   int n_validacion = 0, parar_en = 0;
   std::string archivo = "release/unet_mnist.nsf";
   bool reanudar = false;
@@ -96,6 +97,7 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--calentamiento")) calentamiento = std::atoi(sig("--calentamiento"));
     else if (!std::strcmp(argv[i], "--ema")) ema_decaimiento = static_cast<float>(std::atof(sig("--ema")));
     else if (!std::strcmp(argv[i], "--guardar_cada")) guardar_cada = std::atoi(sig("--guardar_cada"));
+    else if (!std::strcmp(argv[i], "--archivar_cada")) archivar_cada = std::atoi(sig("--archivar_cada"));
     else if (!std::strcmp(argv[i], "--evaluar_cada")) evaluar_cada = std::atoi(sig("--evaluar_cada"));
     else if (!std::strcmp(argv[i], "--muestrear_cada")) muestrear_cada = std::atoi(sig("--muestrear_cada"));
     else if (!std::strcmp(argv[i], "--n_validacion")) n_validacion = std::atoi(sig("--n_validacion"));
@@ -204,8 +206,8 @@ int main(int argc, char** argv) {
   // los tres archivos. Al reanudar tienen que coincidir. Con eso, una mezcla no
   // se entrena en silencio: aborta diciendo que los archivos no son del mismo
   // checkpoint.
-  auto guardar = [&](int it) {
-    const auto dst = rutas(archivo);
+  auto guardar = [&](int it, const std::string& base) {
+    const auto dst = rutas(base);
     std::array<std::string, 3> tmp;
     for (int k = 0; k < 3; ++k) tmp[k] = dst[k] + ".tmp";
 
@@ -449,7 +451,27 @@ int main(int argc, char** argv) {
 
     // 2. Checkpoint. Sin esto, un run de horas que se corte no deja nada.
     if (guardar_cada > 0 && it % guardar_cada == 0) {
-      if (guardar(it)) std::printf("  checkpoint en la iteracion %d -> %s\n", it, archivo.c_str());
+      if (guardar(it, archivo)) {
+        std::printf("  checkpoint en la iteracion %d -> %s\n", it, archivo.c_str());
+      }
+    }
+
+    // Copia archivada, aparte de la rotativa. La rotativa sirve para reanudar
+    // tras un corte, y por eso se sobrescribe; pero si el modelo empeora al
+    // final —que en difusion pasa— sobrescribirla habria borrado el momento
+    // bueno sin dejar rastro. Cada copia son 3.8 MB con 32 canales, asi que
+    // conservar unas cuantas cuesta menos que perder cinco horas de computo.
+    if (archivar_cada > 0 && it % archivar_cada == 0) {
+      char sufijo[32];
+      std::snprintf(sufijo, sizeof(sufijo), "_it%06d", it);
+      std::string base = archivo;
+      const size_t punto = base.rfind('.');
+      // El sufijo va ANTES de la extension para que el archivo siga siendo un
+      // .nsf reconocible, y con el numero rellenado a seis cifras para que el
+      // orden alfabetico coincida con el cronologico.
+      base = (punto == std::string::npos) ? base + sufijo
+                                          : base.substr(0, punto) + sufijo + base.substr(punto);
+      if (guardar(it, base)) std::printf("  archivado -> %s\n", base.c_str());
     }
   }
 
@@ -458,7 +480,7 @@ int main(int argc, char** argv) {
   // hace dudar de si son dos cosas distintas al leer el log.
   const bool ya_guardado = guardar_cada > 0 && ultima % guardar_cada == 0;
   if (!ya_guardado) {
-    if (guardar(ultima)) {
+    if (guardar(ultima, archivo)) {
       std::printf("\n  guardado en %s (+ .ema, +.opt) tras la iteracion %d de %d\n",
                   archivo.c_str(), ultima, iteraciones);
     }
