@@ -31,6 +31,21 @@ namespace {
 
 int g_failures = 0;
 
+/**
+ * @brief Ruta para un archivo temporal de prueba, valida en los tres sistemas.
+ *
+ * Existe porque codificar la ruta a mano compila y pasa en Linux y macOS, y
+ * **falla solo en Windows**, donde no hay directorio /tmp. Ocurrio nueve veces
+ * en este archivo y dejo el CI en rojo diecisiete horas sin que nadie lo viera,
+ * porque cada push cancelaba el run anterior antes de que Windows terminase.
+ * La leccion ya estaba escrita en un comentario del Test 19 y aun asi se
+ * repitio, porque nada obligaba a mirarlo: un comentario no es una barrera.
+ * Ahora la forma corta y la correcta son la misma, que si lo es.
+ */
+std::string RutaTemporal(const std::string& nombre) {
+  return (std::filesystem::temp_directory_path() / nombre).string();
+}
+
 void Check(bool condition, const std::string& what) {
   if (!condition) {
     std::cout << "\n   ❌ FALLO: " << what << "\n" << std::flush;
@@ -4768,8 +4783,8 @@ void TestRoPEEnElGPT() {
 
   // 5. Los pesos no se mezclan, y falla en las dos direcciones.
   {
-    const std::string ruta_sin = "/tmp/ns_test_sin_rope.nsf";
-    const std::string ruta_con = "/tmp/ns_test_con_rope.nsf";
+    const std::string ruta_sin = RutaTemporal("ns_test_sin_rope.nsf");
+    const std::string ruta_con = RutaTemporal("ns_test_con_rope.nsf");
 
     ManualSeed(101);
     GPTModel sin(base);
@@ -4995,8 +5010,8 @@ void TestMnistYDataLoader() {
   std::cout << "🧪 [Test 49] Lector de MNIST y DataLoader... " << std::flush;
   using namespace neuralsuite::data;
 
-  const std::string ruta_img = "/tmp/ns_test_idx_img.bin";
-  const std::string ruta_lab = "/tmp/ns_test_idx_lab.bin";
+  const std::string ruta_img = RutaTemporal("ns_test_idx_img.bin");
+  const std::string ruta_lab = RutaTemporal("ns_test_idx_lab.bin");
   const int N = 7, FILAS = 4, COLS = 3;
 
   // Big-endian escrito a mano, que es la convención del formato.
@@ -5056,7 +5071,7 @@ void TestMnistYDataLoader() {
 
   // 3. Cuentas que no cuadran: imágenes y etiquetas de distinto tamaño.
   {
-    const std::string corto = "/tmp/ns_test_idx_lab2.bin";
+    const std::string corto = RutaTemporal("ns_test_idx_lab2.bin");
     { std::ofstream f(corto, std::ios::binary);
       escribir_u32(f, 0x00000801u); escribir_u32(f, N - 2);
       for (int i = 0; i < N - 2; ++i) { const uint8_t v = 0; f.write((const char*)&v, 1); } }
@@ -5174,7 +5189,7 @@ void TestMnistYDataLoader() {
   //     cazaba la comprobación de tamaño por casualidad, pero una cabecera
   //     fabricada podría hacer que cuadrase.
   {
-    const std::string hostil = "/tmp/ns_test_idx_hostil.bin";
+    const std::string hostil = RutaTemporal("ns_test_idx_hostil.bin");
     { std::ofstream f(hostil, std::ios::binary);
       escribir_u32(f, 0x00000803u);
       escribir_u32(f, 0xFFFFFFFFu); escribir_u32(f, 0xFFFFFFFFu); escribir_u32(f, 0xFFFFFFFFu);
@@ -5963,7 +5978,7 @@ void TestEmaYPersistencia() {
     Check(a.GetParameters().size() == a.GetGradients().size(),
           "pesos y gradientes no cuadran: las listas se han vuelto a separar");
 
-    const std::string ruta = "/tmp/ns_test_unet.nsf";
+    const std::string ruta = RutaTemporal("ns_test_unet.nsf");
     Check(a.GuardarPesos(ruta), "no se pudo guardar");
 
     ManualSeed(77);
@@ -6006,7 +6021,7 @@ void TestEmaYPersistencia() {
   {
     ManualSeed(13);
     UNet2D u(1, 8, 16, 2);
-    const std::string ruta = "/tmp/ns_test_sello.nsf";
+    const std::string ruta = RutaTemporal("ns_test_sello.nsf");
     Check(u.GuardarPesos(ruta, {{"checkpoint_id", "424242"}}), "no se pudo guardar con sello");
     std::map<std::string, std::string> leidos;
     Check(u.CargarPesos(ruta, &leidos), "no se pudo cargar");
@@ -6022,7 +6037,7 @@ void TestEmaYPersistencia() {
   {
     Tensor v({3});
     v.RandomNormal(0.0f, 1.0f);
-    const std::string ruta = "/tmp/ns_test_meta.nsf";
+    const std::string ruta = RutaTemporal("ns_test_meta.nsf");
     Check(nsf::Save(ruta, {{"v", &v}}, {{"arch", "x"}, {"iteracion", "1234"}}).ok,
           "no se pudo guardar el archivo de metadatos");
     std::map<std::string, std::string> leidos;

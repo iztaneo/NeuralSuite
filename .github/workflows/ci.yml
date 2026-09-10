@@ -6,9 +6,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+# En una rama o un PR, cancelar el run anterior ahorra minutos y no pierde
+# informacion: lo que importa es el ultimo estado. En `main` NO, y la razon es
+# concreta: con la cancelacion activada, cada push cancelaba el run anterior
+# antes de que el trabajo de Windows —el mas lento— llegara a terminar, y el CI
+# estuvo en rojo diecisiete horas sin que nadie lo viera. Un commit en `main`
+# tiene que decir si esta verde o no, aunque cueste unos minutos mas.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Compila y ejecuta la suite numerica en las tres plataformas que anuncia el
