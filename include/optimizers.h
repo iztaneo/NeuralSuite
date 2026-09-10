@@ -281,18 +281,7 @@ class EMA {
    * daria ruido y pareceria que el entrenamiento no avanza cuando si lo hace.
    * El limite `(1+n)/(10+n)` es el que usa la implementacion de referencia.
    */
-  void Actualizar() {
-    ++pasos_;
-    const float d = std::min(decaimiento_,
-                             static_cast<float>(1 + pasos_) / static_cast<float>(10 + pasos_));
-    for (size_t k = 0; k < params_.size(); ++k) {
-      Tensor& s = sombra_[k];
-      const Tensor& p = *params_[k];
-      for (size_t i = 0; i < s.TotalSize(); ++i) {
-        s[i] = d * s[i] + (1.0f - d) * p[i];
-      }
-    }
-  }
+  void Actualizar();
 
   /**
    * @brief Intercambia los pesos vivos por los promediados, y al reves.
@@ -301,13 +290,7 @@ class EMA {
    * un intercambio y no una copia justamente para que la segunda llamada
    * devuelva el modelo a como estaba y el entrenamiento pueda continuar.
    */
-  void Intercambiar() {
-    for (size_t k = 0; k < params_.size(); ++k) {
-      Tensor& s = sombra_[k];
-      Tensor& p = *params_[k];
-      for (size_t i = 0; i < s.TotalSize(); ++i) std::swap(s[i], p[i]);
-    }
-  }
+  void Intercambiar();
 
   [[nodiscard]] int Pasos() const { return pasos_; }
 

@@ -40,9 +40,7 @@ namespace neuralsuite {
 class SwiGLU : public Layer {
  public:
   SwiGLU(int dim, int oculto)
-      : dim_(dim),
-        oculto_(oculto),
-        w_gate_(dim, oculto),
+      : w_gate_(dim, oculto),
         w_up_(dim, oculto),
         w_down_(oculto, dim) {
     if (dim <= 0 || oculto <= 0) {
@@ -67,8 +65,9 @@ class SwiGLU : public Layer {
   }
 
  private:
-  int dim_;
-  int oculto_;
+  // Las dimensiones no se guardan: las tres `Linear` ya las conocen y nadie
+  // vuelve a preguntarlas. Un campo que solo se asigna es peso muerto y el
+  // compilador lo avisa.
 
   Linear w_gate_, w_up_, w_down_;
 

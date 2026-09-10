@@ -6,6 +6,9 @@
 
 #include "optimizers.h"
 
+#include <algorithm>
+#include <utility>
+
 namespace neuralsuite {
 
 void SGD::Step() {
@@ -47,5 +50,28 @@ void AdamW::Step() {
       }
     }
   }
+
+void EMA::Actualizar() {
+  ++pasos_;
+  // El decaimiento efectivo sube desde cero en vez de ser fijo; el porque esta
+  // en la cabecera, junto a la declaracion.
+  const float d = std::min(decaimiento_,
+                           static_cast<float>(1 + pasos_) / static_cast<float>(10 + pasos_));
+  for (size_t k = 0; k < params_.size(); ++k) {
+    Tensor& s = sombra_[k];
+    const Tensor& p = *params_[k];
+    for (size_t i = 0; i < s.TotalSize(); ++i) {
+      s[i] = d * s[i] + (1.0f - d) * p[i];
+    }
+  }
+}
+
+void EMA::Intercambiar() {
+  for (size_t k = 0; k < params_.size(); ++k) {
+    Tensor& s = sombra_[k];
+    Tensor& p = *params_[k];
+    for (size_t i = 0; i < s.TotalSize(); ++i) std::swap(s[i], p[i]);
+  }
+}
 
 }  // namespace neuralsuite

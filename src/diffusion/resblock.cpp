@@ -12,8 +12,7 @@ namespace diffusion {
 
 ResBlockTiempo::ResBlockTiempo(int canales_entrada, int canales_salida, int dim_tiempo,
                                int grupos)
-    : c_in_(canales_entrada),
-      c_out_(canales_salida),
+    : c_out_(canales_salida),
       dim_t_(dim_tiempo),
       norm1_(grupos, canales_entrada),
       norm2_(grupos, canales_salida),

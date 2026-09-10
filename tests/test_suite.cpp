@@ -5875,7 +5875,9 @@ void TestMuestreadores() {
     try { DDIMSampler(cal, T + 1, 0.0f); } catch (const std::invalid_argument&) { ++protestas; }
     try { DDIMSampler(cal, 5, 1.5f); } catch (const std::invalid_argument&) { ++protestas; }
     try {
-      DDPMSampler(cal).Muestrear(Predictor(), xT, RuidoNulo());
+      // El resultado se descarta a proposito: lo que se comprueba es que la
+      // llamada lance, no lo que devuelva.
+      static_cast<void>(DDPMSampler(cal).Muestrear(Predictor(), xT, RuidoNulo()));
     } catch (const std::invalid_argument&) { ++protestas; }
     Check(protestas == 4, "solo protestaron " + std::to_string(protestas) +
                               " de 4 argumentos invalidos");
@@ -5883,8 +5885,8 @@ void TestMuestreadores() {
     // muestreo; hay que decirlo, no propagar basura.
     bool forma = false;
     try {
-      DDPMSampler(cal).Muestrear(
-          [](const Tensor&, const Tensor&) { return Tensor({1, 1}); }, xT, RuidoNulo());
+      static_cast<void>(DDPMSampler(cal).Muestrear(
+          [](const Tensor&, const Tensor&) { return Tensor({1, 1}); }, xT, RuidoNulo()));
     } catch (const std::runtime_error&) { forma = true; }
     Check(forma, "acepto un predictor que devuelve una forma distinta de x_t");
   }

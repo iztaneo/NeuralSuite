@@ -79,7 +79,10 @@ class ResBlockTiempo : public Layer {
   Conv2D* Atajo() { return atajo_.get(); }
 
  private:
-  int c_in_, c_out_, dim_t_;
+  // Solo lo que el forward y el backward vuelven a necesitar. `c_in` no se
+  // guarda: su unico uso —decidir si hace falta el atajo— se resuelve en el
+  // constructor y no vuelve a hacer falta.
+  int c_out_, dim_t_;
 
   GroupNormLayer norm1_, norm2_;
   Conv2D conv1_, conv2_;
