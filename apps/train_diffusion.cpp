@@ -69,6 +69,13 @@ void Dibujar(const Tensor& img, size_t desplazamiento, int h, int w) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Salida linea a linea. Este programa corre horas con la salida redirigida
+  // a un log que se sigue en vivo, y con la salida a un archivo la libreria de
+  // C acumula en bloques de varios KB: el log aparecia vacio durante minutos y
+  // luego a trompicones. En una terminal no se nota, que es por lo que no se
+  // vio en las corridas cortas.
+  std::setvbuf(stdout, nullptr, _IOLBF, 0);
+
   std::string dir = "corpus/mnist";
   int n_imagenes = 16, iteraciones = 400, lote = 8, canales = 32, dim_t = 64;
   int pasos = 200, grupos = 8, semilla = 7, reportar_cada = 25;

@@ -28,6 +28,10 @@ vocab_cpp.txt
 release/*
 !release/README.md
 
+# Logs de entrenamiento. Un run largo escribe cientos de lineas con dibujos en
+# ASCII; son para seguirlo en vivo, no para versionarlos.
+logs/
+
 # Corpus de entrenamiento del OCR. Son decenas de miles de imagenes generadas
 # por tools/ocr/generar_dataset.py: no se versionan porque git no olvida, y 52
 # MB de datos derivados quedarian en el historial para siempre. Viven en la
