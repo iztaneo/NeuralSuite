@@ -78,6 +78,20 @@ uint16_t ReadSample(const uint8_t* row, size_t index, int depth);
  */
 bool DecodePng(const uint8_t* data, size_t size, Bitmap* out, std::string* error);
 
+/**
+ * @brief Codifica una imagen en gris de 8 bits como PNG.
+ *
+ * Existe para poder MIRAR lo que genera un modelo a resolucion completa: el
+ * dibujo en ASCII de los logs salta una fila de cada dos y esconde justo el
+ * detalle que decide si un digito es legible.
+ *
+ * Deliberadamente minimo: sin filtros de fila (tipo 0) y con bloques DEFLATE
+ * almacenados, sin comprimir. El archivo sale mas grande de lo necesario, pero
+ * no hace falta un compresor para escribir una norma valida, y cualquier lector
+ * de PNG lo abre. Solo admite `channels == 1`; lo demas se rechaza con mensaje.
+ */
+bool EncodePngGris(const Bitmap& in, std::vector<uint8_t>* out, std::string* error);
+
 }  // namespace image
 }  // namespace neuralsuite
 

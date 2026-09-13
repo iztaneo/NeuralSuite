@@ -24,6 +24,7 @@
 #include "autograd.h"
 #include "parallel.h"
 #include "neuralsuite.h"
+#include "image/png.h"
 
 using namespace neuralsuite;
 
@@ -6053,6 +6054,51 @@ void TestEmaYPersistencia() {
             << std::flush;
 }
 
+/**
+ * @brief `EncodePngGris`: ida y vuelta por el decodificador propio.
+ *
+ * Se comprobo ademas contra Pillow al escribirlo, que es independiente; aqui
+ * queda lo que se puede comprobar sin Python. Incluye una imagen de mas de
+ * 65 535 bytes, que obliga a partir el flujo en varios bloques DEFLATE: con uno
+ * solo, un error en el encadenado de bloques no se veria.
+ */
+void TestEncodePng() {
+  std::cout << "🧪 [Test 56] Codificador PNG en gris... " << std::flush;
+  using namespace neuralsuite::image;
+  for (const auto& wh : {std::pair<int, int>{7, 5}, {300, 300}, {1, 1}}) {
+    Bitmap b;
+    b.width = wh.first;
+    b.height = wh.second;
+    b.channels = 1;
+    for (int y = 0; y < b.height; ++y) {
+      for (int x = 0; x < b.width; ++x) b.pixels.push_back(static_cast<uint8_t>((x * 7 + y * 13) % 256));
+    }
+    std::vector<uint8_t> png;
+    std::string error;
+    Check(EncodePngGris(b, &png, &error), "no se pudo codificar: " + error);
+    Bitmap d;
+    Check(DecodePng(png.data(), png.size(), &d, &error),
+          "el PNG propio no lo lee el decodificador propio: " + error);
+    Check(d.width == b.width && d.height == b.height && d.channels == 1,
+          "las dimensiones no sobreviven a la ida y vuelta");
+    Check(d.pixels == b.pixels, "los pixeles no sobreviven a la ida y vuelta");
+  }
+  {
+    Bitmap rgb;
+    rgb.width = rgb.height = 2;
+    rgb.channels = 3;
+    rgb.pixels.assign(12, 0);
+    std::vector<uint8_t> png;
+    std::string error;
+    Check(!EncodePngGris(rgb, &png, &error), "acepto una imagen de tres canales");
+    Bitmap mal;
+    mal.width = 4; mal.height = 4; mal.channels = 1;
+    mal.pixels.assign(3, 0);
+    Check(!EncodePngGris(mal, &png, &error), "acepto pixeles que no cuadran con las dimensiones");
+  }
+  std::cout << "PASADO ✅ (ida y vuelta exacta, varios bloques y entradas invalidas)\n" << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -6113,6 +6159,7 @@ int main() {
   TestUNet2D();
   TestMuestreadores();
   TestEmaYPersistencia();
+  TestEncodePng();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

@@ -5,6 +5,8 @@
 // porque del diseno; aqui va el porque de cada linea.
 
 #include "image/png.h"
+#include <algorithm>
+#include "image/inflate.h"
 
 namespace neuralsuite {
 namespace image {
@@ -282,6 +284,78 @@ uint16_t ReadSample(const uint8_t* row, size_t index, int depth) {
 
 }  // namespace detail
 
+
+namespace {
+
+void AnadirBigEndian32(std::vector<uint8_t>* v, uint32_t x) {
+  v->push_back(static_cast<uint8_t>(x >> 24));
+  v->push_back(static_cast<uint8_t>(x >> 16));
+  v->push_back(static_cast<uint8_t>(x >> 8));
+  v->push_back(static_cast<uint8_t>(x));
+}
+
+// Un trozo PNG: longitud, tipo, datos y el CRC de tipo + datos.
+void AnadirTrozo(std::vector<uint8_t>* out, const char tipo[4], const std::vector<uint8_t>& datos) {
+  AnadirBigEndian32(out, static_cast<uint32_t>(datos.size()));
+  std::vector<uint8_t> cuerpo(tipo, tipo + 4);
+  cuerpo.insert(cuerpo.end(), datos.begin(), datos.end());
+  out->insert(out->end(), cuerpo.begin(), cuerpo.end());
+  AnadirBigEndian32(out, detail::Crc32(cuerpo.data(), cuerpo.size()) ^ 0xFFFFFFFFu);
+}
+
+}  // namespace
+
+bool EncodePngGris(const Bitmap& in, std::vector<uint8_t>* out, std::string* error) {
+  if (in.channels != 1) {
+    *error = "EncodePngGris: solo imagenes de un canal";
+    return false;
+  }
+  if (in.width <= 0 || in.height <= 0 ||
+      in.pixels.size() != static_cast<size_t>(in.width) * static_cast<size_t>(in.height)) {
+    *error = "EncodePngGris: dimensiones que no cuadran con los pixeles";
+    return false;
+  }
+  out->clear();
+  static const uint8_t kFirma[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+  out->insert(out->end(), kFirma, kFirma + 8);
+
+  std::vector<uint8_t> ihdr;
+  AnadirBigEndian32(&ihdr, static_cast<uint32_t>(in.width));
+  AnadirBigEndian32(&ihdr, static_cast<uint32_t>(in.height));
+  ihdr.insert(ihdr.end(), {8, 0, 0, 0, 0});   // 8 bits, gris, sin entrelazado
+  AnadirTrozo(out, "IHDR", ihdr);
+
+  // Datos crudos: cada fila precedida de su byte de filtro, aqui siempre 0.
+  std::vector<uint8_t> crudo;
+  crudo.reserve(static_cast<size_t>(in.height) * (static_cast<size_t>(in.width) + 1));
+  for (int y = 0; y < in.height; ++y) {
+    crudo.push_back(0);
+    const size_t base = static_cast<size_t>(y) * static_cast<size_t>(in.width);
+    crudo.insert(crudo.end(), in.pixels.begin() + static_cast<long>(base),
+                 in.pixels.begin() + static_cast<long>(base + static_cast<size_t>(in.width)));
+  }
+
+  // Envoltura zlib con bloques DEFLATE almacenados, de 65 535 bytes como mucho:
+  // cabecera 0x78 0x01, y cada bloque con BFINAL, LEN y su complemento NLEN.
+  std::vector<uint8_t> zlib = {0x78, 0x01};
+  size_t pos = 0;
+  do {
+    const size_t len = std::min<size_t>(65535, crudo.size() - pos);
+    const bool final = pos + len == crudo.size();
+    zlib.push_back(final ? 1 : 0);
+    zlib.push_back(static_cast<uint8_t>(len & 0xFF));
+    zlib.push_back(static_cast<uint8_t>(len >> 8));
+    zlib.push_back(static_cast<uint8_t>(~len & 0xFF));
+    zlib.push_back(static_cast<uint8_t>((~len >> 8) & 0xFF));
+    zlib.insert(zlib.end(), crudo.begin() + static_cast<long>(pos),
+                crudo.begin() + static_cast<long>(pos + len));
+    pos += len;
+  } while (pos < crudo.size());
+  AnadirBigEndian32(&zlib, detail::Adler32(crudo.data(), crudo.size()));
+  AnadirTrozo(out, "IDAT", zlib);
+  AnadirTrozo(out, "IEND", {});
+  return true;
+}
 
 }  // namespace image
 }  // namespace neuralsuite

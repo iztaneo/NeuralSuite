@@ -1603,7 +1603,7 @@ juguete didáctico y se construye la implementación real:
       siguiente a integrar, no como un bloqueo.
 
 - [ ] Usar `DataLoader::Partir()` en `train_diffusion` en vez del corte contiguo.
-- [ ] **DDPM sobre MNIST completo (escalón 5).** Todo lo que necesita está
+- [x] **DDPM sobre MNIST completo (escalón 5).** Todo lo que necesita está
       construido y verificado; falta lanzarlo. El plan, con los números medidos
       en esta máquina y no estimados:
 
@@ -1669,7 +1669,60 @@ juguete didáctico y se construye la implementación real:
          revés que en la puerta de sobreajuste. Si es pequeña, está copiando en
          vez de generando. Ese cambio de signo conviene tenerlo claro de
          antemano.
-- [ ] **Examen: generar dígitos MNIST reconocibles con DDPM.**
+- [x] **Resultado del escalón 5.** 80 000 iteraciones en **4 h 50 min** (218
+      ms/iteración), sin cortes, con los 27 archivos esperados.
+
+      - **Brecha de validación plana** todo el run: entre +0.0015 y +0.0019
+        desde la iteración 2 000 hasta la 80 000. No memoriza.
+      - **La pérdida se estanca hacia la 60 000** (0.0225 → 0.0223 en las
+        últimas 20 000), cuando el coseno del learning rate llega al mínimo. La
+        muestra periódica —mismo ruido cada vez— converge a la misma forma hacia
+        la 40 000.
+      - Pérdida final por franja: 0.0598 / 0.0231 / 0.0052 / 0.0003 de `t` bajo
+        a `t` alto, el patrón medido en el escalón 4.
+
+      Dos cosas del run que hubo que arreglar sobre la marcha: el log salía
+      vacío porque `printf` a un archivo acumula en bloques (se paró al minuto,
+      sin checkpoint escrito, y se relanzó con buffer de línea), y se añadió
+      `caffeinate -i` para que el Mac no se durmiera.
+
+- [x] **Examen: generar dígitos MNIST reconocibles con DDPM.** Con
+      `apps/sample_diffusion`, sobre los pesos EMA finales, 64 muestras
+      guardadas en PNG a resolución completa. El ASCII del log no servía para
+      juzgar: salta una fila de cada dos.
+
+      | | DDPM, 1000 pasos | DDIM, 100 pasos |
+      | --- | --- | --- |
+      | legibles sin dudar (a ojo) | **~45 de 64** | ~25–30 de 64 |
+      | clases según la vecina más cercana | **10 de 10** | 10 de 10 |
+      | distancia a la vecina / media al conjunto | **0.50** | 0.59 |
+      | tiempo para 64 muestras | 113.6 s | 10.8 s |
+
+      **Aprobado con DDPM.** Trazos limpios, las diez clases, y el cociente de
+      distancias lejos del 0.15–0.35 de la puerta de sobreajuste, que copiaba:
+      genera, no copia. La etiqueta de la vecina más cercana es un clasificador
+      tosco —la distancia en píxeles no es la forma—, pero basta para descartar
+      un colapso a pocas clases.
+
+      **DDIM a 100 pasos es notablemente peor**: misma diversidad, pero motas,
+      trazos rotos y alguna mancha. Diez veces más rápido y, con este modelo, se
+      paga en calidad. Falta averiguar si es por los pocos pasos o por DDIM
+      determinista.
+
+      Un fallo del propio examen: la primera ejecución dio las 64 muestras en la
+      clase 5 con distancia 0.0000. Era `ParallelFor(0, N, fn)` con la firma mal
+      supuesta —es `(cuenta, mínimo_por_hilo, fn)`—, que con cuenta 0 no
+      calculaba nada. Un resultado imposible como ese hay que tratarlo como
+      fallo del medidor antes que del modelo.
+
+      Para escribir el PNG se añadió `image::EncodePngGris`: mínimo, sin filtros
+      y con bloques DEFLATE almacenados, reutilizando el CRC-32 y el Adler-32
+      del decodificador. Verificado contra el decodificador propio y contra
+      Pillow, incluida una imagen que obliga a varios bloques (Test 56).
+
+- [ ] Reanudar a mitad desde un checkpoint archivado y comprobar que sigue
+      igual (criterio 3 del escalón 5, que no se hizo: el run fue de un tirón).
+- [ ] DDIM con 250 y 500 pasos, para saber si su peor calidad es por los pasos.
 
   **El orden importa, y cada escalón lleva su examen.** Construir la U-Net entera
   de golpe y descubrir a las ocho horas que no aprende es la forma cara de
