@@ -1978,7 +1978,32 @@ entrenamiento directo habría escondido.
       un valor de ~1.2·10⁸ —el elemento recortado a 20 aporta `exp(20)` y
       `float32` redondea—, relativo 6.6e-08; es el precio de meter el recorte
       en la comparación.
-- [ ] **Puerta de sobreajuste**: reconstruir 16 imágenes casi perfectas.
+- [x] **Puerta de sobreajuste: pasada.** `apps/train_autoencoder` monta
+      codificador → latente gaussiano → decodificador con la pérdida del
+      autoencoder KL de Stable Diffusion —error de reconstrucción **sumado** por
+      imagen y promediado en el lote, más `peso_kl · KL` con su 1e-6—, con error
+      cuadrático en vez del L1 + perceptual del paper, porque la perceptual
+      necesita una VGG. 16 imágenes, 600 iteraciones, 77 s, 280 969 parámetros:
+      **PSNR de 2.5 a 32.0 dB** reconstruyendo con la media del latente. En el
+      PNG, originales y reconstrucciones son prácticamente indistinguibles.
+
+      **Con su control, que era necesario.** Un codificador sin entrenar ya
+      convierte la imagen en rasgos con información, así que el decodificador
+      podría memorizar 16 imágenes aunque el gradiente no llegara nunca al
+      codificador, y la puerta no probaría nada sobre él. Se repitió con el
+      codificador congelado: **se atasca en 21.45 dB** y la KL no se mueve de
+      ~113, frente a 31.98 dB y una KL que crece a ~1300 con el codificador
+      aprendiendo —error por píxel 11 veces menor—. El codificador aprende.
+
+      La lección para el escalón siguiente: **un umbral absoluto de PSNR
+      engañaría**, porque un codificador aleatorio ya da 21 dB. La
+      reconstrucción hay que juzgarla contra ese control.
+
+      Y una nota para el escalón 6: con `peso_kl = 1e-6` la KL pesa ~0.001
+      frente a un error de reconstrucción de ~3 por imagen, así que casi no
+      regulariza y el latente se expande (KL de 113 a 1293). Es lo esperado con
+      el peso del paper, y es precisamente por lo que Stable Diffusion reescala
+      el latente por 1/σ antes de difundir.
 - [ ] **Entrenamiento sobre MNIST**: error de reconstrucción y PSNR sobre
       validación, PNG de originales y reconstrucciones, y barrido de `C = 1, 2, 4`.
 - [ ] **Estadística del latente y factor de escala** (el paper escala por 1/σ),
