@@ -179,7 +179,24 @@ Tensor DDIMSampler::Muestrear(const Predictor& modelo, const Tensor& x_inicial,
     for (size_t i = 0; i < x.TotalSize(); ++i) {
       x0[i] = static_cast<float>((x[i] - sq_um * eps[i]) / sq_ab);
     }
-    if (recortar_) Recortar(&x0);
+    // Si se recorta x0 hay que recalcular eps a partir del x0 recortado. Sin
+    // eso, la direccion de abajo sigue usando el eps original, que corresponde
+    // a un x0 que ya no es el que se usa: el paso queda incoherente. Con eta=0
+    // no hay ruido que lo lave y el error se acumula paso a paso, asi que la
+    // version anterior EMPEORABA al anadir pasos —en MNIST, cociente de
+    // distancias 0.59 con 100 pasos, 0.71 con 500, y manchas a la vista—
+    // cuando la teoria dice que debe estabilizarse. DDPM no lo sufre porque
+    // recompone la media posterior a partir del x0 recortado.
+    Tensor eps_usado;
+    const Tensor* eps_dir = &eps;
+    if (recortar_) {
+      Recortar(&x0);
+      eps_usado = Tensor(x.Shape());
+      for (size_t i = 0; i < x.TotalSize(); ++i) {
+        eps_usado[i] = static_cast<float>((x[i] - sq_ab * x0[i]) / sq_um);
+      }
+      eps_dir = &eps_usado;
+    }
 
     double sigma = 0.0;
     if (eta_ > 0.0f && ab_p < 1.0) {
@@ -194,7 +211,7 @@ Tensor DDIMSampler::Muestrear(const Predictor& modelo, const Tensor& x_inicial,
 
     if (sigma > 0.0) ruido(tau, &z);
     for (size_t i = 0; i < x.TotalSize(); ++i) {
-      double v = sq_abp * x0[i] + dir * eps[i];
+      double v = sq_abp * x0[i] + dir * (*eps_dir)[i];
       if (sigma > 0.0) v += sigma * z[i];
       x[i] = static_cast<float>(v);
     }

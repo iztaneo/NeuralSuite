@@ -47,7 +47,8 @@ int main(int argc, char** argv) {
   std::string muestreador = "ddim";
   int n = 64, canales = 32, dim_t = 64, grupos = 8, pasos = 1000, pasos_ddim = 100;
   int semilla = 2026, escala = 4;
-  float beta_fin = 0.0f;
+  float beta_fin = 0.0f, eta = 0.0f;
+  bool recortar = true;
 
   for (int i = 1; i < argc; ++i) {
     auto sig = [&](const char* q) -> const char* {
@@ -65,6 +66,8 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--beta_fin")) beta_fin = static_cast<float>(std::atof(sig("--beta_fin")));
     else if (!std::strcmp(argv[i], "--semilla")) semilla = std::atoi(sig("--semilla"));
     else if (!std::strcmp(argv[i], "--escala")) escala = std::atoi(sig("--escala"));
+    else if (!std::strcmp(argv[i], "--eta")) eta = static_cast<float>(std::atof(sig("--eta")));
+    else if (!std::strcmp(argv[i], "--sin_recorte")) recortar = false;
     else { std::fprintf(stderr, "Opcion desconocida: %s\n", argv[i]); return 1; }
   }
   if (muestreador != "ddim" && muestreador != "ddpm") {
@@ -99,16 +102,23 @@ int main(int argc, char** argv) {
   const auto t0 = std::chrono::steady_clock::now();
   Tensor muestras;
   if (muestreador == "ddim") {
-    DDIMSampler ddim(calendario, pasos_ddim, 0.0f);
-    ddim.RecortarX0(true);
-    muestras = ddim.Muestrear(red, ruido, RuidoNulo());
+    // Con eta > 0 DDIM vuelve a meter ruido en cada paso; con eta = 1 y todos
+    // los pasos equivale a DDPM. Tenerlo aqui permite separar dos causas de
+    // mala calidad que con eta fijo se confunden: pocos pasos, o determinismo.
+    DDIMSampler ddim(calendario, pasos_ddim, eta);
+    ddim.RecortarX0(recortar);
+    muestras = ddim.Muestrear(red, ruido, RuidoGaussiano(static_cast<uint32_t>(semilla)));
   } else {
     DDPMSampler ddpm(calendario);
-    ddpm.RecortarX0(true);
+    ddpm.RecortarX0(recortar);
     muestras = ddpm.Muestrear(red, ruido, RuidoGaussiano(static_cast<uint32_t>(semilla)));
   }
   const double seg = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  std::printf("%d muestras con %s en %.1f s\n", n, muestreador.c_str(), seg);
+  if (muestreador == "ddim") {
+    std::printf("%d muestras con ddim (%d pasos, eta %.2f) en %.1f s\n", n, pasos_ddim, eta, seg);
+  } else {
+    std::printf("%d muestras con ddpm (%d pasos) en %.1f s\n", n, pasos, seg);
+  }
 
   // --- Rejilla en PNG. Casilla de 28*escala pixeles con un borde de 2*escala.
   const int lado = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(n))));

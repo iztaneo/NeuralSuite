@@ -194,21 +194,28 @@ def referencia_muestreadores(g, predictor):
         with torch.no_grad():
             return predictor(x, torch.full((x.shape[0],), float(paso), dtype=torch.float32))
 
-    def ddpm():
+    def ddpm(recortar=False):
         x = x_T.clone()
         for paso in range(T_sm - 1, -1, -1):
             e = eps_de(x, paso)
             ab_t = ab_sm[paso]
             ab_p = ab_sm[paso - 1] if paso > 0 else torch.tensor(1.0, dtype=torch.float64)
             b_t = beta_sm[paso]
-            media = (x.double() - (b_t / torch.sqrt(1 - ab_t)) * e.double()) / torch.sqrt(alpha_sm[paso])
+            if recortar:
+                # Media posterior compuesta desde x0 recortado, forma de la
+                # implementacion de referencia de DDPM.
+                x0 = ((x.double() - torch.sqrt(1 - ab_t) * e.double()) / torch.sqrt(ab_t)).clamp(-1, 1)
+                media = (torch.sqrt(ab_p) * b_t / (1 - ab_t)) * x0 + \
+                        (torch.sqrt(alpha_sm[paso]) * (1 - ab_p) / (1 - ab_t)) * x.double()
+            else:
+                media = (x.double() - (b_t / torch.sqrt(1 - ab_t)) * e.double()) / torch.sqrt(alpha_sm[paso])
             if paso > 0:
                 var = b_t * (1 - ab_p) / (1 - ab_t)
                 media = media + torch.sqrt(var) * ruido_sm[paso].double()
             x = media.float()
         return x
 
-    def ddim(n_pasos, eta):
+    def ddim(n_pasos, eta, recortar=False):
         taus = [int(round(i / (n_pasos - 1) * (T_sm - 1))) for i in range(n_pasos)][::-1]
         x = x_T.clone()
         for k, tau in enumerate(taus):
@@ -216,6 +223,11 @@ def referencia_muestreadores(g, predictor):
             ab_t = ab_sm[tau]
             ab_p = ab_sm[taus[k + 1]] if k + 1 < len(taus) else torch.tensor(1.0, dtype=torch.float64)
             x0 = (x.double() - torch.sqrt(1 - ab_t) * e.double()) / torch.sqrt(ab_t)
+            if recortar:
+                # Tras recortar x0 se recalcula eps a partir de el, como hace
+                # diffusers. Sin eso el paso es incoherente.
+                x0 = x0.clamp(-1, 1)
+                e = ((x.double() - torch.sqrt(ab_t) * x0) / torch.sqrt(1 - ab_t)).float()
             sigma = torch.tensor(0.0, dtype=torch.float64)
             if eta > 0 and ab_p < 1.0:
                 sigma = eta * torch.sqrt((1 - ab_p) / (1 - ab_t)) * torch.sqrt(1 - ab_t / ab_p)
@@ -234,6 +246,8 @@ def referencia_muestreadores(g, predictor):
         "sm_ddim0": ddim(5, 0.0).numpy(),
         "sm_ddim1": ddim(5, 1.0).numpy(),
         "sm_ddim_full1": ddim(T_sm, 1.0).numpy(),
+        "sm_ddpm_rec": ddpm(recortar=True).numpy(),
+        "sm_ddim0_rec": ddim(5, 0.0, recortar=True).numpy(),
     }
 
 

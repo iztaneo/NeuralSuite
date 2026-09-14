@@ -359,6 +359,15 @@ int main(int argc, char** argv) {
 
     diffusion::DDIMSampler ddim_full(cal, T, 1.0f);
     out["sm_ddim_full1"] = AArray(ddim_full.Muestrear(pred, xT, fuente));
+
+    // La ruta con recorte de x0, que hasta ahora no tenia paridad. En DDIM fue
+    // donde estaba el bug de no recalcular eps tras recortar.
+    diffusion::DDPMSampler ddpm_rec(cal);
+    ddpm_rec.RecortarX0(true);
+    out["sm_ddpm_rec"] = AArray(ddpm_rec.Muestrear(pred, xT, fuente));
+    diffusion::DDIMSampler ddim0_rec(cal, NP, 0.0f);
+    ddim0_rec.RecortarX0(true);
+    out["sm_ddim0_rec"] = AArray(ddim0_rec.Muestrear(pred, xT, fuente));
   }
 
   WriteBundle(salida, out);

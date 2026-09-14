@@ -85,6 +85,8 @@ int main(int argc, char** argv) {
   int archivar_cada = 0;
   int n_validacion = 0, parar_en = 0;
   std::string archivo = "release/unet_mnist.nsf";
+  std::string particion = "barajada";
+  bool particion_explicita = false;
   bool reanudar = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -111,6 +113,7 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--archivo")) archivo = sig("--archivo");
     else if (!std::strcmp(argv[i], "--parar_en")) parar_en = std::atoi(sig("--parar_en"));
     else if (!std::strcmp(argv[i], "--reanudar")) reanudar = true;
+    else if (!std::strcmp(argv[i], "--particion")) { particion = sig("--particion"); particion_explicita = true; }
     else if (!std::strcmp(argv[i], "--semilla")) semilla = std::atoi(sig("--semilla"));
     else if (!std::strcmp(argv[i], "--reportar_cada")) reportar_cada = std::atoi(sig("--reportar_cada"));
     else { std::fprintf(stderr, "Opcion desconocida: %s\n", argv[i]); return 1; }
@@ -132,9 +135,25 @@ int main(int argc, char** argv) {
   // aunque el modelo solo este memorizando. Con 16 imagenes memorizar es el
   // objetivo y no hace falta; con 60 000 hay que poder distinguirlo.
   //
-  // Se cogen del FINAL del conjunto, no del principio: MNIST no viene ordenado
-  // por clase, pero coger un bloque contiguo del principio es la clase de atajo
-  // que un dia se encuentra con un conjunto que si lo esta.
+  // Hay dos formas de partir, y la eleccion va sellada en el checkpoint:
+  //
+  //  - `barajada` (por defecto): la hace `DataLoader::Partir()` sobre indices
+  //    barajados, asi que las dos partes son muestras del conjunto. Es la pieza
+  //    que se construyo para esto, y usarla aqui evita tener dos caminos de
+  //    particion que acaben divergiendo.
+  //  - `contigua`: las ultimas `n_validacion` imagenes. Es como se entreno el
+  //    modelo del escalon 5, y se conserva para poder reanudar esos checkpoints
+  //    con la misma particion. Se midio que en MNIST no sesga: las ultimas 5000
+  //    tienen el mismo reparto de clases que el conjunto entero.
+  //
+  // Solo se usa el DataLoader para PARTIR, no para entregar lotes: el
+  // entrenamiento sortea cada lote con un generador sembrado por (semilla, it),
+  // que es lo que hace que reanudar sea identico a no haber parado. Recorrer
+  // epocas con estado romperia esa garantia.
+  if (particion != "barajada" && particion != "contigua") {
+    std::fprintf(stderr, "--particion debe ser barajada o contigua\n");
+    return 1;
+  }
   if (n_validacion < 0) n_validacion = 0;
   if (n_validacion >= total) {
     std::fprintf(stderr, "n_validacion (%d) no puede llegar a las imagenes totales (%d)\n",
@@ -156,8 +175,36 @@ int main(int argc, char** argv) {
     }
     return t;
   };
-  const Tensor x0 = normalizar(0, N);
-  const Tensor x0_val = normalizar(N, n_validacion);
+  // Se construyen despues de leer el checkpoint, si se reanuda: el modo de
+  // particion que manda es el que el checkpoint dice haber usado.
+  Tensor x0, x0_val;
+  auto construir_particion = [&]() -> bool {
+    if (particion == "contigua" || n_validacion == 0) {
+      x0 = normalizar(0, N);
+      x0_val = normalizar(N, n_validacion);
+      return true;
+    }
+    Tensor todas = normalizar(0, total);
+    Tensor etiquetas({total});
+    for (int i = 0; i < total; ++i) etiquetas[i] = datos.etiquetas[i];
+    // Semilla propia de la particion, derivada de la del run: misma semilla,
+    // misma particion, que es lo que permite reanudar.
+    const uint32_t sem_part = static_cast<uint32_t>(semilla) * 7919u + 13u;
+    const DataLoader completo(std::move(todas), std::move(etiquetas), total, true, sem_part,
+                              true);
+    // +0.5 para que el redondeo en coma flotante no deje una imagen de menos.
+    const float fraccion = (static_cast<float>(n_validacion) + 0.5f) / static_cast<float>(total);
+    auto partes = completo.Partir(fraccion);
+    if (partes.first.Tamano() != N || partes.second.Tamano() != n_validacion) {
+      std::fprintf(stderr, "La particion dio %d + %d y se esperaban %d + %d\n",
+                   partes.first.Tamano(), partes.second.Tamano(), N, n_validacion);
+      return false;
+    }
+    Tensor y_desechable;
+    partes.first.Lote(0, &x0, &y_desechable);
+    partes.second.Lote(0, &x0_val, &y_desechable);
+    return true;
+  };
 
   std::printf("============================================================\n");
   std::printf("  Difusion sobre MNIST\n");
@@ -239,6 +286,9 @@ int main(int argc, char** argv) {
     meta_opt["arch"] = "adamw";
     meta_opt["pasos_opt"] = std::to_string(opt.PasosDados());
     meta_opt["pasos_ema"] = std::to_string(ema.Pasos());
+    meta_opt["particion"] = particion;
+    meta_opt["semilla"] = std::to_string(semilla);
+    meta_opt["n_validacion"] = std::to_string(n_validacion);
     const auto res = nsf::Save(tmp[2], est, meta_opt);
     ok = ok && res.ok;
     if (!res) std::fprintf(stderr, "  no se pudo escribir el estado del optimizador: %s\n",
@@ -303,10 +353,37 @@ int main(int argc, char** argv) {
     opt.FijarPasosDados(std::stoi(m_opt["pasos_opt"]));
     ema.FijarPasos(std::stoi(m_opt["pasos_ema"]));
     it_inicial = std::stoi(m_opt["iteracion"]) + 1;
+
+    // La particion y la semilla deciden que imagenes son de entrenamiento: si
+    // cambiaran al reanudar, imagenes que eran de validacion pasarian a
+    // entrenarse y la curva de validacion dejaria de significar nada. Los
+    // checkpoints anteriores a este sello no llevan la clave y se entrenaron
+    // con la particion contigua, asi que se leen como tal.
+    const std::string modo_ck = m_opt.count("particion") ? m_opt["particion"] : "contigua";
+    if (particion_explicita && particion != modo_ck) {
+      std::fprintf(stderr, "El checkpoint uso la particion '%s' y se pidio '%s'\n",
+                   modo_ck.c_str(), particion.c_str());
+      return 1;
+    }
+    particion = modo_ck;
+    if (m_opt.count("semilla") && std::stoi(m_opt["semilla"]) != semilla) {
+      std::fprintf(stderr, "El checkpoint uso la semilla %s y se pidio %d\n",
+                   m_opt["semilla"].c_str(), semilla);
+      return 1;
+    }
+    if (m_opt.count("n_validacion") && std::stoi(m_opt["n_validacion"]) != n_validacion) {
+      std::fprintf(stderr, "El checkpoint uso %s imagenes de validacion y se pidieron %d\n",
+                   m_opt["n_validacion"].c_str(), n_validacion);
+      return 1;
+    }
     std::printf("  reanudado en la iteracion %d (Adam %d pasos, EMA %d)\n",
                 it_inicial, opt.PasosDados(), ema.Pasos());
   }
   std::printf("\n");
+
+  if (!construir_particion()) return 1;
+  std::printf("  particion %s: %d de entrenamiento, %d de validacion\n", particion.c_str(),
+              x0.Shape()[0], x0_val.Shape().empty() ? 0 : x0_val.Shape()[0]);
 
   Rng rng{static_cast<uint32_t>(semilla) * 2654435761u + 1u};
   const int lote_real = std::min(lote, N);

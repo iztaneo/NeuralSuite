@@ -1602,7 +1602,23 @@ juguete didáctico y se construye la implementación real:
       total, que es el desbalance natural de MNIST). Queda anotado como lo
       siguiente a integrar, no como un bloqueo.
 
-- [ ] Usar `DataLoader::Partir()` en `train_diffusion` en vez del corte contiguo.
+- [x] **Usar `DataLoader::Partir()` en `train_diffusion`.** Nueva opción
+      `--particion barajada|contigua`, `barajada` por defecto. El `DataLoader`
+      se usa **solo para partir**, no para entregar lotes: el entrenamiento
+      sigue sorteando cada lote con un generador sembrado por `(semilla, it)`,
+      que es lo que hace que reanudar sea idéntico a no haber parado, y recorrer
+      épocas con estado rompería esa garantía.
+
+      El modo, la semilla y el tamaño de validación quedan **sellados en el
+      checkpoint**. Al reanudar manda lo que dice el checkpoint, y pedir otra
+      cosa aborta: si cambiaran, imágenes de validación pasarían a entrenarse y
+      la curva dejaría de significar nada. Los checkpoints del escalón 5 no
+      llevan el sello y se leen como `contigua`, que es como se entrenaron.
+
+      Verificado: `contigua` produce pesos y EMA **idénticos** al programa
+      anterior; `barajada` es determinista y reanudar sigue dando resultados
+      idénticos a no parar; el checkpoint `it070000` se reanuda como `contigua`
+      y rechaza `barajada`.
 - [x] **DDPM sobre MNIST completo (escalón 5).** Todo lo que necesita está
       construido y verificado; falta lanzarlo. El plan, con los números medidos
       en esta máquina y no estimados:
@@ -1722,7 +1738,27 @@ juguete didáctico y se construye la implementación real:
 
 - [ ] Reanudar a mitad desde un checkpoint archivado y comprobar que sigue
       igual (criterio 3 del escalón 5, que no se hizo: el run fue de un tirón).
-- [ ] DDIM con 250 y 500 pasos, para saber si su peor calidad es por los pasos.
+- [x] **DDIM con 250 y 500 pasos: no eran los pasos, era un bug.** Con `eta=0`
+      las muestras **empeoraban al añadir pasos** —cociente de distancias 0.59
+      con 100, 0.65 con 250, 0.71 con 500, con manchas a la vista—, cuando la
+      teoría dice que deben estabilizarse. DDIM con `eta=1` a 100 pasos salía
+      limpio (0.53), y DDIM `eta=0` **sin recorte** daba 0.56 tanto con 100
+      como con 500 pasos.
+
+      La causa: `DDIMSampler` recortaba `x₀` a [-1, 1] pero seguía usando el
+      `eps` original, que corresponde a un `x₀` que ya no es el que se usa. El
+      paso quedaba incoherente, y sin ruido que lo lavara el error se acumulaba.
+      Ahora recalcula `eps` a partir del `x₀` recortado, como hace diffusers.
+      DDPM no lo sufría porque recompone la media posterior desde el `x₀`
+      recortado. Con el arreglo, 100 y 500 pasos dan 0.56 y salen limpios.
+
+      **Ninguna prueba lo habría visto**: la ruta con recorte no tenía paridad,
+      y una prueba de punto final no lo delata, porque el último paso devuelve
+      `clip(x₀)` exacto con o sin el bug. Se añadió al Test 54 una prueba de
+      **trayectoria**: con un `eps` que fija `x₀ = 1` por recorte, un paso
+      coherente conserva la coordenada de ruido `(x − √ab)/√(1−ab)`. Con el bug
+      deriva 3.85. Y paridad para las dos rutas con recorte (`sm_ddpm_rec`
+      1.7e-04, `sm_ddim0_rec` 1.0e-06); la de DDIM da 0.46 con el bug.
 
   **El orden importa, y cada escalón lleva su examen.** Construir la U-Net entera
   de golpe y descubrir a las ocho horas que no aprende es la forma cara de

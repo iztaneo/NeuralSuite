@@ -5869,6 +5869,38 @@ void TestMuestreadores() {
     }
   }
 
+  // 4c. Recorte coherente en DDIM. Cuando se recorta x0 hay que recalcular eps
+  //     a partir del x0 recortado; la primera version no lo hacia y el paso
+  //     quedaba incoherente. Con eta=0 el error se acumulaba y las muestras
+  //     EMPEORABAN al anadir pasos (en MNIST, cociente 0.59 con 100 pasos y
+  //     0.71 con 500, con manchas a la vista).
+  //
+  //     El punto final no lo delata: el ultimo paso devuelve clip(x0) exacto
+  //     con o sin el bug. Hay que mirar la trayectoria, y el predictor puede
+  //     hacerlo porque ve el x de cada paso. Con un eps que empuja x0 muy por
+  //     encima de 1, el recorte fija x0 = 1 en todos los pasos, y un paso
+  //     coherente de DDIM conserva la coordenada de ruido
+  //     y = (x - sqrt(ab)) / sqrt(1 - ab): se mueve por la recta que une x0 con
+  //     su ruido. Con el bug, y salta al eps crudo desde el segundo paso.
+  {
+    std::vector<double> ys;
+    Predictor empuja = [&](const Tensor& x, const Tensor& t) {
+      const double ab = cal.AlphaBar()[static_cast<int>(t[0])];
+      ys.push_back((static_cast<double>(x[0]) - std::sqrt(ab)) / std::sqrt(1.0 - ab));
+      Tensor e(x.Shape());
+      for (size_t i = 0; i < e.TotalSize(); ++i) e[i] = -5.0f;
+      return e;
+    };
+    DDIMSampler ddim(cal, 10, 0.0f);
+    ddim.RecortarX0(true);
+    static_cast<void>(ddim.Muestrear(empuja, xT, RuidoNulo()));
+    double deriva = 0.0;
+    for (double y : ys) deriva = std::max(deriva, std::abs(y - ys.front()));
+    Check(ys.size() == 10, "el predictor no se llamo una vez por paso");
+    Check(deriva < 1e-3, "con x0 recortado la coordenada de ruido no se conserva (deriva " +
+                             std::to_string(deriva) + "): eps no se recalcula tras recortar");
+  }
+
   // 5. Lo que debe protestar en vez de hacer algo raro en silencio.
   {
     int protestas = 0;
