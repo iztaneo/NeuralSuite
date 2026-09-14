@@ -1,5 +1,7 @@
 # 🧠 NeuralSuite: C++17 Deep Learning Framework by KhepriNova
 
+*NeuralSuite is an independent C++17 neural-network framework for transparent training, inference and experimentation, with no external ML or linear-algebra runtime dependencies.*
+
 [![CI](https://github.com/iztaneo/NeuralSuite/actions/workflows/ci.yml/badge.svg)](https://github.com/iztaneo/NeuralSuite/actions/workflows/ci.yml)
 
 **NeuralSuite** es un framework y suite de aprendizaje profundo escrita totalmente en **C++17 puro desde cero** (sin PyTorch, TensorFlow, BLAS, Eigen ni librerías externas de IA).
