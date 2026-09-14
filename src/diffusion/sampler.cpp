@@ -134,10 +134,16 @@ Tensor DDPMSampler::Muestrear(const Predictor& modelo, const Tensor& x_inicial,
 DDIMSampler::DDIMSampler(const DiffusionSchedule& calendario, int n_pasos, float eta)
     : cal_(calendario), eta_(eta) {
   const int T = calendario.Pasos();
-  if (n_pasos <= 0 || n_pasos > T) {
+  // Con T > 1 hacen falta al menos dos pasos: la subsecuencia tiene que empezar
+  // en T-1, donde x_T es ruido puro, y terminar en 0. Con uno solo la version
+  // anterior generaba la subsecuencia {0} y le presentaba ruido puro al modelo
+  // como si fuera t=0, sin avisar. La prueba unitaria eximia ese caso en vez de
+  // detectarlo.
+  const int minimo = (T > 1) ? 2 : 1;
+  if (n_pasos < minimo || n_pasos > T) {
     throw std::invalid_argument(
-        "DDIMSampler: n_pasos debe estar entre 1 y " + std::to_string(T) +
-        "; llego " + std::to_string(n_pasos));
+        "DDIMSampler: n_pasos debe estar entre " + std::to_string(minimo) + " y " +
+        std::to_string(T) + "; llego " + std::to_string(n_pasos));
   }
   if (eta < 0.0f || eta > 1.0f) {
     throw std::invalid_argument("DDIMSampler: eta debe estar en [0, 1]");

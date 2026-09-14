@@ -177,6 +177,45 @@ inline Result Save(const std::string& path, const std::vector<NamedTensor>& tens
  * como el numero de iteracion y volver a leerlas al reanudar, sin inventar un
  * segundo archivo al lado que se pueda desincronizar del primero.
  */
+/**
+ * @brief Lee solo los metadatos de un archivo NSF, sin sus tensores.
+ *
+ * Existe para poder decidir COMO construir algo antes de construirlo: por
+ * ejemplo, leer con que calendario de difusion se entreno un checkpoint antes
+ * de crear el calendario. `Load` no sirve para eso porque exige de antemano la
+ * lista exacta de tensores.
+ *
+ * No comprueba la suma de comprobacion, que cubre el archivo entero: es una
+ * lectura previa. La comprobacion completa la hace el `Load` que venga despues,
+ * y si el archivo esta corrupto fallara ahi.
+ */
+inline Result ReadMetadata(const std::string& path, std::map<std::string, std::string>* out) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return Result::Fail("No se pudo abrir para lectura: " + path);
+  detail::Checksum sum;
+  char magic[sizeof(kMagic)];
+  in.read(magic, sizeof(magic));
+  if (!in || std::memcmp(magic, kMagic, sizeof(kMagic)) != 0) {
+    return Result::Fail(path + ": no es un archivo NSF.");
+  }
+  uint32_t version = 0;
+  if (!detail::ReadPod(in, sum, &version)) return Result::Fail(path + ": cabecera truncada.");
+  if (version != kVersion) {
+    return Result::Fail(path + ": version de formato " + std::to_string(version) + ".");
+  }
+  uint32_t n_meta = 0;
+  if (!detail::ReadPod(in, sum, &n_meta)) return Result::Fail(path + ": metadatos truncados.");
+  out->clear();
+  for (uint32_t i = 0; i < n_meta; ++i) {
+    std::string key, value;
+    if (!detail::ReadString(in, sum, &key) || !detail::ReadString(in, sum, &value)) {
+      return Result::Fail(path + ": metadatos truncados.");
+    }
+    (*out)[key] = value;
+  }
+  return Result::Ok();
+}
+
 inline Result Load(const std::string& path, const std::vector<NamedTensor>& tensors,
                    const std::map<std::string, std::string>& expected_metadata,
                    std::map<std::string, std::string>* metadata_leidos = nullptr) {

@@ -5827,11 +5827,11 @@ void TestMuestreadores() {
   //    en 0 devolveria un `x_t`, no un `x_0`, y la imagen saldria con ruido
   //    residual sin que nada avisara.
   {
-    for (int np : {1, 2, 7, T}) {
+    for (int np : {2, 7, T}) {
       DDIMSampler ddim(cal, np, 0.0f);
       const auto& taus = ddim.Subsecuencia();
       Check(static_cast<int>(taus.size()) == np, "la subsecuencia no tiene el largo pedido");
-      Check(taus.front() == T - 1 || np == 1, "la subsecuencia no empieza en T-1");
+      Check(taus.front() == T - 1, "la subsecuencia no empieza en T-1");
       Check(taus.back() == 0, "la subsecuencia no termina en 0");
       for (size_t i = 1; i < taus.size(); ++i) {
         Check(taus[i] < taus[i - 1], "la subsecuencia no es estrictamente decreciente");
@@ -5905,6 +5905,8 @@ void TestMuestreadores() {
   {
     int protestas = 0;
     try { DDIMSampler(cal, 0, 0.0f); } catch (const std::invalid_argument&) { ++protestas; }
+    // Un solo paso con T > 1 no puede empezar en T-1 y acabar en 0.
+    try { DDIMSampler(cal, 1, 0.0f); } catch (const std::invalid_argument&) { ++protestas; }
     try { DDIMSampler(cal, T + 1, 0.0f); } catch (const std::invalid_argument&) { ++protestas; }
     try { DDIMSampler(cal, 5, 1.5f); } catch (const std::invalid_argument&) { ++protestas; }
     try {
@@ -5912,8 +5914,8 @@ void TestMuestreadores() {
       // llamada lance, no lo que devuelva.
       static_cast<void>(DDPMSampler(cal).Muestrear(Predictor(), xT, RuidoNulo()));
     } catch (const std::invalid_argument&) { ++protestas; }
-    Check(protestas == 4, "solo protestaron " + std::to_string(protestas) +
-                              " de 4 argumentos invalidos");
+    Check(protestas == 5, "solo protestaron " + std::to_string(protestas) +
+                              " de 5 argumentos invalidos");
     // Un predictor que devuelve otra forma es un modelo que no encaja con el
     // muestreo; hay que decirlo, no propagar basura.
     bool forma = false;
@@ -6079,6 +6081,9 @@ void TestEmaYPersistencia() {
     Check(nsf::Load(ruta, {{"v", &v}}, {{"arch", "x"}}, &leidos).ok, "no se pudo leer");
     Check(leidos["iteracion"] == "1234",
           "Load no devolvio los metadatos que no se le exigieron");
+    std::map<std::string, std::string> solo;
+    Check(nsf::ReadMetadata(ruta, &solo).ok && solo["iteracion"] == "1234" && solo["arch"] == "x",
+          "ReadMetadata no lee los metadatos sin los tensores");
     std::remove(ruta.c_str());
   }
 

@@ -31,6 +31,8 @@
 #include <array>
 #include <map>
 #include <chrono>
+#include <functional>
+#include <set>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -86,10 +88,14 @@ int main(int argc, char** argv) {
   int n_validacion = 0, parar_en = 0;
   std::string archivo = "release/unet_mnist.nsf";
   std::string particion = "barajada";
-  bool particion_explicita = false;
   bool reanudar = false;
 
+  // Opciones pasadas explicitamente, sin los dos guiones. Al reanudar, lo que
+  // el checkpoint tiene sellado se adopta salvo que se haya pedido otra cosa
+  // aqui, en cuyo caso se aborta: ver `ParametroSellado` mas abajo.
+  std::set<std::string> dados;
   for (int i = 1; i < argc; ++i) {
+    if (std::strncmp(argv[i], "--", 2) == 0) dados.insert(argv[i] + 2);
     auto sig = [&](const char* q) -> const char* {
       if (i + 1 >= argc) { std::fprintf(stderr, "Falta el valor de %s\n", q); std::exit(1); }
       return argv[++i];
@@ -113,10 +119,88 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--archivo")) archivo = sig("--archivo");
     else if (!std::strcmp(argv[i], "--parar_en")) parar_en = std::atoi(sig("--parar_en"));
     else if (!std::strcmp(argv[i], "--reanudar")) reanudar = true;
-    else if (!std::strcmp(argv[i], "--particion")) { particion = sig("--particion"); particion_explicita = true; }
+    else if (!std::strcmp(argv[i], "--particion")) particion = sig("--particion");
     else if (!std::strcmp(argv[i], "--semilla")) semilla = std::atoi(sig("--semilla"));
     else if (!std::strcmp(argv[i], "--reportar_cada")) reportar_cada = std::atoi(sig("--reportar_cada"));
     else { std::fprintf(stderr, "Opcion desconocida: %s\n", argv[i]); return 1; }
+  }
+
+  // --- El sello del checkpoint.
+  //
+  // Todo lo que decide la trayectoria del entrenamiento va sellado en los tres
+  // archivos del checkpoint, y al reanudar MANDA el checkpoint: si una opcion
+  // no se pasa, se adopta el valor sellado; si se pasa con otro valor, se
+  // aborta. La primera version comparaba contra los valores por defecto del
+  // programa, asi que reanudar un run con 3000 imagenes de validacion sin
+  // repetir `--n_validacion 3000` abortaba: el contrato decia "manda el
+  // checkpoint" y el codigo exigia repetirlo todo.
+  //
+  // El calendario de difusion va en el sello por la misma razon, y ademas es
+  // lo que permite que `sample_diffusion` muestree un checkpoint sin que haya
+  // que recordar con que calendario se entreno: con otro calendario los pesos
+  // cargan igual y las imagenes salen peor sin ningun error.
+  struct ParametroSellado {
+    const char* nombre;
+    std::function<std::string()> leer;
+    std::function<void(const std::string&)> fijar;
+  };
+  auto como_texto = [](double v) {
+    char b[40];
+    std::snprintf(b, sizeof(b), "%.9g", v);
+    return std::string(b);
+  };
+  std::vector<ParametroSellado> sellables = {
+      {"n_imagenes", [&] { return std::to_string(n_imagenes); },
+       [&](const std::string& v) { n_imagenes = std::stoi(v); }},
+      {"n_validacion", [&] { return std::to_string(n_validacion); },
+       [&](const std::string& v) { n_validacion = std::stoi(v); }},
+      {"particion", [&] { return particion; }, [&](const std::string& v) { particion = v; }},
+      {"semilla", [&] { return std::to_string(semilla); },
+       [&](const std::string& v) { semilla = std::stoi(v); }},
+      {"canales", [&] { return std::to_string(canales); },
+       [&](const std::string& v) { canales = std::stoi(v); }},
+      {"lote", [&] { return std::to_string(lote); }, [&](const std::string& v) { lote = std::stoi(v); }},
+      {"iteraciones", [&] { return std::to_string(iteraciones); },
+       [&](const std::string& v) { iteraciones = std::stoi(v); }},
+      {"calentamiento", [&] { return std::to_string(calentamiento); },
+       [&](const std::string& v) { calentamiento = std::stoi(v); }},
+      {"lr", [&] { return como_texto(lr); }, [&](const std::string& v) { lr = std::stof(v); }},
+      {"lr_min", [&] { return como_texto(lr_min); },
+       [&](const std::string& v) { lr_min = std::stof(v); }},
+      {"ema", [&] { return como_texto(ema_decaimiento); },
+       [&](const std::string& v) { ema_decaimiento = std::stof(v); }},
+      {"pasos", [&] { return std::to_string(pasos); }, [&](const std::string& v) { pasos = std::stoi(v); }},
+      {"beta_fin", [&] { return como_texto(beta_fin); },
+       [&](const std::string& v) { beta_fin = std::stof(v); }},
+  };
+  if (reanudar) {
+    std::map<std::string, std::string> sellado;
+    const auto r = nsf::ReadMetadata(archivo + ".opt", &sellado);
+    if (!r) {
+      std::fprintf(stderr, "No se pudo leer el sello de %s.opt: %s\n", archivo.c_str(),
+                   r.error.c_str());
+      return 1;
+    }
+    // Los checkpoints anteriores al sello no llevan la particion y se
+    // entrenaron con la contigua; el resto de claves ausentes se quedan con lo
+    // que diga la linea de ordenes, como antes.
+    if (!sellado.count("particion")) sellado["particion"] = "contigua";
+    std::string adoptados;
+    for (const ParametroSellado& ps : sellables) {
+      const auto it = sellado.find(ps.nombre);
+      if (it == sellado.end()) continue;
+      if (dados.count(ps.nombre)) {
+        if (ps.leer() != it->second) {
+          std::fprintf(stderr, "El checkpoint se entreno con %s=%s y se pidio %s\n", ps.nombre,
+                       it->second.c_str(), ps.leer().c_str());
+          return 1;
+        }
+      } else if (ps.leer() != it->second) {
+        ps.fijar(it->second);
+        adoptados += std::string(" ") + ps.nombre + "=" + it->second;
+      }
+    }
+    if (!adoptados.empty()) std::printf("  del checkpoint:%s\n", adoptados.c_str());
   }
 
   ConjuntoMnist datos;
@@ -268,8 +352,10 @@ int main(int argc, char** argv) {
     const uint64_t id =
         (static_cast<uint64_t>(it) << 40) ^
         static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
-    const std::map<std::string, std::string> sello = {
-        {"checkpoint_id", std::to_string(id)}, {"iteracion", std::to_string(it)}};
+    std::map<std::string, std::string> sello = {
+        {"checkpoint_id", std::to_string(id)}, {"iteracion", std::to_string(it)},
+        {"beta_ini", "0.0001"}, {"normalizacion", "[-1,1]"}};
+    for (const ParametroSellado& ps : sellables) sello[ps.nombre] = ps.leer();
 
     bool ok = unet.GuardarPesos(tmp[0], sello);
     ema.Intercambiar();
@@ -286,9 +372,7 @@ int main(int argc, char** argv) {
     meta_opt["arch"] = "adamw";
     meta_opt["pasos_opt"] = std::to_string(opt.PasosDados());
     meta_opt["pasos_ema"] = std::to_string(ema.Pasos());
-    meta_opt["particion"] = particion;
-    meta_opt["semilla"] = std::to_string(semilla);
-    meta_opt["n_validacion"] = std::to_string(n_validacion);
+
     const auto res = nsf::Save(tmp[2], est, meta_opt);
     ok = ok && res.ok;
     if (!res) std::fprintf(stderr, "  no se pudo escribir el estado del optimizador: %s\n",
@@ -354,28 +438,6 @@ int main(int argc, char** argv) {
     ema.FijarPasos(std::stoi(m_opt["pasos_ema"]));
     it_inicial = std::stoi(m_opt["iteracion"]) + 1;
 
-    // La particion y la semilla deciden que imagenes son de entrenamiento: si
-    // cambiaran al reanudar, imagenes que eran de validacion pasarian a
-    // entrenarse y la curva de validacion dejaria de significar nada. Los
-    // checkpoints anteriores a este sello no llevan la clave y se entrenaron
-    // con la particion contigua, asi que se leen como tal.
-    const std::string modo_ck = m_opt.count("particion") ? m_opt["particion"] : "contigua";
-    if (particion_explicita && particion != modo_ck) {
-      std::fprintf(stderr, "El checkpoint uso la particion '%s' y se pidio '%s'\n",
-                   modo_ck.c_str(), particion.c_str());
-      return 1;
-    }
-    particion = modo_ck;
-    if (m_opt.count("semilla") && std::stoi(m_opt["semilla"]) != semilla) {
-      std::fprintf(stderr, "El checkpoint uso la semilla %s y se pidio %d\n",
-                   m_opt["semilla"].c_str(), semilla);
-      return 1;
-    }
-    if (m_opt.count("n_validacion") && std::stoi(m_opt["n_validacion"]) != n_validacion) {
-      std::fprintf(stderr, "El checkpoint uso %s imagenes de validacion y se pidieron %d\n",
-                   m_opt["n_validacion"].c_str(), n_validacion);
-      return 1;
-    }
     std::printf("  reanudado en la iteracion %d (Adam %d pasos, EMA %d)\n",
                 it_inicial, opt.PasosDados(), ema.Pasos());
   }

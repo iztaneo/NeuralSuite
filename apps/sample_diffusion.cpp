@@ -31,6 +31,8 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <set>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -50,7 +52,9 @@ int main(int argc, char** argv) {
   float beta_fin = 0.0f, eta = 0.0f;
   bool recortar = true;
 
+  std::set<std::string> dados;
   for (int i = 1; i < argc; ++i) {
+    if (std::strncmp(argv[i], "--", 2) == 0) dados.insert(argv[i] + 2);
     auto sig = [&](const char* q) -> const char* {
       if (i + 1 >= argc) { std::fprintf(stderr, "Falta el valor de %s\n", q); std::exit(1); }
       return argv[++i];
@@ -79,11 +83,53 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // El calendario no va guardado en el checkpoint, asi que tiene que
-  // reconstruirse con la MISMA regla que uso el entrenamiento. Muestrear con
-  // otro calendario no da error: da imagenes peores sin decir por que.
-  if (beta_fin <= 0.0f) beta_fin = std::min(0.5f, 0.02f * 1000.0f / static_cast<float>(pasos));
-  DiffusionSchedule calendario(pasos, 1e-4f, beta_fin);
+  // El calendario sale del sello del checkpoint. Muestrear con otro calendario
+  // no da ningun error —los pesos cargan igual— y las imagenes salen peores sin
+  // decir por que, asi que no se deja a la memoria de quien lo ejecuta. Si se
+  // pide explicitamente algo distinto de lo sellado, se aborta.
+  float beta_ini = 1e-4f;
+  {
+    std::map<std::string, std::string> sellado;
+    const auto r = nsf::ReadMetadata(archivo, &sellado);
+    if (!r) {
+      std::fprintf(stderr, "No se pudo leer %s: %s\n", archivo.c_str(), r.error.c_str());
+      return 1;
+    }
+    if (sellado.count("pasos") && sellado.count("beta_fin")) {
+      auto adoptar_int = [&](const char* k, int* v) {
+        const int sel = std::stoi(sellado[k]);
+        if (dados.count(k) && *v != sel) {
+          std::fprintf(stderr, "El checkpoint se entreno con %s=%d y se pidio %d\n", k, sel, *v);
+          std::exit(1);
+        }
+        *v = sel;
+      };
+      adoptar_int("pasos", &pasos);
+      adoptar_int("canales", &canales);
+      const float sel_beta = std::stof(sellado["beta_fin"]);
+      if (dados.count("beta_fin") && std::abs(beta_fin - sel_beta) > 1e-7f) {
+        std::fprintf(stderr, "El checkpoint se entreno con beta_fin=%s y se pidio %g\n",
+                     sellado["beta_fin"].c_str(), beta_fin);
+        return 1;
+      }
+      beta_fin = sel_beta;
+      if (sellado.count("beta_ini")) beta_ini = std::stof(sellado["beta_ini"]);
+      if (sellado.count("normalizacion") && sellado["normalizacion"] != "[-1,1]") {
+        std::fprintf(stderr, "El checkpoint normaliza a %s y este programa asume [-1,1]\n",
+                     sellado["normalizacion"].c_str());
+        return 1;
+      }
+      std::printf("calendario sellado en el checkpoint\n");
+    } else {
+      // Checkpoints anteriores al sello: se reconstruye con la regla del
+      // entrenador, y se avisa, porque aqui ya no hay garantia.
+      if (beta_fin <= 0.0f) beta_fin = std::min(0.5f, 0.02f * 1000.0f / static_cast<float>(pasos));
+      std::printf("AVISO: el checkpoint no sella su calendario; se asume %d pasos y beta final "
+                  "%.4f. Si se entreno con otro, las muestras saldran peor sin error.\n",
+                  pasos, beta_fin);
+    }
+  }
+  DiffusionSchedule calendario(pasos, beta_ini, beta_fin);
 
   UNet2D unet(1, canales, dim_t, grupos);
   if (!unet.CargarPesos(archivo)) {
@@ -101,6 +147,7 @@ int main(int argc, char** argv) {
 
   const auto t0 = std::chrono::steady_clock::now();
   Tensor muestras;
+  try {
   if (muestreador == "ddim") {
     // Con eta > 0 DDIM vuelve a meter ruido en cada paso; con eta = 1 y todos
     // los pasos equivale a DDPM. Tenerlo aqui permite separar dos causas de
@@ -112,6 +159,12 @@ int main(int argc, char** argv) {
     DDPMSampler ddpm(calendario);
     ddpm.RecortarX0(recortar);
     muestras = ddpm.Muestrear(red, ruido, RuidoGaussiano(static_cast<uint32_t>(semilla)));
+  }
+  } catch (const std::invalid_argument& e) {
+    // Argumentos que el muestreador rechaza, como un DDIM de un solo paso: se
+    // explica y se sale, en vez de abortar con una excepcion sin capturar.
+    std::fprintf(stderr, "%s\n", e.what());
+    return 1;
   }
   const double seg = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   if (muestreador == "ddim") {

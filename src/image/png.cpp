@@ -6,6 +6,7 @@
 
 #include "image/png.h"
 #include <algorithm>
+#include <cstddef>
 #include "image/inflate.h"
 
 namespace neuralsuite {
@@ -331,8 +332,8 @@ bool EncodePngGris(const Bitmap& in, std::vector<uint8_t>* out, std::string* err
   for (int y = 0; y < in.height; ++y) {
     crudo.push_back(0);
     const size_t base = static_cast<size_t>(y) * static_cast<size_t>(in.width);
-    crudo.insert(crudo.end(), in.pixels.begin() + static_cast<long>(base),
-                 in.pixels.begin() + static_cast<long>(base + static_cast<size_t>(in.width)));
+    crudo.insert(crudo.end(), in.pixels.begin() + static_cast<std::ptrdiff_t>(base),
+                 in.pixels.begin() + static_cast<std::ptrdiff_t>(base + static_cast<size_t>(in.width)));
   }
 
   // Envoltura zlib con bloques DEFLATE almacenados, de 65 535 bytes como mucho:
@@ -347,8 +348,8 @@ bool EncodePngGris(const Bitmap& in, std::vector<uint8_t>* out, std::string* err
     zlib.push_back(static_cast<uint8_t>(len >> 8));
     zlib.push_back(static_cast<uint8_t>(~len & 0xFF));
     zlib.push_back(static_cast<uint8_t>((~len >> 8) & 0xFF));
-    zlib.insert(zlib.end(), crudo.begin() + static_cast<long>(pos),
-                crudo.begin() + static_cast<long>(pos + len));
+    zlib.insert(zlib.end(), crudo.begin() + static_cast<std::ptrdiff_t>(pos),
+                crudo.begin() + static_cast<std::ptrdiff_t>(pos + len));
     pos += len;
   } while (pos < crudo.size());
   AnadirBigEndian32(&zlib, detail::Adler32(crudo.data(), crudo.size()));

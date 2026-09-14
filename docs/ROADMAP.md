@@ -1305,7 +1305,7 @@ Shakespeare— está intacto en visión.
       entiende el formato: escribir la cabecera con la misma función que la lee
       habría cancelado un error de endianness. Cinco mutaciones, las cinco rojas.
 
-## Fase 17 — Difusión de verdad ⬜ (corresponde a 0.9)
+## Fase 17 — Difusión de verdad ✅ (corresponde a 0.9)
 
 La demo actual es un `beta = 0.3f` fijo y un MLP pequeño. Se conserva como
 juguete didáctico y se construye la implementación real:
@@ -1736,8 +1736,56 @@ juguete didáctico y se construye la implementación real:
       del decodificador. Verificado contra el decodificador propio y contra
       Pillow, incluida una imagen que obliga a varios bloques (Test 56).
 
-- [ ] Reanudar a mitad desde un checkpoint archivado y comprobar que sigue
-      igual (criterio 3 del escalón 5, que no se hizo: el run fue de un tirón).
+- [x] **Tres correcciones de una revisión externa**, las tres ciertas.
+
+      **Reanudar no respetaba su propio contrato.** El comentario decía «manda
+      el checkpoint», pero `semilla` y `n_validacion` se comparaban contra los
+      valores por defecto del programa: reanudar un run con 3000 imágenes de
+      validación sin repetir `--n_validacion 3000` abortaba. Y el problema era
+      más amplio que esos dos: `--iteraciones`, `--lote`, `--lr` o el calendario
+      no se comprobaban en absoluto, así que reanudar con otro total cambiaba el
+      coseno sin avisar. Ahora hay un único mecanismo: todo lo que decide la
+      trayectoria va **sellado en los tres archivos**, se lee con
+      `nsf::ReadMetadata` antes de construir nada, se adopta si no se pasa y
+      aborta si se pasa distinto. Verificado: reanudar **sin repetir ninguna
+      opción** da pesos y EMA idénticos a no parar.
+
+      **`sample_diffusion` reconstruía el calendario de memoria.** Con otro
+      calendario los pesos cargan igual y las muestras salen peores sin ningún
+      error. Ahora el calendario (`pasos`, `beta_ini`, `beta_fin`) y la
+      normalización van en el sello y el muestreador los adopta; pedir otro
+      aborta, y un checkpoint sin sello avisa de que se asume la regla por
+      defecto. De cara a la difusión latente, ahí irán también el factor de
+      reducción y la escala del latente.
+
+      **DDIM aceptaba un solo paso**, que genera la subsecuencia `{0}` y le
+      presenta ruido puro al modelo como si fuera `t=0`. Lo peor: **el Test 54
+      eximía ese caso** (`taus.front() == T - 1 || np == 1`) en vez de
+      detectarlo. Ahora exige al menos dos pasos cuando `T > 1`, y la prueba
+      comprueba que protesta.
+
+      De paso, `EncodePngGris` usaba `static_cast<long>` para desplazar
+      iteradores, y `long` es de 32 bits en Windows; pasa a `std::ptrdiff_t`.
+
+- [x] **Reanudar a mitad con el modelo real: idéntico.** Desde la copia de
+      `unet_mnist_it070000` hasta la 80 000 (10 000 iteraciones, 38 min), con
+      los mismos argumentos del run original. La predicción era falsable —diferencia
+      cero— y se cumplió en todo: **pesos vivos, sombra de la EMA y momentos `m`
+      y `v` de Adam idénticos** a los de `release/unet_mnist.nsf`, mismos
+      contadores, y la evaluación de la iteración 80 000 igual (entren. 0.0223,
+      valid. 0.0239).
+
+      Por qué no era obvio: el binario había cambiado desde el run —buffer de
+      línea, partición con `DataLoader`, arreglo del recorte de DDIM—, la
+      partición tuvo que leerse del checkpoint antiguo como `contigua`, y durante
+      el run se compilaba y probaba en paralelo. Nada de eso movió un bit, porque
+      cada iteración se siembra por `(semilla, it)`, el muestreo periódico
+      intercambia la EMA y la devuelve, y las operaciones paralelas son
+      idénticas con cualquier reparto de hilos.
+
+      Un detalle de la comprobación: el `.opt` no se puede comparar byte a byte
+      entre binarios, porque el nuevo escribe más claves de metadatos y eso
+      desplaza todo el archivo. Hay que cargar los tensores y compararlos.
 - [x] **DDIM con 250 y 500 pasos: no eran los pasos, era un bug.** Con `eta=0`
       las muestras **empeoraban al añadir pasos** —cociente de distancias 0.59
       con 100, 0.65 con 250, 0.71 con 500, con manchas a la vista—, cuando la
