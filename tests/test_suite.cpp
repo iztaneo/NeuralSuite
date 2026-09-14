@@ -6328,6 +6328,130 @@ void TestAutoencoderConv() {
             << std::flush;
 }
 
+/**
+ * @brief `GaussianaDiagonal`: reparametrizacion y KL del latente.
+ *
+ * Aqui es donde suelen esconderse los errores de un VAE: el factor 1/2 de
+ * derivar `exp(logvar / 2)`, dividir o no la KL por el lote, o dejar pasar
+ * gradiente por donde el recorte actuo. Se empieza por casos con respuesta
+ * exacta conocida y se sigue con diferencias finitas de la perdida completa.
+ */
+void TestGaussianaDiagonal() {
+  std::cout << "🧪 [Test 59] Latente gaussiano (reparametrizacion y KL)... " << std::flush;
+  using namespace neuralsuite::latent;
+  const int N = 2, C = 3, H = 4, W = 4;
+  const size_t LAT = static_cast<size_t>(N) * C * H * W;
+
+  // 1. Media 0 y log-varianza 0: la gaussiana ES N(0, 1). La KL tiene que
+  //    valer exactamente 0 y el latente tiene que ser exactamente el ruido.
+  {
+    Tensor params({N, 2 * C, H, W});
+    params.Zeros();
+    Tensor ruido({N, C, H, W});
+    ManualSeed(5);
+    ruido.RandomNormal(0.0f, 1.0f);
+    GaussianaDiagonal g;
+    const Tensor z = g.Forward(params, ruido);
+    Check(g.KL() == 0.0, "con media 0 y varianza 1 la KL no es cero: " + std::to_string(g.KL()));
+    bool igual = true;
+    for (size_t i = 0; i < LAT; ++i) igual = igual && z[i] == ruido[i];
+    Check(igual, "con media 0 y varianza 1 el latente no es el ruido");
+  }
+
+  // 2. Un valor calculado a mano: media 1 y varianza 2 en todo el latente.
+  //    Por elemento 0.5·(1 + 2 − 1 − ln 2); sumado y dividido por el lote.
+  {
+    Tensor params({N, 2 * C, H, W});
+    const size_t pe = static_cast<size_t>(C) * H * W;
+    for (int n = 0; n < N; ++n) {
+      for (size_t i = 0; i < pe; ++i) {
+        params[static_cast<size_t>(n) * 2 * pe + i] = 1.0f;
+        params[static_cast<size_t>(n) * 2 * pe + pe + i] = std::log(2.0f);
+      }
+    }
+    Tensor ruido({N, C, H, W});
+    ruido.Zeros();
+    GaussianaDiagonal g;
+    static_cast<void>(g.Forward(params, ruido));
+    const double esperado = 0.5 * (1.0 + 2.0 - 1.0 - std::log(2.0)) * static_cast<double>(pe);
+    Check(std::abs(g.KL() - esperado) < 1e-4,
+          "KL de media 1 y varianza 2: " + std::to_string(g.KL()) + " y se esperaba " +
+              std::to_string(esperado));
+  }
+
+  // 3. Diferencias finitas de la perdida completa: L = sum(w·z) + beta·KL.
+  ManualSeed(91);
+  Tensor params({N, 2 * C, H, W}), ruido({N, C, H, W}), w({N, C, H, W});
+  params.RandomUniform(-2.0f, 2.0f);
+  ruido.RandomNormal(0.0f, 1.0f);
+  w.RandomNormal(0.0f, 1.0f);
+  const float beta = 0.7f;
+  auto perdida = [&](const Tensor& p) {
+    GaussianaDiagonal g;
+    const Tensor z = g.Forward(p, ruido);
+    double l = 0.0;
+    for (size_t i = 0; i < z.TotalSize(); ++i) l += static_cast<double>(w[i]) * z[i];
+    return l + beta * g.KL();
+  };
+  GaussianaDiagonal g;
+  static_cast<void>(g.Forward(params, ruido));
+  const Tensor dp = g.Backward(w, beta);
+  {
+    const float h = 1e-3f;
+    double peor = 0.0;
+    for (size_t i = 0; i < params.TotalSize(); ++i) {
+      Tensor pp = params, pm = params;
+      pp[i] += h;
+      pm[i] -= h;
+      const double num = (perdida(pp) - perdida(pm)) / (2.0 * h);
+      peor = std::max(peor, std::abs(num - dp[i]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor < 5e-3, "el gradiente respecto a media y log-varianza no cuadra con las "
+                       "diferencias finitas (" + std::to_string(peor) + ")");
+  }
+
+  // 4. Los dos caminos se suman: reconstruccion sola + KL sola = conjunto.
+  {
+    Tensor ceros({N, C, H, W});
+    ceros.Zeros();
+    const Tensor solo_rec = g.Backward(w, 0.0f);
+    const Tensor solo_kl = g.Backward(ceros, beta);
+    double dif = 0.0;
+    for (size_t i = 0; i < dp.TotalSize(); ++i) {
+      dif = std::max(dif, std::abs(static_cast<double>(solo_rec[i]) + solo_kl[i] - dp[i]));
+    }
+    Check(dif < 1e-5, "los caminos de reconstruccion y KL no se suman");
+  }
+
+  // 5. El recorte: con la log-varianza por encima de 20 no pasa gradiente a
+  //    ella por ningun camino, y la media sigue recibiendo el suyo.
+  {
+    Tensor p = params;
+    const size_t pe = static_cast<size_t>(C) * H * W;
+    p[pe] = 25.0f;        // log-varianza del primer elemento del primer ejemplo
+    GaussianaDiagonal gr;
+    static_cast<void>(gr.Forward(p, ruido));
+    Check(gr.LogVar()[0] == GaussianaDiagonal::kLogVarMax, "no se recorto la log-varianza");
+    const Tensor d = gr.Backward(w, beta);
+    Check(d[pe] == 0.0f, "paso gradiente a una log-varianza recortada");
+    Check(d[0] != 0.0f, "la media perdio su gradiente por el recorte de la varianza");
+  }
+
+  // 6. Lo que debe protestar.
+  {
+    int protestas = 0;
+    GaussianaDiagonal gp;
+    try { static_cast<void>(gp.KL()); } catch (const std::logic_error&) { ++protestas; }
+    Tensor impar({N, 5, H, W});
+    try { static_cast<void>(gp.Forward(impar, ruido)); } catch (const std::invalid_argument&) { ++protestas; }
+    Tensor ruido_mal({N, C + 1, H, W});
+    try { static_cast<void>(gp.Forward(params, ruido_mal)); } catch (const std::invalid_argument&) { ++protestas; }
+    Check(protestas == 3, "solo protestaron " + std::to_string(protestas) + " de 3 usos invalidos");
+  }
+  std::cout << "PASADO ✅ (KL exacta en N(0,1), gradiente de la perdida completa y recorte)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -6391,6 +6515,7 @@ int main() {
   TestEncodePng();
   TestResBlock2D();
   TestAutoencoderConv();
+  TestGaussianaDiagonal();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

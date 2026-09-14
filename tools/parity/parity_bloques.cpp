@@ -443,6 +443,18 @@ int main(int argc, char** argv) {
     out["ae_ddce"] = AArray(*dec.ConvEntrada().GetGradients()[0]);
   }
 
+  // --- GaussianaDiagonal: reparametrizacion y KL del LDM-1
+  {
+    const float beta = Require(ref, "ga_meta").data[4];
+    latent::GaussianaDiagonal gau;
+    out["ga_z"] = AArray(gau.Forward(ATensor(Require(ref, "ga_params")),
+                                     ATensor(Require(ref, "ga_ruido"))));
+    Tensor kl({1});
+    kl[0] = static_cast<float>(gau.KL());
+    out["ga_kl"] = AArray(kl);
+    out["ga_dparams"] = AArray(gau.Backward(ATensor(Require(ref, "ga_w")), beta));
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

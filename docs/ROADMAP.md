@@ -1955,8 +1955,29 @@ entrenamiento directo habría escondido.
       error relativo 2.2. Las diferencias finitas dicen que el backward deriva
       ESE forward; solo la paridad dice que ese forward es la arquitectura que
       se pretendía.
-- [ ] **Reparametrización y KL** con ruido inyectable: gradiente analítico de la
-      KL, diferencias finitas y paridad.
+- [x] **Reparametrización y KL** (`latent/gaussiana.h`). `GaussianaDiagonal`
+      reparte la salida del codificador en media y log-varianza, recorta la
+      log-varianza a [-30, 20] como Stable Diffusion, sortea
+      `z = mu + exp(logvar/2)·ruido` con el ruido inyectado, y calcula la KL
+      contra N(0, 1) sumada sobre el latente y promediada en el lote. `Backward`
+      suma dentro los dos caminos —reconstrucción y `peso_kl · KL`— para que
+      ningún entrenador pueda olvidarse de uno.
+
+      El Test 59 empieza por respuestas exactas: con media 0 y log-varianza 0 la
+      KL vale **exactamente** 0 y el latente es **exactamente** el ruido; con
+      media 1 y varianza 2 la KL coincide con el valor calculado a mano. Después,
+      diferencias finitas de la pérdida completa, que los dos caminos se suman, y
+      que por una log-varianza recortada no pase gradiente. Tres mutaciones, las
+      tres errores típicos de un VAE, las tres rojas: olvidar el ½ al derivar
+      `exp(logvar/2)` (1.31), no dividir la KL por el lote (0.95) y dejar pasar
+      gradiente por el recorte.
+
+      Paridad contra una transcripción de la `DiagonalGaussianDistribution` de
+      Stable Diffusion, con una log-varianza por encima y otra por debajo del
+      recorte: `z` 5e-12, gradiente 7e-08. La KL da error **absoluto** 8.0 sobre
+      un valor de ~1.2·10⁸ —el elemento recortado a 20 aporta `exp(20)` y
+      `float32` redondea—, relativo 6.6e-08; es el precio de meter el recorte
+      en la comparación.
 - [ ] **Puerta de sobreajuste**: reconstruir 16 imágenes casi perfectas.
 - [ ] **Entrenamiento sobre MNIST**: error de reconstrucción y PSNR sobre
       validación, PNG de originales y reconstrucciones, y barrido de `C = 1, 2, 4`.

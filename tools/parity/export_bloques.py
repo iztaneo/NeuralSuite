@@ -375,6 +375,38 @@ def referencia_autoencoder(g, EPS):
     return salida
 
 
+def referencia_gaussiana(g):
+    """Referencia de GaussianaDiagonal: reparametrizacion, KL y su gradiente.
+
+    Sigue la DiagonalGaussianDistribution del codigo de Stable Diffusion:
+    torch.chunk en media y log-varianza, recorte de la log-varianza a [-30, 20],
+    z = mu + exp(logvar/2)·ruido, y KL = 0.5·sum(mu² + var − 1 − logvar)
+    promediada en el lote. Dos log-varianzas se ponen fuera del intervalo a
+    proposito, una por arriba y otra por abajo, para que el gradiente nulo del
+    recorte entre en la comparacion.
+    """
+    N, C, H, W = 2, 3, 4, 4
+    beta = 0.7
+    params = (torch.rand(N, 2 * C, H, W, generator=g, dtype=torch.float32) * 4.0 - 2.0)
+    params[0, C, 0, 0] = 25.0
+    params[1, C + 1, 2, 3] = -35.0
+    params.requires_grad_(True)
+    ruido = torch.randn(N, C, H, W, generator=g, dtype=torch.float32)
+    w = torch.randn(N, C, H, W, generator=g, dtype=torch.float32)
+    mu, logvar = torch.chunk(params, 2, dim=1)
+    logvar = torch.clamp(logvar, -30.0, 20.0)
+    z = mu + torch.exp(0.5 * logvar) * ruido
+    kl = 0.5 * torch.sum(mu.pow(2) + logvar.exp() - 1.0 - logvar) / N
+    ((z * w).sum() + beta * kl).backward()
+    return {
+        "ga_meta": np.array([N, C, H, W, beta], dtype=np.float32),
+        "ga_params": params.detach().numpy(), "ga_ruido": ruido.numpy(), "ga_w": w.numpy(),
+        "ga_z": z.detach().numpy(),
+        "ga_kl": np.array([kl.item()], dtype=np.float32),
+        "ga_dparams": params.grad.detach().numpy(),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/tmp/bloques_ref.nsp")
@@ -700,6 +732,7 @@ def main():
     tensors.update(tensors_sm)
     tensors.update(referencia_resblock2d(g, EPS))
     tensors.update(referencia_autoencoder(g, EPS))
+    tensors.update(referencia_gaussiana(g))
     nsparity.write(args.out, tensors)
 
     print(f"Escrito {args.out}")

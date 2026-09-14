@@ -38,7 +38,8 @@ def main():
                "un_y", "un_dx",
                "sm_ddpm", "sm_ddim0", "sm_ddim1", "sm_ddim_full1", "sm_ddpm_rec", "sm_ddim0_rec",
                "r2_y", "r2_dx", "r2_dc1w", "r2_dn2g",
-               "ae_cy", "ae_cdx", "ae_cdce", "ae_dy", "ae_ddz", "ae_ddce"):
+               "ae_cy", "ae_cdx", "ae_cdce", "ae_dy", "ae_ddz", "ae_ddce",
+               "ga_z", "ga_kl", "ga_dparams"):
         if nombre not in cpp:
             print(f"  {nombre:<14} {'FALTA en la salida de C++':>38}")
             return 1
