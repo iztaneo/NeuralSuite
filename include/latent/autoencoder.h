@@ -9,6 +9,9 @@
 #ifndef NEURAL_SUITE_INCLUDE_LATENT_AUTOENCODER_H_
 #define NEURAL_SUITE_INCLUDE_LATENT_AUTOENCODER_H_
 
+#include <map>
+#include <string>
+
 #include "../layer.h"
 #include "../layers/conv2d.h"
 #include "../layers/groupnorm.h"
@@ -55,8 +58,20 @@ class Codificador : public Layer {
   Conv2D& ConvSalida() { return conv_salida_; }
   ///@}
 
+  /**
+   * @name Persistencia
+   * Los pesos van con su ruta en el arbol y la arquitectura en los metadatos:
+   * cargar un archivo de otra configuracion falla nombrando la diferencia en vez
+   * de leer numeros del tamano correcto.
+   */
+  ///@{
+  bool GuardarPesos(const std::string& ruta, const std::map<std::string, std::string>& extra = {});
+  bool CargarPesos(const std::string& ruta, std::map<std::string, std::string>* leidos = nullptr);
+  [[nodiscard]] std::map<std::string, std::string> MetadatosArquitectura() const;
+  ///@}
+
  private:
-  int canales_imagen_;
+  int canales_imagen_, canales_, canales_latente_, grupos_;
   Conv2D conv_entrada_;
   ResBlock2D res0_, res1_, res2_;
   Downsample2D bajar0_, bajar1_;
@@ -94,8 +109,20 @@ class Decodificador : public Layer {
   Conv2D& ConvSalida() { return conv_salida_; }
   ///@}
 
+  /**
+   * @name Persistencia
+   * Los pesos van con su ruta en el arbol y la arquitectura en los metadatos:
+   * cargar un archivo de otra configuracion falla nombrando la diferencia en vez
+   * de leer numeros del tamano correcto.
+   */
+  ///@{
+  bool GuardarPesos(const std::string& ruta, const std::map<std::string, std::string>& extra = {});
+  bool CargarPesos(const std::string& ruta, std::map<std::string, std::string>* leidos = nullptr);
+  [[nodiscard]] std::map<std::string, std::string> MetadatosArquitectura() const;
+  ///@}
+
  private:
-  int canales_latente_;
+  int canales_latente_, canales_, canales_imagen_, grupos_;
   Conv2D conv_entrada_;
   ResBlock2D res0_, res1_, res2_;
   Upsample2D subir0_, subir1_;

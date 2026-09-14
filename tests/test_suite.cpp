@@ -6452,6 +6452,132 @@ void TestGaussianaDiagonal() {
             << std::flush;
 }
 
+/**
+ * @brief `entrenamiento/checkpoint`: lo que permite cortar un entrenamiento.
+ *
+ * Cada comprobacion corresponde a un fallo que ocurrio de verdad antes de que
+ * estas piezas existieran: reanudar exigiendo repetir opciones, archivos de dos
+ * checkpoints mezclados sin protestar, y Adam reanudando con los momentos a
+ * cero.
+ */
+void TestCheckpointEntrenamiento() {
+  std::cout << "🧪 [Test 60] Infraestructura de checkpoint... " << std::flush;
+  using namespace neuralsuite::entrenamiento;
+
+  // 1. El registro: adopta lo no pasado, rechaza lo contradicho, acepta lo igual.
+  {
+    int lote = 8, iteraciones = 400;
+    float lr = 2e-3f;
+    std::string particion = "barajada";
+    RegistroSellado reg;
+    char a0[] = "prog", a1[] = "--lote", a2[] = "8", a3[] = "--lr", a4[] = "0.002";
+    char* argv[] = {a0, a1, a2, a3, a4};
+    reg.MarcarDados(5, argv);
+    reg.Entero("lote", &lote);
+    reg.Entero("iteraciones", &iteraciones);
+    reg.Real("lr", &lr);
+    reg.Texto("particion", &particion);
+
+    Metadatos sellado = reg.Valores();
+    Check(sellado["lr"] == TextoReal(2e-3f), "el real no se sella con %.9g");
+    sellado["iteraciones"] = "80000";
+    sellado["particion"] = "contigua";
+    std::string adoptados, error;
+    Check(reg.Adoptar(sellado, &adoptados, &error), "rechazo un sello compatible: " + error);
+    Check(iteraciones == 80000 && particion == "contigua",
+          "no adopto lo que no se paso explicitamente");
+    Check(adoptados.find("iteraciones=80000") != std::string::npos, "no informo de lo adoptado");
+
+    sellado["lote"] = "32";   // --lote 8 se paso explicitamente
+    Check(!reg.Adoptar(sellado, &adoptados, &error), "acepto una opcion que contradice el sello");
+    Check(error.find("lote") != std::string::npos, "el error no nombra la opcion en conflicto");
+  }
+
+  // 2. Tasa de aprendizaje: calentamiento lineal y coseno hasta lr_min.
+  {
+    Check(std::abs(TasaAprendizaje(50, 1000, 100, 1.0f, 0.0f) - 0.5f) < 1e-6f,
+          "a mitad del calentamiento no vale la mitad");
+    Check(std::abs(TasaAprendizaje(100, 1000, 100, 1.0f, 0.0f) - 1.0f) < 1e-6f,
+          "al acabar el calentamiento no vale lr");
+    Check(std::abs(TasaAprendizaje(550, 1000, 100, 1.0f, 0.1f) - 0.55f) < 1e-5f,
+          "a mitad del coseno no vale la media entre lr y lr_min");
+    Check(std::abs(TasaAprendizaje(1000, 1000, 100, 1.0f, 0.1f) - 0.1f) < 1e-6f,
+          "al final no vale lr_min");
+  }
+
+  // 3. Rutas archivadas y semilla por iteracion.
+  {
+    Check(RutaArchivada("release/unet.nsf", 7) == "release/unet_it000007.nsf",
+          "ruta archivada con extension");
+    Check(RutaArchivada("./runs/modelo", 12) == "./runs/modelo_it000012",
+          "un punto en el directorio se tomo por extension");
+    Check(SemillaIteracion(7, 3) == SemillaIteracion(7, 3) &&
+              SemillaIteracion(7, 3) != SemillaIteracion(7, 4) &&
+              SemillaIteracion(7, 3) != SemillaIteracion(8, 3),
+          "la semilla por iteracion no depende de (semilla, it)");
+  }
+
+  // 4. Guardado transaccional: mismo id en todas las partes, nada a medias si
+  //    una falla, y deteccion de archivos de checkpoints distintos.
+  {
+    const std::string a = RutaTemporal("ns_ck_a.nsf"), b = RutaTemporal("ns_ck_b.nsf");
+    Tensor t({3});
+    t.RandomNormal(0.0f, 1.0f);
+    auto escritor = [&](const std::string& ruta, const Metadatos& sello) {
+      return nsf::Save(ruta, {{"t", &t}}, sello).ok;
+    };
+    std::string error;
+    Check(GuardarCheckpoint({{a, escritor}, {b, escritor}}, 5, {{"x", "1"}}, &error),
+          "no se pudo guardar: " + error);
+    Metadatos ma, mb;
+    Check(nsf::ReadMetadata(a, &ma).ok && nsf::ReadMetadata(b, &mb).ok, "no se leen las partes");
+    Check(ma["iteracion"] == "5" && ma["x"] == "1", "el sello no llego a los archivos");
+    Check(ComprobarMismoCheckpoint({ma, mb}, {"a", "b"}, &error),
+          "dos partes del mismo checkpoint no coinciden: " + error);
+
+    // Un segundo guardado de solo `b` simula un corte que dejo `a` viejo.
+    Check(GuardarCheckpoint({{b, escritor}}, 6, {}, &error), "segundo guardado");
+    Check(nsf::ReadMetadata(b, &mb).ok, "releer b");
+    Check(!ComprobarMismoCheckpoint({ma, mb}, {"a", "b"}, &error),
+          "acepto partes de dos checkpoints distintos");
+
+    // Si una parte falla, no se mueve nada y no quedan temporales.
+    const std::string c = RutaTemporal("ns_ck_c.nsf");
+    std::remove(c.c_str());
+    auto falla = [](const std::string&, const Metadatos&) { return false; };
+    Check(!GuardarCheckpoint({{c, escritor}, {b, falla}}, 7, {}, &error),
+          "un guardado con una parte fallida se dio por bueno");
+    std::ifstream sigue(c), temporal(c + ".tmp");
+    Check(!sigue.good() && !temporal.good(), "un guardado fallido dejo archivos a medias");
+    for (const auto& f : {a, b}) std::remove(f.c_str());
+  }
+
+  // 5. Estado de Adam: ida y vuelta de momentos y contador.
+  {
+    Tensor p({4}), g({4});
+    p.RandomNormal(0.0f, 1.0f);
+    g.RandomNormal(0.0f, 1.0f);
+    AdamW opt({&p}, {&g}, 1e-2f);
+    for (int i = 0; i < 3; ++i) opt.Step();
+    const std::string ruta = RutaTemporal("ns_ck_adam.nsf");
+    Check(GuardarEstadoAdam(ruta, opt, {{"iteracion", "3"}}).ok, "no se guardo Adam");
+    Tensor p2 = p, g2 = g;
+    AdamW otro({&p2}, {&g2}, 1e-2f);
+    Metadatos meta;
+    Check(CargarEstadoAdam(ruta, otro, &meta).ok, "no se cargo Adam");
+    Check(otro.PasosDados() == 3 && meta["iteracion"] == "3", "no se restauro el contador");
+    bool iguales = true;
+    for (size_t i = 0; i < 4; ++i) {
+      iguales = iguales && (*otro.EstadoM()[0])[i] == (*opt.EstadoM()[0])[i] &&
+                (*otro.EstadoV()[0])[i] == (*opt.EstadoV()[0])[i];
+    }
+    Check(iguales, "los momentos de Adam no sobreviven a la ida y vuelta");
+    std::remove(ruta.c_str());
+  }
+  std::cout << "PASADO ✅ (sello, tasa, rutas, guardado transaccional y estado de Adam)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -6516,6 +6642,7 @@ int main() {
   TestResBlock2D();
   TestAutoencoderConv();
   TestGaussianaDiagonal();
+  TestCheckpointEntrenamiento();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

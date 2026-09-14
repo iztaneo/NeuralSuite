@@ -5,6 +5,9 @@
 
 #include "latent/autoencoder.h"
 
+#include "serialization.h"
+
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -13,6 +16,9 @@ namespace latent {
 
 Codificador::Codificador(int canales_imagen, int canales, int canales_latente, int grupos)
     : canales_imagen_(canales_imagen),
+      canales_(canales),
+      canales_latente_(canales_latente),
+      grupos_(grupos),
       conv_entrada_(canales_imagen, canales, 3, 1, 1),
       res0_(canales, canales, grupos),
       res1_(canales, 2 * canales, grupos),
@@ -68,6 +74,9 @@ Tensor Codificador::Backward(const Tensor& dout) {
 
 Decodificador::Decodificador(int canales_latente, int canales, int canales_imagen, int grupos)
     : canales_latente_(canales_latente),
+      canales_(canales),
+      canales_imagen_(canales_imagen),
+      grupos_(grupos),
       conv_entrada_(canales_latente, 2 * canales, 3, 1, 1),
       res0_(2 * canales, 2 * canales, grupos),
       res1_(2 * canales, canales, grupos),
@@ -111,6 +120,56 @@ Tensor Decodificador::Backward(const Tensor& dout) {
   d = subir0_.Backward(d);
   d = res0_.Backward(d);
   return conv_entrada_.Backward(d);
+}
+
+namespace {
+
+bool GuardarModulo(Module& m, const std::string& ruta, std::map<std::string, std::string> meta,
+                   const std::map<std::string, std::string>& extra, const char* quien) {
+  for (const auto& kv : extra) meta[kv.first] = kv.second;
+  const auto r = nsf::Save(ruta, nsf::FromNamedParameters(m.NamedParameters()), meta);
+  if (!r) std::cerr << quien << ": error al guardar: " << r.error << "\n";
+  return r.ok;
+}
+
+bool CargarModulo(Module& m, const std::string& ruta, const std::map<std::string, std::string>& meta,
+                  std::map<std::string, std::string>* leidos, const char* quien) {
+  const auto r = nsf::Load(ruta, nsf::FromNamedParameters(m.NamedParameters()), meta, leidos);
+  if (!r) std::cerr << quien << ": error al cargar: " << r.error << "\n";
+  return r.ok;
+}
+
+}  // namespace
+
+std::map<std::string, std::string> Codificador::MetadatosArquitectura() const {
+  return {{"arch", "codificador_ldm"},
+          {"canales_imagen", std::to_string(canales_imagen_)},
+          {"canales", std::to_string(canales_)},
+          {"c_lat", std::to_string(canales_latente_)},
+          {"grupos", std::to_string(grupos_)}};
+}
+bool Codificador::GuardarPesos(const std::string& ruta,
+                               const std::map<std::string, std::string>& extra) {
+  return GuardarModulo(*this, ruta, MetadatosArquitectura(), extra, "Codificador");
+}
+bool Codificador::CargarPesos(const std::string& ruta, std::map<std::string, std::string>* leidos) {
+  return CargarModulo(*this, ruta, MetadatosArquitectura(), leidos, "Codificador");
+}
+
+std::map<std::string, std::string> Decodificador::MetadatosArquitectura() const {
+  return {{"arch", "decodificador_ldm"},
+          {"canales_imagen", std::to_string(canales_imagen_)},
+          {"canales", std::to_string(canales_)},
+          {"c_lat", std::to_string(canales_latente_)},
+          {"grupos", std::to_string(grupos_)}};
+}
+bool Decodificador::GuardarPesos(const std::string& ruta,
+                                 const std::map<std::string, std::string>& extra) {
+  return GuardarModulo(*this, ruta, MetadatosArquitectura(), extra, "Decodificador");
+}
+bool Decodificador::CargarPesos(const std::string& ruta,
+                                std::map<std::string, std::string>* leidos) {
+  return CargarModulo(*this, ruta, MetadatosArquitectura(), leidos, "Decodificador");
 }
 
 }  // namespace latent

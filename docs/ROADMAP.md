@@ -2004,8 +2004,46 @@ entrenamiento directo habría escondido.
       regulariza y el latente se expande (KL de 113 a 1293). Es lo esperado con
       el peso del paper, y es precisamente por lo que Stable Diffusion reescala
       el latente por 1/σ antes de difundir.
+- [x] **Infraestructura para el entrenamiento largo, extraída a la biblioteca.**
+      La lógica de checkpoint vivía dentro de `train_diffusion`, y el
+      autoencoder necesitaba exactamente lo mismo. Copiarla habrían sido ~150
+      líneas duplicadas que acabarían divergiendo, justo donde un descuido no da
+      error sino un entrenamiento que continúa mal. Ahora está en
+      `entrenamiento/checkpoint.h`: `RegistroSellado` (manda el sello salvo
+      contradicción explícita), `GuardarCheckpoint` (transaccional, con un
+      identificador común), `ComprobarMismoCheckpoint`, el estado de Adam, la
+      tasa con calentamiento y coseno, la semilla por iteración y las rutas
+      archivadas. Cubierto por el Test 60.
+
+      **La extracción no cambió un bit**: con el binario de antes como
+      referencia, `train_diffusion` produce pesos, EMA y momentos de Adam
+      idénticos en las dos particiones y en las copias archivadas, los
+      metadatos coinciden clave a clave, la reanudación sigue siendo exacta y el
+      checkpoint antiguo del escalón 5 se sigue reanudando.
+
+      `train_autoencoder` gana todo eso, más validación con `DataLoader::Partir`,
+      persistencia sellada de `Codificador` y `Decodificador`, PNG en cada
+      evaluación y **el control acordado**: un compresor tonto que guarda los
+      mismos números que el latente, reduciendo por promedio y ampliando por
+      bilineal. Sobre 1000 imágenes de validación marca el listón en **15.0 dB
+      con C=1, 16.5 con C=2 y 19.5 con C=4**. Verificado: reanudar sin opciones
+      da pesos y Adam idénticos, la partición es determinista, y el sello
+      contradicho y la mezcla de checkpoints se rechazan.
+
+      Una diferencia que se midió en vez de suponerse: la puerta de sobreajuste
+      bajó de 31.98 a 27.27 dB con el entrenador nuevo. Era el coseno: con
+      `lr_min = 0` por defecto la tasa llega a cero en un run corto, mientras
+      que la puerta la mantenía constante. Con `lr_min = lr` vuelve a 31.53 dB;
+      el resto sale de la nueva siembra por iteración.
+
 - [ ] **Entrenamiento sobre MNIST**: error de reconstrucción y PSNR sobre
       validación, PNG de originales y reconstrucciones, y barrido de `C = 1, 2, 4`.
+      Plan: primero **C = 4, 10 épocas** (18 000 iteraciones con lote 32, ~86
+      min medidos), y la curva decide cuántas épocas necesitan C = 2 y C = 1:
+
+      ```bash
+      caffeinate -i ./bin/train_autoencoder --n_imagenes 0 --n_validacion 3000 --c_lat 4 --lote 32 --iteraciones 18000 --calentamiento 500 --lr 5e-4 --lr_min 1e-5 --evaluar_cada 1000 --n_eval 1000 --guardar_cada 1000 --archivar_cada 3000 --reportar_cada 250 --archivo release/ae_c4.nsf --png release/ae_c4.png > logs/ae_c4.log 2>&1
+      ```
 - [ ] **Estadística del latente y factor de escala** (el paper escala por 1/σ),
       sellado en el checkpoint igual que el calendario de difusión.
 

@@ -92,10 +92,10 @@ int main(int argc, char** argv) {
 
   // Opciones pasadas explicitamente, sin los dos guiones. Al reanudar, lo que
   // el checkpoint tiene sellado se adopta salvo que se haya pedido otra cosa
-  // aqui, en cuyo caso se aborta: ver `ParametroSellado` mas abajo.
-  std::set<std::string> dados;
+  // aqui, en cuyo caso se aborta: ver `entrenamiento::RegistroSellado`.
+  entrenamiento::RegistroSellado sellables;
+  sellables.MarcarDados(argc, argv);
   for (int i = 1; i < argc; ++i) {
-    if (std::strncmp(argv[i], "--", 2) == 0) dados.insert(argv[i] + 2);
     auto sig = [&](const char* q) -> const char* {
       if (i + 1 >= argc) { std::fprintf(stderr, "Falta el valor de %s\n", q); std::exit(1); }
       return argv[++i];
@@ -139,40 +139,19 @@ int main(int argc, char** argv) {
   // lo que permite que `sample_diffusion` muestree un checkpoint sin que haya
   // que recordar con que calendario se entreno: con otro calendario los pesos
   // cargan igual y las imagenes salen peor sin ningun error.
-  struct ParametroSellado {
-    const char* nombre;
-    std::function<std::string()> leer;
-    std::function<void(const std::string&)> fijar;
-  };
-  auto como_texto = [](double v) {
-    char b[40];
-    std::snprintf(b, sizeof(b), "%.9g", v);
-    return std::string(b);
-  };
-  std::vector<ParametroSellado> sellables = {
-      {"n_imagenes", [&] { return std::to_string(n_imagenes); },
-       [&](const std::string& v) { n_imagenes = std::stoi(v); }},
-      {"n_validacion", [&] { return std::to_string(n_validacion); },
-       [&](const std::string& v) { n_validacion = std::stoi(v); }},
-      {"particion", [&] { return particion; }, [&](const std::string& v) { particion = v; }},
-      {"semilla", [&] { return std::to_string(semilla); },
-       [&](const std::string& v) { semilla = std::stoi(v); }},
-      {"canales", [&] { return std::to_string(canales); },
-       [&](const std::string& v) { canales = std::stoi(v); }},
-      {"lote", [&] { return std::to_string(lote); }, [&](const std::string& v) { lote = std::stoi(v); }},
-      {"iteraciones", [&] { return std::to_string(iteraciones); },
-       [&](const std::string& v) { iteraciones = std::stoi(v); }},
-      {"calentamiento", [&] { return std::to_string(calentamiento); },
-       [&](const std::string& v) { calentamiento = std::stoi(v); }},
-      {"lr", [&] { return como_texto(lr); }, [&](const std::string& v) { lr = std::stof(v); }},
-      {"lr_min", [&] { return como_texto(lr_min); },
-       [&](const std::string& v) { lr_min = std::stof(v); }},
-      {"ema", [&] { return como_texto(ema_decaimiento); },
-       [&](const std::string& v) { ema_decaimiento = std::stof(v); }},
-      {"pasos", [&] { return std::to_string(pasos); }, [&](const std::string& v) { pasos = std::stoi(v); }},
-      {"beta_fin", [&] { return como_texto(beta_fin); },
-       [&](const std::string& v) { beta_fin = std::stof(v); }},
-  };
+  sellables.Entero("n_imagenes", &n_imagenes);
+  sellables.Entero("n_validacion", &n_validacion);
+  sellables.Texto("particion", &particion);
+  sellables.Entero("semilla", &semilla);
+  sellables.Entero("canales", &canales);
+  sellables.Entero("lote", &lote);
+  sellables.Entero("iteraciones", &iteraciones);
+  sellables.Entero("calentamiento", &calentamiento);
+  sellables.Real("lr", &lr);
+  sellables.Real("lr_min", &lr_min);
+  sellables.Real("ema", &ema_decaimiento);
+  sellables.Entero("pasos", &pasos);
+  sellables.Real("beta_fin", &beta_fin);
   if (reanudar) {
     std::map<std::string, std::string> sellado;
     const auto r = nsf::ReadMetadata(archivo + ".opt", &sellado);
@@ -185,20 +164,10 @@ int main(int argc, char** argv) {
     // entrenaron con la contigua; el resto de claves ausentes se quedan con lo
     // que diga la linea de ordenes, como antes.
     if (!sellado.count("particion")) sellado["particion"] = "contigua";
-    std::string adoptados;
-    for (const ParametroSellado& ps : sellables) {
-      const auto it = sellado.find(ps.nombre);
-      if (it == sellado.end()) continue;
-      if (dados.count(ps.nombre)) {
-        if (ps.leer() != it->second) {
-          std::fprintf(stderr, "El checkpoint se entreno con %s=%s y se pidio %s\n", ps.nombre,
-                       it->second.c_str(), ps.leer().c_str());
-          return 1;
-        }
-      } else if (ps.leer() != it->second) {
-        ps.fijar(it->second);
-        adoptados += std::string(" ") + ps.nombre + "=" + it->second;
-      }
+    std::string adoptados, motivo;
+    if (!sellables.Adoptar(sellado, &adoptados, &motivo)) {
+      std::fprintf(stderr, "%s\n", motivo.c_str());
+      return 1;
     }
     if (!adoptados.empty()) std::printf("  del checkpoint:%s\n", adoptados.c_str());
   }
@@ -328,67 +297,37 @@ int main(int argc, char** argv) {
   };
   int it_inicial = 1;
 
-  // Un checkpoint son tres archivos, y escribirlos en su sitio uno detras de
-  // otro deja una ventana de varios segundos en la que un corte los mezcla:
-  // pesos nuevos con estado de Adam viejo, por ejemplo. Los tres son
-  // estructuralmente validos por separado, asi que reanudar de esa mezcla no
-  // daria ningun error; solo entrenaria mal.
-  //
-  // Por eso se escriben primero como `.tmp` y solo se mueven a su sitio cuando
-  // los tres estan completos. `std::rename` es atomico dentro del mismo sistema
-  // de archivos, asi que la ventana pasa de segundos a los microsegundos entre
-  // los tres renombrados. Esa ventana residual no se puede cerrar sin soporte
-  // del sistema de archivos, y no se pretende: lo que la cubre es el sello.
-  //
-  // El sello es un `checkpoint_id` unico por llamada a `guardar()`, escrito en
-  // los tres archivos. Al reanudar tienen que coincidir. Con eso, una mezcla no
-  // se entrena en silencio: aborta diciendo que los archivos no son del mismo
-  // checkpoint.
+  // Un checkpoint son tres archivos —pesos, sombra de la EMA y estado de
+  // Adam— escritos de forma transaccional y con un sello comun; ver
+  // `entrenamiento::GuardarCheckpoint` para el porque.
   auto guardar = [&](int it, const std::string& base) {
     const auto dst = rutas(base);
-    std::array<std::string, 3> tmp;
-    for (int k = 0; k < 3; ++k) tmp[k] = dst[k] + ".tmp";
-
-    const uint64_t id =
-        (static_cast<uint64_t>(it) << 40) ^
-        static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
-    std::map<std::string, std::string> sello = {
-        {"checkpoint_id", std::to_string(id)}, {"iteracion", std::to_string(it)},
-        {"beta_ini", "0.0001"}, {"normalizacion", "[-1,1]"}};
-    for (const ParametroSellado& ps : sellables) sello[ps.nombre] = ps.leer();
-
-    bool ok = unet.GuardarPesos(tmp[0], sello);
-    ema.Intercambiar();
-    ok = unet.GuardarPesos(tmp[1], sello) && ok;   // la sombra, mismos nombres
-    ema.Intercambiar();
-
-    std::vector<nsf::NamedTensor> est;
-    auto ms = opt.EstadoM(), vs = opt.EstadoV();
-    for (size_t i = 0; i < ms.size(); ++i) {
-      est.push_back({"m." + std::to_string(i), ms[i]});
-      est.push_back({"v." + std::to_string(i), vs[i]});
-    }
-    std::map<std::string, std::string> meta_opt = sello;
-    meta_opt["arch"] = "adamw";
-    meta_opt["pasos_opt"] = std::to_string(opt.PasosDados());
-    meta_opt["pasos_ema"] = std::to_string(ema.Pasos());
-
-    const auto res = nsf::Save(tmp[2], est, meta_opt);
-    ok = ok && res.ok;
-    if (!res) std::fprintf(stderr, "  no se pudo escribir el estado del optimizador: %s\n",
-                           res.error.c_str());
-
-    if (!ok) {
-      // El checkpoint anterior sigue intacto: no se ha movido nada.
-      for (const std::string& f : tmp) std::remove(f.c_str());
-      std::fprintf(stderr, "  checkpoint descartado; el anterior sigue en pie\n");
+    entrenamiento::Metadatos sello = sellables.Valores();
+    sello["beta_ini"] = "0.0001";
+    sello["normalizacion"] = "[-1,1]";
+    std::vector<entrenamiento::Parte> partes = {
+        {dst[0], [&](const std::string& ruta, const entrenamiento::Metadatos& m) {
+           return unet.GuardarPesos(ruta, m);
+         }},
+        {dst[1], [&](const std::string& ruta, const entrenamiento::Metadatos& m) {
+           ema.Intercambiar();
+           const bool ok = unet.GuardarPesos(ruta, m);   // la sombra, mismos nombres
+           ema.Intercambiar();
+           return ok;
+         }},
+        {dst[2], [&](const std::string& ruta, const entrenamiento::Metadatos& m) {
+           entrenamiento::Metadatos meta = m;
+           meta["pasos_ema"] = std::to_string(ema.Pasos());
+           const auto r = entrenamiento::GuardarEstadoAdam(ruta, opt, meta);
+           if (!r) std::fprintf(stderr, "  estado del optimizador: %s\n", r.error.c_str());
+           return r.ok;
+         }},
+    };
+    std::string motivo;
+    if (!entrenamiento::GuardarCheckpoint(partes, it, sello, &motivo)) {
+      std::fprintf(stderr, "  checkpoint descartado (%s); el anterior sigue en pie\n",
+                   motivo.c_str());
       return false;
-    }
-    for (int k = 0; k < 3; ++k) {
-      if (std::rename(tmp[k].c_str(), dst[k].c_str()) != 0) {
-        std::fprintf(stderr, "  no se pudo mover %s a su sitio\n", tmp[k].c_str());
-        return false;
-      }
     }
     return true;
   };
@@ -409,32 +348,17 @@ int main(int argc, char** argv) {
     }
     ema.Intercambiar();
 
-    std::vector<nsf::NamedTensor> est;
-    auto ms = opt.EstadoM(), vs = opt.EstadoV();
-    for (size_t i = 0; i < ms.size(); ++i) {
-      est.push_back({"m." + std::to_string(i), ms[i]});
-      est.push_back({"v." + std::to_string(i), vs[i]});
-    }
-    const auto res = nsf::Load(r[2], est, {{"arch", "adamw"}}, &m_opt);
+    const auto res = entrenamiento::CargarEstadoAdam(r[2], opt, &m_opt);
     if (!res) {
       std::fprintf(stderr, "No se pudo leer el estado del optimizador: %s\n", res.error.c_str());
       return 1;
     }
-
-    // El sello. Sin esto, una mezcla de dos checkpoints se cargaria sin
-    // protestar: los tres archivos son validos por separado.
-    const std::string id = m_pesos["checkpoint_id"];
-    if (id.empty() || m_ema["checkpoint_id"] != id || m_opt["checkpoint_id"] != id) {
-      std::fprintf(stderr,
-                   "Los tres archivos no son del mismo checkpoint (pesos '%s', "
-                   "EMA '%s', optimizador '%s'). Probablemente un corte durante "
-                   "el guardado; usa un checkpoint anterior.\n",
-                   id.c_str(), m_ema["checkpoint_id"].c_str(),
-                   m_opt["checkpoint_id"].c_str());
+    std::string motivo;
+    if (!entrenamiento::ComprobarMismoCheckpoint({m_pesos, m_ema, m_opt},
+                                                 {"pesos", "EMA", "optimizador"}, &motivo)) {
+      std::fprintf(stderr, "%s\n", motivo.c_str());
       return 1;
     }
-
-    opt.FijarPasosDados(std::stoi(m_opt["pasos_opt"]));
     ema.FijarPasos(std::stoi(m_opt["pasos_ema"]));
     it_inicial = std::stoi(m_opt["iteracion"]) + 1;
 
@@ -498,8 +422,7 @@ int main(int argc, char** argv) {
     // —guardar el estado del mt19937 global y el del generador de lotes— exige
     // acordarse de los dos, y ademas la evaluacion y el muestreo periodicos
     // tocan el global por el camino.
-    const uint32_t sem_it = (static_cast<uint32_t>(semilla) * 0x9E3779B1u) ^
-                            (static_cast<uint32_t>(it) * 0x85EBCA6Bu);
+    const uint32_t sem_it = entrenamiento::SemillaIteracion(semilla, it);
     ManualSeed(sem_it);
     rng.s = sem_it | 1u;   // xorshift no admite el cero
 
@@ -507,15 +430,7 @@ int main(int argc, char** argv) {
     // es cosmetico: Adam arranca con m = v = 0 y la correccion de sesgo hace
     // que los primeros pasos sean del tamano maximo, justo cuando los pesos son
     // aleatorios y el gradiente no apunta a nada util.
-    float lr_ahora = lr;
-    if (calentamiento > 0 && it <= calentamiento) {
-      lr_ahora = lr * static_cast<float>(it) / static_cast<float>(calentamiento);
-    } else if (iteraciones > calentamiento) {
-      const float avance = static_cast<float>(it - calentamiento) /
-                           static_cast<float>(iteraciones - calentamiento);
-      lr_ahora = lr_min + 0.5f * (lr - lr_min) * (1.0f + std::cos(3.14159265f * avance));
-    }
-    opt.SetLearningRate(lr_ahora);
+    opt.SetLearningRate(entrenamiento::TasaAprendizaje(it, iteraciones, calentamiento, lr, lr_min));
 
     for (int b = 0; b < lote_real; ++b) {
       const int idx = rng.Entero(N);
@@ -608,15 +523,7 @@ int main(int argc, char** argv) {
     // bueno sin dejar rastro. Cada copia son 3.8 MB con 32 canales, asi que
     // conservar unas cuantas cuesta menos que perder cinco horas de computo.
     if (archivar_cada > 0 && it % archivar_cada == 0) {
-      char sufijo[32];
-      std::snprintf(sufijo, sizeof(sufijo), "_it%06d", it);
-      std::string base = archivo;
-      const size_t punto = base.rfind('.');
-      // El sufijo va ANTES de la extension para que el archivo siga siendo un
-      // .nsf reconocible, y con el numero rellenado a seis cifras para que el
-      // orden alfabetico coincida con el cronologico.
-      base = (punto == std::string::npos) ? base + sufijo
-                                          : base.substr(0, punto) + sufijo + base.substr(punto);
+      const std::string base = entrenamiento::RutaArchivada(archivo, it);
       if (guardar(it, base)) std::printf("  archivado -> %s\n", base.c_str());
     }
   }

@@ -38,6 +38,7 @@
 #include "diffusion/unet.h"
 #include "latent/autoencoder.h"
 #include "latent/gaussiana.h"
+#include "entrenamiento/checkpoint.h"
 #include "data/mnist.h"
 #include "layers/attention.h"
 #include "layers/conv2d.h"
