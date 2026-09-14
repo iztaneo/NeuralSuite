@@ -36,6 +36,7 @@
 #include "diffusion/time_embedding.h"
 #include "diffusion/sampler.h"
 #include "diffusion/unet.h"
+#include "latent/autoencoder.h"
 #include "data/mnist.h"
 #include "layers/attention.h"
 #include "layers/conv2d.h"

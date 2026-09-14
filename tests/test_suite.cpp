@@ -6238,6 +6238,96 @@ void TestResBlock2D() {
             << std::flush;
 }
 
+/**
+ * @brief `Codificador` y `Decodificador` del LDM-1.
+ *
+ * Cada `ResBlock2D` ya esta verificado por separado; lo que puede fallar aqui
+ * es el ensamblaje: una bajada que falte, un bloque que no reciba gradiente, un
+ * orden de backward que no sea el inverso del forward. Por eso se comprueba
+ * cada uno de extremo a extremo y se exige que todos los pesos reciban senal.
+ */
+void TestAutoencoderConv() {
+  std::cout << "🧪 [Test 58] Codificador y decodificador convolucionales... " << std::flush;
+  using namespace neuralsuite::latent;
+  const int N = 2, C = 4, CL = 2, G = 2, H = 8;
+
+  // Comprueba una capa de extremo a extremo con una perdida lineal fija.
+  auto verificar = [&](Layer& capa, const Tensor& x, const std::vector<int>& forma_salida,
+                       const std::string& quien) {
+    const Tensor y0 = capa.Forward(x);
+    Check(y0.Shape() == forma_salida, quien + ": forma de salida equivocada");
+    Tensor w(y0.Shape());
+    w.RandomNormal(0.0f, 1.0f);
+    auto perdida = [&](const Tensor& entrada) {
+      const Tensor y = capa.Forward(entrada);
+      double l = 0.0;
+      for (size_t i = 0; i < y.TotalSize(); ++i) l += static_cast<double>(w[i]) * y[i];
+      return l;
+    };
+    capa.ZeroGrad();
+    capa.Forward(x);
+    const Tensor dx = capa.Backward(w);
+    Check(dx.Shape() == x.Shape(), quien + ": el gradiente no tiene la forma de la entrada");
+
+    int mudos = 0;
+    for (const Tensor* g : capa.GetGradients()) {
+      double norma = 0.0;
+      for (size_t i = 0; i < g->TotalSize(); ++i) norma += std::abs((*g)[i]);
+      if (norma < 1e-12) ++mudos;
+    }
+    Check(mudos == 0, quien + ": " + std::to_string(mudos) + " tensores de gradiente sin senal");
+
+    const float h = 1e-3f;
+    double peor = 0.0;
+    for (size_t i = 0; i < x.TotalSize(); i += 5) {
+      Tensor xp = x, xm = x;
+      xp[i] += h;
+      xm[i] -= h;
+      const double num = (perdida(xp) - perdida(xm)) / (2.0 * h);
+      peor = std::max(peor, std::abs(num - dx[i]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor < 2e-2, quien + ": dx no cuadra con las diferencias finitas (" +
+                           std::to_string(peor) + ")");
+  };
+
+  ManualSeed(83);
+  Codificador cod(1, C, CL, G);
+  Tensor imagen({N, 1, H, H});
+  imagen.RandomNormal(0.0f, 1.0f);
+  // La salida lleva el doble de canales: media y log-varianza del latente.
+  verificar(cod, imagen, {N, 2 * CL, H / 4, H / 4}, "codificador");
+
+  Decodificador dec(CL, C, 1, G);
+  Tensor z({N, CL, H / 4, H / 4});
+  z.RandomNormal(0.0f, 1.0f);
+  verificar(dec, z, {N, 1, H, H}, "decodificador");
+
+  // El caso real del LDM-1: 32×32 -> 8×8 -> 32×32.
+  {
+    Tensor mnist({1, 1, 32, 32});
+    mnist.RandomNormal(0.0f, 1.0f);
+    const Tensor lat = cod.Forward(mnist);
+    Check(lat.Shape() == std::vector<int>({1, 2 * CL, 8, 8}), "32x32 no da un latente de 8x8");
+    Tensor z8({1, CL, 8, 8});
+    z8.RandomNormal(0.0f, 1.0f);
+    Check(dec.Forward(z8).Shape() == std::vector<int>({1, 1, 32, 32}),
+          "un latente de 8x8 no vuelve a 32x32");
+  }
+
+  // Una resolucion que no es multiplo de 4 no se puede reducir por f = 4 sin
+  // perder bordes: tiene que protestar, no recortar en silencio. (MNIST, 28×28,
+  // si lo es, pero daria un latente de 7×7 que la U-Net no acepta; por eso se
+  // rellena a 32×32.)
+  {
+    bool protesto = false;
+    Tensor raro({1, 1, 30, 30});
+    try { cod.Forward(raro); } catch (const std::invalid_argument&) { protesto = true; }
+    Check(protesto, "el codificador acepto 30x30, que no es multiplo de 4");
+  }
+  std::cout << "PASADO ✅ (formas, gradientes de extremo a extremo y todos los pesos vivos)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -6300,6 +6390,7 @@ int main() {
   TestEmaYPersistencia();
   TestEncodePng();
   TestResBlock2D();
+  TestAutoencoderConv();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

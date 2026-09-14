@@ -32,6 +32,57 @@ Lo que sí necesita el autograd es dejar de ser una demostración y volverse
 infraestructura: que permita **construir arquitecturas nuevas** sin escribir cada
 backward a mano. Eso son dos operaciones concretas, no una fase entera.
 
+## El foco: tres columnas y un puente
+
+Una revisión externa, al cerrar la Fase 17, señaló el riesgo principal del
+proyecto: **que la amplitud se vuelva su enemigo.** Ya hay GPT, LSTM, CNN, OCR,
+GNN, GAN, autoencoder, difusión, tokenizador, serialización, decodificadores de
+imagen y cargadores de datos, y es tentador seguir sumando. Pero a estas alturas
+diez demos más aportan menos que conseguir que dos o tres familias funcionen
+excepcionalmente bien. **NeuralSuite no debe convertirse en un museo de
+arquitecturas.**
+
+El trabajo nuevo se ordena alrededor de tres columnas:
+
+```text
+NeuralSuite
+├── Lenguaje     Transformer / GPT
+├── Visión       Conv / autoencoder / OCR
+└── Generativo   difusión / difusión latente
+```
+
+y del puente que las une:
+
+```text
+contexto del Transformer  →  CrossAttention  →  difusión latente
+```
+
+**El filtro:** una pieza nueva entra si refuerza una columna o el puente. Si solo
+añade otra arquitectura aislada, no entra, por interesante que sea.
+
+Tres posturas que se derivan de esto y que conviene tener escritas:
+
+- **El motor crece cuando una arquitectura real lo exige**, no por anticipado.
+  La difusión ya dio el primer aviso sobre el backward manual; la difusión
+  latente probablemente dará el segundo, y ese es el momento de decidir cuánto
+  autograd hace falta.
+- **El backend es una decisión aplazada, no olvidada.** CPU, `float32` y una sola
+  máquina bastan para MNIST y para entender LDM. Cuando un experimento
+  interesante tarde días, habrá que elegir entre seguir siendo un framework
+  transparente de CPU o abrir una capa de backends.
+- **No se llama *production-ready*.** CI, sanitizers, checkpoints sellados y
+  paridad no lo convierten en infraestructura de producción: faltan estabilidad
+  de API, versionado serio de modelos, perfiles de memoria, *fuzzing* más
+  agresivo, backends acelerados y evidencia fuera de MNIST y de modelos
+  pequeños. Lo que sí es, en una frase: *an independent C++17 neural-network
+  framework for transparent training, inference and experimentation, with no
+  external ML or linear-algebra runtime dependencies.*
+
+**La meta de una 1.0** es demostrar que una misma infraestructura propia entrena
+dos familias muy distintas —lenguaje y generación visual— con corrección
+verificable: GPT moderno, difusión latente, paridad externa, datos reales,
+entrenamiento reproducible, benchmarks y documentación sólida.
+
 ---
 
 ## Lo que falta
@@ -1881,8 +1932,29 @@ entrenamiento directo habría escondido.
       existen; los gradientes se leen con `GetGradients()`, en el orden de
       registro. Tercera vez en el proyecto que se supone una API en vez de
       mirarla.
-- [ ] **Codificador y decodificador** 32×32 → 8×8×C → 32×32, con paridad del
-      conjunto: lo que se verifica es el cableado, como con la U-Net.
+- [x] **Codificador y decodificador** (`latent/autoencoder.h`). El codificador
+      baja por `f = 4` con dos `Downsample2D` entre `ResBlock2D` y termina en
+      `2·C` canales —media y log-varianza del latente, que se reparten en el
+      escalón siguiente—; el decodificador es su espejo y sube con `Upsample2D`
+      más convoluciones, sin convolución transpuesta.
+
+      Paridad del conjunto contra una composición en PyTorch, con los pesos por
+      nombre: codificador `ae_cy` 3.7e-07 y `ae_cdx` 2.0e-06, decodificador
+      `ae_dy` 5.3e-07 y `ae_ddz` 8.2e-07, más el gradiente de la primera
+      convolución de cada uno, que atraviesa la red entera hacia atrás.
+
+      El Test 58 comprueba formas, gradiente de la entrada contra diferencias
+      finitas de extremo a extremo, que todos los pesos reciban señal, el caso
+      real 32×32 → 8×8 → 32×32 y que una resolución no múltiplo de 4 proteste.
+      Saltarse la derivada de SiLU en el codificador lo pone en rojo (0.77).
+
+      **Y una comprobación de por qué hace falta la paridad:** se movió una
+      subida del decodificador de sitio, en el forward y en el backward a la
+      vez. **El Test 58 siguió en verde** —un cableado equivocado pero
+      coherente deriva bien su propio forward— y **la paridad lo rechazó** con
+      error relativo 2.2. Las diferencias finitas dicen que el backward deriva
+      ESE forward; solo la paridad dice que ese forward es la arquitectura que
+      se pretendía.
 - [ ] **Reparametrización y KL** con ruido inyectable: gradiente analítico de la
       KL, diferencias finitas y paridad.
 - [ ] **Puerta de sobreajuste**: reconstruir 16 imágenes casi perfectas.

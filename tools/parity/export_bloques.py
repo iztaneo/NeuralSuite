@@ -293,6 +293,88 @@ def referencia_resblock2d(g, EPS):
     }
 
 
+def referencia_autoencoder(g, EPS):
+    """Referencia del Codificador y el Decodificador del LDM-1.
+
+    Cada ResBlock2D ya tiene su propio caso (r2_). Aqui lo que se contrasta es el
+    ENSAMBLAJE: que las dos bajadas y las dos subidas esten donde deben, el
+    orden de los bloques y sus canales. Los pesos se exportan por nombre,
+    submodulo a submodulo, para que un fallo senale al cableado y no a un orden
+    mal adivinado. Se exporta ademas el gradiente de la primera convolucion de
+    cada uno, que es el que atraviesa la red entera hacia atras.
+    """
+    N, C, CL, G, H = 2, 4, 2, 2, 8
+
+    def conv(cin, cout, k):
+        c = nn.Conv2d(cin, cout, k, padding=k // 2, dtype=torch.float32)
+        with torch.no_grad():
+            c.weight.copy_(torch.randn(c.weight.shape, generator=g) * 0.2)
+            c.bias.copy_(torch.randn(c.bias.shape, generator=g) * 0.2)
+        return c
+
+    def norm(ch):
+        n = nn.GroupNorm(G, ch, eps=EPS, dtype=torch.float32)
+        with torch.no_grad():
+            n.weight.copy_(1.0 + 0.1 * torch.randn(n.weight.shape, generator=g))
+            n.bias.copy_(0.1 * torch.randn(n.bias.shape, generator=g))
+        return n
+
+    def resblock(cin, cout):
+        d = {"n1": norm(cin), "c1": conv(cin, cout, 3), "n2": norm(cout), "c2": conv(cout, cout, 3)}
+        if cin != cout:
+            d["at"] = conv(cin, cout, 1)
+        return d
+
+    def aplicar_rb(d, x):
+        h = d["c1"](nn.functional.silu(d["n1"](x)))
+        y = d["c2"](nn.functional.silu(d["n2"](h)))
+        return y + (d["at"](x) if "at" in d else x)
+
+    def volcar(prefijo, d, destino):
+        for k, capa in d.items():
+            destino[f"{prefijo}_{k}_w"] = capa.weight.detach().numpy()
+            destino[f"{prefijo}_{k}_b"] = capa.bias.detach().numpy()
+
+    salida = {"ae_meta": np.array([N, C, CL, G, H], dtype=np.float32)}
+
+    # --- Codificador
+    ce, r0, r1, r2 = conv(1, C, 3), resblock(C, C), resblock(C, 2 * C), resblock(2 * C, 2 * C)
+    ns, cs = norm(2 * C), conv(2 * C, 2 * CL, 3)
+    x = torch.randn(N, 1, H, H, generator=g, dtype=torch.float32, requires_grad=True)
+    h = aplicar_rb(r0, ce(x))
+    h = aplicar_rb(r1, nn.functional.avg_pool2d(h, 2))
+    h = aplicar_rb(r2, nn.functional.avg_pool2d(h, 2))
+    y = cs(nn.functional.silu(ns(h)))
+    w = torch.randn(y.shape, generator=g, dtype=torch.float32)
+    (y * w).sum().backward()
+    salida.update({"ae_cx": x.detach().numpy(), "ae_cw": w.numpy(), "ae_cy": y.detach().numpy(),
+                   "ae_cdx": x.grad.detach().numpy(), "ae_cdce": ce.weight.grad.detach().numpy()})
+    volcar("ae_c_ce", {"x": ce}, salida)
+    for pre, d in (("ae_c_r0", r0), ("ae_c_r1", r1), ("ae_c_r2", r2)):
+        volcar(pre, d, salida)
+    volcar("ae_c_ns", {"x": ns}, salida)
+    volcar("ae_c_cs", {"x": cs}, salida)
+
+    # --- Decodificador
+    de, q0, q1, q2 = conv(CL, 2 * C, 3), resblock(2 * C, 2 * C), resblock(2 * C, C), resblock(C, C)
+    ms, ds = norm(C), conv(C, 1, 3)
+    z = torch.randn(N, CL, H // 4, H // 4, generator=g, dtype=torch.float32, requires_grad=True)
+    h = aplicar_rb(q0, de(z))
+    h = aplicar_rb(q1, nn.functional.interpolate(h, scale_factor=2, mode="nearest"))
+    h = aplicar_rb(q2, nn.functional.interpolate(h, scale_factor=2, mode="nearest"))
+    y = ds(nn.functional.silu(ms(h)))
+    w = torch.randn(y.shape, generator=g, dtype=torch.float32)
+    (y * w).sum().backward()
+    salida.update({"ae_dz": z.detach().numpy(), "ae_dw": w.numpy(), "ae_dy": y.detach().numpy(),
+                   "ae_ddz": z.grad.detach().numpy(), "ae_ddce": de.weight.grad.detach().numpy()})
+    volcar("ae_d_ce", {"x": de}, salida)
+    for pre, d in (("ae_d_r0", q0), ("ae_d_r1", q1), ("ae_d_r2", q2)):
+        volcar(pre, d, salida)
+    volcar("ae_d_ns", {"x": ms}, salida)
+    volcar("ae_d_cs", {"x": ds}, salida)
+    return salida
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/tmp/bloques_ref.nsp")
@@ -617,6 +699,7 @@ def main():
     tensors.update(unet_t)
     tensors.update(tensors_sm)
     tensors.update(referencia_resblock2d(g, EPS))
+    tensors.update(referencia_autoencoder(g, EPS))
     nsparity.write(args.out, tensors)
 
     print(f"Escrito {args.out}")

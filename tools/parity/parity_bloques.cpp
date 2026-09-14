@@ -397,6 +397,52 @@ int main(int argc, char** argv) {
     out["r2_dn2g"] = AArray(*rb.Norm2().GetGradients()[0]);   // gamma se registra primero
   }
 
+  // --- Codificador y Decodificador del LDM-1: el ensamblaje
+  {
+    const nsparity::Array& m = Require(ref, "ae_meta");
+    const int C = static_cast<int>(m.data[1]);
+    const int CL = static_cast<int>(m.data[2]);
+    const int G = static_cast<int>(m.data[3]);
+    auto copiar = [&](Tensor& destino, const std::string& nombre) {
+      const Tensor t = ATensor(Require(ref, nombre));
+      if (t.TotalSize() != destino.TotalSize()) {
+        throw std::runtime_error("ae: tamano distinto en " + nombre);
+      }
+      std::memcpy(destino.Data(), t.Data(), t.TotalSize() * sizeof(float));
+    };
+    auto cargar_conv = [&](Conv2D& c, const std::string& p) {
+      copiar(c.Weight(), p + "_w"); copiar(c.Bias(), p + "_b");
+    };
+    auto cargar_norm = [&](GroupNormLayer& n, const std::string& p) {
+      copiar(n.Gamma(), p + "_w"); copiar(n.Beta(), p + "_b");
+    };
+    auto cargar_rb = [&](ResBlock2D& rb, const std::string& p) {
+      cargar_norm(rb.Norm1(), p + "_n1"); cargar_conv(rb.Conv1(), p + "_c1");
+      cargar_norm(rb.Norm2(), p + "_n2"); cargar_conv(rb.Conv2(), p + "_c2");
+      if (rb.Atajo() != nullptr) cargar_conv(*rb.Atajo(), p + "_at");
+    };
+
+    latent::Codificador cod(1, C, CL, G);
+    cargar_conv(cod.ConvEntrada(), "ae_c_ce_x");
+    cargar_rb(cod.Res0(), "ae_c_r0"); cargar_rb(cod.Res1(), "ae_c_r1"); cargar_rb(cod.Res2(), "ae_c_r2");
+    cargar_norm(cod.NormSalida(), "ae_c_ns_x");
+    cargar_conv(cod.ConvSalida(), "ae_c_cs_x");
+    cod.ZeroGrad();
+    out["ae_cy"] = AArray(cod.Forward(ATensor(Require(ref, "ae_cx"))));
+    out["ae_cdx"] = AArray(cod.Backward(ATensor(Require(ref, "ae_cw"))));
+    out["ae_cdce"] = AArray(*cod.ConvEntrada().GetGradients()[0]);
+
+    latent::Decodificador dec(CL, C, 1, G);
+    cargar_conv(dec.ConvEntrada(), "ae_d_ce_x");
+    cargar_rb(dec.Res0(), "ae_d_r0"); cargar_rb(dec.Res1(), "ae_d_r1"); cargar_rb(dec.Res2(), "ae_d_r2");
+    cargar_norm(dec.NormSalida(), "ae_d_ns_x");
+    cargar_conv(dec.ConvSalida(), "ae_d_cs_x");
+    dec.ZeroGrad();
+    out["ae_dy"] = AArray(dec.Forward(ATensor(Require(ref, "ae_dz"))));
+    out["ae_ddz"] = AArray(dec.Backward(ATensor(Require(ref, "ae_dw"))));
+    out["ae_ddce"] = AArray(*dec.ConvEntrada().GetGradients()[0]);
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;
