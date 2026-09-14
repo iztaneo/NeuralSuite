@@ -6136,6 +6136,108 @@ void TestEncodePng() {
   std::cout << "PASADO ✅ (ida y vuelta exacta, varios bloques y entradas invalidas)\n" << std::flush;
 }
 
+/**
+ * @brief `ResBlock2D`: el bloque del codificador y el decodificador del LDM-1.
+ *
+ * La paridad contra PyTorch confirma los numeros; esto anade lo estructural:
+ * que el gradiente de la entrada y el de los pesos deriven ESE forward, que el
+ * residuo sume de verdad en sus dos variantes —identidad y convolucion 1×1— y
+ * que el bloque no dependa de la resolucion, porque el mismo se usa a 32×32 y a
+ * 8×8.
+ */
+void TestResBlock2D() {
+  std::cout << "🧪 [Test 57] ResBlock2D... " << std::flush;
+  const int N = 2, H = 6, W = 6, G = 2;
+
+  for (const auto& canales : {std::pair<int, int>{4, 6}, {4, 4}}) {
+    const int CIN = canales.first, COUT = canales.second;
+    ManualSeed(71);
+    ResBlock2D rb(CIN, COUT, G);
+    Check((rb.Atajo() != nullptr) == (CIN != COUT),
+          "el atajo lleva convolucion cuando no toca, o no la lleva cuando toca");
+
+    Tensor x({N, CIN, H, W}), w({N, COUT, H, W});
+    x.RandomNormal(0.0f, 1.0f);
+    w.RandomNormal(0.0f, 1.0f);
+    auto perdida = [&](const Tensor& entrada) {
+      const Tensor y = rb.Forward(entrada);
+      double l = 0.0;
+      for (size_t i = 0; i < y.TotalSize(); ++i) l += static_cast<double>(w[i]) * y[i];
+      return l;
+    };
+
+    rb.ZeroGrad();
+    const Tensor y = rb.Forward(x);
+    Check(y.Shape() == std::vector<int>({N, COUT, H, W}), "forma de salida equivocada");
+    const Tensor dx = rb.Backward(w);
+
+    // 1. Gradiente de la entrada contra diferencias finitas.
+    const float h = 1e-3f;
+    double peor = 0.0;
+    for (size_t i = 0; i < x.TotalSize(); i += 7) {
+      Tensor xp = x, xm = x;
+      xp[i] += h;
+      xm[i] -= h;
+      const double num = (perdida(xp) - perdida(xm)) / (2.0 * h);
+      peor = std::max(peor, std::abs(num - dx[i]) / std::max(1.0, std::abs(num)));
+    }
+    Check(peor < 1e-2, "dx no cuadra con las diferencias finitas (" + std::to_string(peor) + ")");
+
+    // 2. Gradiente de los pesos, muestreando cada tensor.
+    {
+      const auto params = rb.GetParameters();
+      const auto grads = rb.GetGradients();
+      std::vector<Tensor> copia_grads;
+      for (const Tensor* g : grads) copia_grads.push_back(*g);
+      double peor_w = 0.0;
+      int mudos = 0;
+      for (size_t k = 0; k < params.size(); ++k) {
+        double norma = 0.0;
+        for (size_t i = 0; i < copia_grads[k].TotalSize(); ++i) norma += std::abs(copia_grads[k][i]);
+        if (norma < 1e-12) ++mudos;
+        Tensor& p = *params[k];
+        for (size_t i = 0; i < p.TotalSize(); i += std::max<size_t>(1, p.TotalSize() / 5)) {
+          const float orig = p[i];
+          p[i] = orig + h;
+          const double lp = perdida(x);
+          p[i] = orig - h;
+          const double lm = perdida(x);
+          p[i] = orig;
+          const double num = (lp - lm) / (2.0 * h);
+          peor_w = std::max(peor_w, std::abs(num - copia_grads[k][i]) / std::max(1.0, std::abs(num)));
+        }
+      }
+      Check(peor_w < 1e-2, "el gradiente de los pesos no cuadra (" + std::to_string(peor_w) + ")");
+      Check(mudos == 0, std::to_string(mudos) + " tensores de gradiente sin senal");
+    }
+
+    // 3. El residuo suma: anulando la ultima convolucion la salida tiene que
+    //    ser exactamente el atajo.
+    {
+      ResBlock2D probe(CIN, COUT, G);
+      probe.Conv2().Weight().Zeros();
+      probe.Conv2().Bias().Zeros();
+      const Tensor s = probe.Forward(x);
+      const Tensor atajo = probe.Atajo() ? probe.Atajo()->Forward(x) : x;
+      double dif = 0.0;
+      for (size_t i = 0; i < s.TotalSize(); ++i) {
+        dif = std::max(dif, std::abs(static_cast<double>(s[i]) - atajo[i]));
+      }
+      Check(dif < 1e-5, "con la rama principal anulada la salida no es el atajo");
+    }
+
+    // 4. Los mismos pesos a otra resolucion: el bloque se usa a 32×32 y a 8×8.
+    {
+      Tensor grande({1, CIN, 10, 14});
+      grande.RandomNormal(0.0f, 1.0f);
+      const Tensor s = rb.Forward(grande);
+      Check(s.Shape() == std::vector<int>({1, COUT, 10, 14}), "no funciona a otra resolucion");
+    }
+  }
+  std::cout << "PASADO ✅ (dos gradientes, residuo que suma con y sin atajo, sin resolucion fija)\n"
+            << std::flush;
+}
+
 int main() {
   std::cout << "============================================================\n" << std::flush;
   std::cout << "🚀 Pruebas Unitarias de NeuralSuite (Google C++ Style Guide)\n" << std::flush;
@@ -6197,6 +6299,7 @@ int main() {
   TestMuestreadores();
   TestEmaYPersistencia();
   TestEncodePng();
+  TestResBlock2D();
 
   std::cout << "============================================================\n" << std::flush;
   if (g_failures == 0) {

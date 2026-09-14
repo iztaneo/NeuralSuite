@@ -370,6 +370,33 @@ int main(int argc, char** argv) {
     out["sm_ddim0_rec"] = AArray(ddim0_rec.Muestrear(pred, xT, fuente));
   }
 
+  // --- ResBlock2D (codificador y decodificador del LDM-1)
+  {
+    const nsparity::Array& m = Require(ref, "r2_meta");
+    const int Cin = static_cast<int>(m.data[1]);
+    const int Cout = static_cast<int>(m.data[2]);
+    const int G = static_cast<int>(m.data[5]);
+    ResBlock2D rb(Cin, Cout, G);
+    auto copiar = [&](Tensor& destino, const char* nombre) {
+      const Tensor t = ATensor(Require(ref, nombre));
+      if (t.TotalSize() != destino.TotalSize()) {
+        throw std::runtime_error(std::string("r2: tamano distinto en ") + nombre);
+      }
+      std::memcpy(destino.Data(), t.Data(), t.TotalSize() * sizeof(float));
+    };
+    copiar(rb.Norm1().Gamma(), "r2_n1_g"); copiar(rb.Norm1().Beta(), "r2_n1_b");
+    copiar(rb.Norm2().Gamma(), "r2_n2_g"); copiar(rb.Norm2().Beta(), "r2_n2_b");
+    copiar(rb.Conv1().Weight(), "r2_c1_w"); copiar(rb.Conv1().Bias(), "r2_c1_b");
+    copiar(rb.Conv2().Weight(), "r2_c2_w"); copiar(rb.Conv2().Bias(), "r2_c2_b");
+    copiar(rb.Atajo()->Weight(), "r2_at_w"); copiar(rb.Atajo()->Bias(), "r2_at_b");
+
+    rb.ZeroGrad();
+    out["r2_y"] = AArray(rb.Forward(ATensor(Require(ref, "r2_x"))));
+    out["r2_dx"] = AArray(rb.Backward(ATensor(Require(ref, "r2_w"))));
+    out["r2_dc1w"] = AArray(*rb.Conv1().GetGradients()[0]);   // weight se registra primero
+    out["r2_dn2g"] = AArray(*rb.Norm2().GetGradients()[0]);   // gamma se registra primero
+  }
+
   WriteBundle(salida, out);
   std::cout << "Escrito " << salida << "\n";
   return 0;

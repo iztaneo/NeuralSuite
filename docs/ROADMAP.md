@@ -1840,6 +1840,69 @@ Una U-Net real es 5–20× eso, y los DDPM de CIFAR se entrenan 500–800 época
 podemos hacer esto, no tiene sentido añadir latent diffusion»— y con CIFAR esa
 puerta no se abre nunca. Con MNIST el examen se ejecuta en una tarde.
 
+## Fase 18 — LDM-1: autoencoder convolucional ⬜ (corresponde a 0.10)
+
+Primer paso hacia la difusión latente de Rombach et al.: comprimir la imagen a
+un latente espacial sobre el que después se pueda difundir. Se trocea con el
+mismo patrón que la Fase 17 —escalones pequeños, cada uno con su examen, y una
+puerta antes de gastar horas—, porque ese patrón encontró defectos que un
+entrenamiento directo habría escondido.
+
+**Tres hechos del código que dieron forma al plan:**
+
+- **No hace falta convolución transpuesta.** `Conv2D` ya admite *stride* y
+  *padding*, y el decodificador sube con `Upsample2D` más una convolución, que
+  es como lo hace el propio decodificador del paper.
+- **Falta un bloque residual convolucional sin tiempo.** `ResBlockTiempo` exige
+  el embedding del paso; hay que escribir `ResBlock2D`.
+- **MNIST no cuadra tal cual.** 28×28 con `f=4` da un latente de 7×7, y
+  `UNet2D` exige múltiplos de 4. Se rellena MNIST a **32×32** y el latente queda
+  en **8×8**.
+
+- [x] **`ResBlock2D`.** GroupNorm → SiLU → Conv 3×3 → GroupNorm → SiLU → Conv
+      3×3, más el atajo (identidad, o Conv 1×1 si cambian los canales). Es
+      `ResBlockTiempo` sin la inyección del paso, escrito aparte en vez de hacer
+      opcional el tiempo en aquel: aquel ya está verificado y su backward tiene
+      cuatro ramas.
+
+      Paridad contra una composición de `nn.GroupNorm`, `F.silu` y `nn.Conv2d`,
+      con canales distintos para que el atajo 1×1 entre en la comparación:
+      `r2_y` 2.2e-07, `r2_dx` 1.8e-07, y dos gradientes de pesos, uno por mitad
+      del bloque (3e-07 y 2e-07). La referencia vive en su propia función.
+
+      El Test 57 comprueba, con y sin atajo, el gradiente de la entrada y el de
+      todos los pesos contra diferencias finitas, que ningún gradiente quede sin
+      señal, que anulando la última convolución la salida sea exactamente el
+      atajo, y que funcione a otra resolución —se usará a 32×32 y a 8×8—. Dos
+      mutaciones, las dos rojas: quitar el gradiente del atajo y derivar SiLU
+      con la activación en vez de con la preactivación.
+
+      Al escribir la paridad se usaron `WeightGrad()` y `GammaGrad()`, que no
+      existen; los gradientes se leen con `GetGradients()`, en el orden de
+      registro. Tercera vez en el proyecto que se supone una API en vez de
+      mirarla.
+- [ ] **Codificador y decodificador** 32×32 → 8×8×C → 32×32, con paridad del
+      conjunto: lo que se verifica es el cableado, como con la U-Net.
+- [ ] **Reparametrización y KL** con ruido inyectable: gradiente analítico de la
+      KL, diferencias finitas y paridad.
+- [ ] **Puerta de sobreajuste**: reconstruir 16 imágenes casi perfectas.
+- [ ] **Entrenamiento sobre MNIST**: error de reconstrucción y PSNR sobre
+      validación, PNG de originales y reconstrucciones, y barrido de `C = 1, 2, 4`.
+- [ ] **Estadística del latente y factor de escala** (el paper escala por 1/σ),
+      sellado en el checkpoint igual que el calendario de difusión.
+
+**Criterio de salida:** reconstrucción de validación con PSNR medido, y un
+latente 8×8 que `UNet2D` acepte. La difusión sobre ese latente y la comparación
+píxel contra latente con el mismo presupuesto son la Fase 19 (LDM-2).
+
+**Evaluación decidida:** para LDM-2 se usará **FID con un clasificador MNIST
+entrenado en NeuralSuite**, calculando la distancia de Fréchet con sus
+características. Es lo habitual en la literatura sobre MNIST y mantiene la premisa
+de «solo NeuralSuite»; importar Inception habría roto esa premisa y además es un
+uso forzado —está pensada para imágenes naturales de 299×299—. Exige implementar
+la raíz de matrices simétricas (Jacobi), con paridad contra scipy. El LDM-1 no
+lo necesita: un autoencoder se evalúa por reconstrucción.
+
 ## Horizonte — sin casillas, deliberadamente
 
 Latent diffusion, compresión perceptual y condicionamiento multimodal son la
@@ -1869,6 +1932,8 @@ es otra lista que diverge**, y este proyecto ya arregló siete.
   métrica deja de ser «solo NeuralSuite», que es la premisa del proyecto— o esas
   fases no se pueden evaluar tal como están escritas. Hay que decidirlo antes,
   no al llegar.
+  **Resuelto para FID** al abrir la Fase 18: clasificador MNIST propio. Queda
+  abierto para la pérdida perceptual.
 - **BF16/FP16** en CPU sin AVX512-BF16 ni AMX no da ganancia, y convertir un
   framework que usa `float` en todas partes es un refactor grande. No es una
   opción de compilador.

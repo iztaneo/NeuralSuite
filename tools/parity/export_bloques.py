@@ -251,6 +251,48 @@ def referencia_muestreadores(g, predictor):
     }
 
 
+def referencia_resblock2d(g, EPS):
+    """Referencia de ResBlock2D, en su propia funcion para no pisar nombres.
+
+    Se compone con nn.GroupNorm, F.silu y nn.Conv2d igual que el bloque del
+    codificador de Stable Diffusion sin la inyeccion del tiempo. Con canales
+    distintos a proposito, para que el atajo 1x1 entre en la comparacion; la
+    variante identidad la cubre la prueba unitaria. Ademas de salida y dx se
+    exportan dos gradientes de pesos, uno por mitad del bloque.
+    """
+    N, Cin, Cout, H, W, G = 2, 4, 6, 8, 8, 2
+    x = torch.randn(N, Cin, H, W, generator=g, dtype=torch.float32, requires_grad=True)
+    w = torch.randn(N, Cout, H, W, generator=g, dtype=torch.float32)
+    n1 = nn.GroupNorm(G, Cin, eps=EPS, dtype=torch.float32)
+    c1 = nn.Conv2d(Cin, Cout, 3, padding=1, dtype=torch.float32)
+    n2 = nn.GroupNorm(G, Cout, eps=EPS, dtype=torch.float32)
+    c2 = nn.Conv2d(Cout, Cout, 3, padding=1, dtype=torch.float32)
+    at = nn.Conv2d(Cin, Cout, 1, dtype=torch.float32)
+    with torch.no_grad():
+        for capa in (n1, n2):
+            capa.weight.copy_(torch.randn(capa.weight.shape, generator=g))
+            capa.bias.copy_(torch.randn(capa.bias.shape, generator=g))
+        for capa in (c1, c2, at):
+            capa.weight.copy_(torch.randn(capa.weight.shape, generator=g) * 0.2)
+            capa.bias.copy_(torch.randn(capa.bias.shape, generator=g) * 0.2)
+    h = c1(nn.functional.silu(n1(x)))
+    y = c2(nn.functional.silu(n2(h))) + at(x)
+    (y * w).sum().backward()
+    return {
+        "r2_meta": np.array([N, Cin, Cout, H, W, G], dtype=np.float32),
+        "r2_x": x.detach().numpy(), "r2_w": w.numpy(),
+        "r2_n1_g": n1.weight.detach().numpy(), "r2_n1_b": n1.bias.detach().numpy(),
+        "r2_n2_g": n2.weight.detach().numpy(), "r2_n2_b": n2.bias.detach().numpy(),
+        "r2_c1_w": c1.weight.detach().numpy(), "r2_c1_b": c1.bias.detach().numpy(),
+        "r2_c2_w": c2.weight.detach().numpy(), "r2_c2_b": c2.bias.detach().numpy(),
+        "r2_at_w": at.weight.detach().numpy(), "r2_at_b": at.bias.detach().numpy(),
+        "r2_y": y.detach().numpy(),
+        "r2_dx": x.grad.detach().numpy(),
+        "r2_dc1w": c1.weight.grad.detach().numpy(),
+        "r2_dn2g": n2.weight.grad.detach().numpy(),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/tmp/bloques_ref.nsp")
@@ -574,6 +616,7 @@ def main():
     }
     tensors.update(unet_t)
     tensors.update(tensors_sm)
+    tensors.update(referencia_resblock2d(g, EPS))
     nsparity.write(args.out, tensors)
 
     print(f"Escrito {args.out}")
