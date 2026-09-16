@@ -6,6 +6,8 @@
 #include "entrenamiento/checkpoint.h"
 
 #include <chrono>
+#include <filesystem>
+#include <system_error>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -120,8 +122,15 @@ bool GuardarCheckpoint(const std::vector<Parte>& partes, int iteracion, Metadato
     return false;
   }
   for (size_t k = 0; k < partes.size(); ++k) {
-    if (std::rename(temporales[k].c_str(), partes[k].ruta.c_str()) != 0) {
-      *error = "no se pudo mover " + temporales[k] + " a su sitio";
+    // `std::filesystem::rename` y no `std::rename`: el segundo **falla en
+    // Windows cuando el destino ya existe**, mientras que en POSIX lo
+    // reemplaza. Con `std::rename` el primer checkpoint se escribia y todos los
+    // siguientes fallaban, solo en Windows. Lo encontro el CI; en macOS y Linux
+    // no se manifiesta.
+    std::error_code ec;
+    std::filesystem::rename(temporales[k], partes[k].ruta, ec);
+    if (ec) {
+      *error = "no se pudo mover " + temporales[k] + " a su sitio: " + ec.message();
       return false;
     }
   }

@@ -149,8 +149,12 @@ Cada commit en `main` ejecuta:
 - La suite bajo **AddressSanitizer** y **UndefinedBehaviorSanitizer**.
 - Las demos y un entrenamiento del LLM de extremo a extremo.
 
-**Lo que encontró.** Nueve pruebas escribían en `/tmp`, que no existe en
-Windows. El CI estuvo en rojo diecisiete horas sin que se viera, porque cada push
+**Lo que encontró.** Dos fallos que solo se manifiestan en Windows. El último:
+`std::rename` **falla si el destino ya existe**, mientras que en POSIX lo
+reemplaza, así que el primer checkpoint de un entrenamiento se escribía y todos
+los siguientes fallaban. Se encontró al cerrar la Fase 18, con la prueba del
+guardado transaccional. Antes, nueve pruebas escribían en `/tmp`, que no existe
+en Windows. El CI estuvo en rojo diecisiete horas sin que se viera, porque cada push
 cancelaba el run anterior antes de que terminara el trabajo de Windows. Ahora las
 pruebas usan una ruta temporal portable, y en `main` los runs ya no se cancelan.
 

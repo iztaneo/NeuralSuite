@@ -6535,8 +6535,12 @@ void TestCheckpointEntrenamiento() {
     Check(ComprobarMismoCheckpoint({ma, mb}, {"a", "b"}, &error),
           "dos partes del mismo checkpoint no coinciden: " + error);
 
-    // Un segundo guardado de solo `b` simula un corte que dejo `a` viejo.
-    Check(GuardarCheckpoint({{b, escritor}}, 6, {}, &error), "segundo guardado");
+    // Un segundo guardado de solo `b` simula un corte que dejo `a` viejo, y de
+    // paso cubre lo que rompia en Windows: mover un temporal sobre un archivo
+    // que YA existe. `std::rename` falla ahi, asi que el primer checkpoint se
+    // escribia y todos los siguientes no.
+    Check(GuardarCheckpoint({{b, escritor}}, 6, {}, &error),
+          "no se pudo sobrescribir un checkpoint existente: " + error);
     Check(nsf::ReadMetadata(b, &mb).ok, "releer b");
     Check(!ComprobarMismoCheckpoint({ma, mb}, {"a", "b"}, &error),
           "acepto partes de dos checkpoints distintos");
