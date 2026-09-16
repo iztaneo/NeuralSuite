@@ -107,7 +107,8 @@ int main(int argc, char** argv) {
   int grupos = 8, semilla = 7, reportar_cada = 50, calentamiento = 0;
   int evaluar_cada = 0, guardar_cada = 0, archivar_cada = 0, parar_en = 0, n_eval = 1000;
   float lr = 1e-3f, lr_min = 0.0f, peso_kl = 1e-6f;
-  bool reanudar = false;
+  bool reanudar = false, medir_escala = false;
+  std::string escala_txt, media_txt;
 
   entrenamiento::RegistroSellado sellables;
   sellables.MarcarDados(argc, argv);
@@ -138,6 +139,7 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--parar_en")) parar_en = std::atoi(sig("--parar_en"));
     else if (!std::strcmp(argv[i], "--n_eval")) n_eval = std::atoi(sig("--n_eval"));
     else if (!std::strcmp(argv[i], "--reanudar")) reanudar = true;
+    else if (!std::strcmp(argv[i], "--medir_escala")) { medir_escala = true; reanudar = true; }
     else { std::fprintf(stderr, "Opcion desconocida: %s\n", argv[i]); return 1; }
   }
 
@@ -266,6 +268,10 @@ int main(int argc, char** argv) {
     entrenamiento::Metadatos sello = sellables.Valores();
     sello["normalizacion"] = "[-1,1]";
     sello["relleno"] = "32";
+    if (!escala_txt.empty()) {
+      sello["escala_latente"] = escala_txt;
+      sello["media_latente"] = media_txt;
+    }
     const std::vector<entrenamiento::Parte> partes = {
         {base, [&](const std::string& r, const entrenamiento::Metadatos& m) { return cod.GuardarPesos(r, m); }},
         {base + ".dec", [&](const std::string& r, const entrenamiento::Metadatos& m) { return dec.GuardarPesos(r, m); }},
@@ -298,6 +304,75 @@ int main(int argc, char** argv) {
     }
     it_inicial = std::stoi(m_opt["iteracion"]) + 1;
     std::printf("  reanudado en la iteracion %d (Adam %d pasos)\n", it_inicial, opt.PasosDados());
+    if (m_cod.count("escala_latente")) {
+      std::printf("  escala del latente ya sellada: %s\n", m_cod["escala_latente"].c_str());
+    }
+  }
+
+  // --- Medir la escala del latente y sellarla, sin entrenar.
+  //
+  // El paper reescala el latente por 1/sigma antes de difundir sobre el. La
+  // razon es que la difusion supone datos de varianza cercana a uno —su
+  // calendario de ruido esta calibrado para eso— y el latente de un autoencoder
+  // con KL debil no tiene por que cumplirlo: aqui la KL apenas regulariza y el
+  // latente se expande durante el entrenamiento. Sin reescalar, el modelo de
+  // difusion veria entradas de otra escala y el calendario dejaria de
+  // corresponder, sin que nada diera error.
+  //
+  // Se mide con la MEDIA del latente sobre validacion, que es lo que la Fase 19
+  // difundira, y se guarda en el sello de los tres archivos.
+  if (medir_escala) {
+    const int m = std::min(n_eval, n_validacion > 0 ? n_validacion : N);
+    const Tensor& conjunto = n_validacion > 0 ? x_val : x0;
+    double suma = 0.0, suma2 = 0.0;
+    size_t cuenta = 0;
+    for (int ini = 0; ini < m; ini += 64) {
+      const int b = std::min(64, m - ini);
+      Tensor xb({b, 1, kLado, kLado}), ceros({b, c_lat, 8, 8});
+      std::memcpy(xb.Data(), conjunto.Data() + static_cast<size_t>(ini) * kPx,
+                  static_cast<size_t>(b) * kPx * sizeof(float));
+      ceros.Zeros();
+      GaussianaDiagonal g;
+      static_cast<void>(g.Forward(cod.Forward(xb), ceros));
+      const Tensor& mu = g.Media();
+      for (size_t i = 0; i < mu.TotalSize(); ++i) {
+        suma += mu[i];
+        suma2 += static_cast<double>(mu[i]) * mu[i];
+        ++cuenta;
+      }
+    }
+    const double media = suma / static_cast<double>(cuenta);
+    const double sigma = std::sqrt(suma2 / static_cast<double>(cuenta) - media * media);
+    escala_txt = entrenamiento::TextoReal(1.0 / sigma);
+    // Se sella tambien la MEDIA, que el paper no necesita. Alli los latentes ya
+    // salen centrados y basta con dividir por sigma; aqui la media es -0.69 con
+    // sigma 0.61, asi que reescalar sin centrar dejaria el latente desplazado
+    // mas de una desviacion. La difusion supone datos centrados —su calendario
+    // esta calibrado para eso— y un desplazamiento asi no da error: da imagenes
+    // peores. La Fase 19 usara (z - media) * escala.
+    media_txt = entrenamiento::TextoReal(media);
+    std::printf("  latente sobre %d imagenes: media %.4f, sigma %.4f\n", m, media, sigma);
+    std::printf("  sellado para la Fase 19: (z - %s) * %s\n", media_txt.c_str(),
+                escala_txt.c_str());
+
+    // Y la comprobacion que exige el criterio de salida de la fase: que la
+    // UNet2D acepte este latente tal cual, sin adaptadores.
+    {
+      diffusion::UNet2D prueba(c_lat, 32, 64, 8);
+      Tensor z({2, c_lat, 8, 8}), t({2});
+      z.RandomNormal(0.0f, 1.0f);
+      t[0] = 5.0f;
+      t[1] = 700.0f;
+      const Tensor salida = prueba.Forward(z, t);
+      const bool ok = salida.Shape() == z.Shape();
+      std::printf("  la UNet2D acepta el latente 8x8x%d y devuelve [%d,%d,%d,%d]  %s\n", c_lat,
+                  salida.Shape()[0], salida.Shape()[1], salida.Shape()[2], salida.Shape()[3],
+                  ok ? "ok" : "MAL");
+      if (!ok) return 1;
+    }
+    if (!guardar(it_inicial - 1, archivo)) return 1;
+    std::printf("  escala sellada en %s (+ .dec, + .opt)\n", archivo.c_str());
+    return 0;
   }
 
   // Reconstruccion con la MEDIA del latente, sin sortear: es la que se usa al

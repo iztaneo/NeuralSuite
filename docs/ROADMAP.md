@@ -7,6 +7,11 @@ commit que lo cerró.
 El principio que ordena el plan: **cada operación debe ser correcta,
 comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
+Este documento es el diario de ingeniería: qué se construyó, qué falló y qué se
+midió. Para **usar** el proyecto están las guías:
+[LLM](GUIA_LLM.md), [difusión](GUIA_DIFUSION.md),
+[autoencoder](GUIA_AUTOENCODER.md) y [cómo se verifica](VERIFICACION.md).
+
 ## Las dos reglas
 
 > **Prioridad de desarrollo: implementar primero capacidades reutilizables que
@@ -146,9 +151,9 @@ naturaleza.
 
 | Área | Estado |
 | --- | --- |
-| Corrección de gradientes | ✅ diferencias finitas, y paridad contra PyTorch en GPT, LSTM, BiLSTM y CRNN |
+| Corrección de gradientes | ✅ diferencias finitas, y paridad contra PyTorch en GPT, LSTM, BiLSTM, CRNN y todos los bloques de difusión y del autoencoder |
 | Robustez de `Tensor` | ✅ formas validadas, sin estados inválidos, vistas sin copia |
-| Testing | ✅ **34 pruebas**, validadas por mutación, con código de salida |
+| Testing | ✅ **60 pruebas**, validadas por mutación, con código de salida |
 | Portabilidad | ✅ Linux (GCC/Clang), macOS y Windows en CI, Debug y Release, más ASan/UBSan |
 | Serialización | ✅ formato NSF con versión, metadatos y checksum |
 | API para terceros | ✅ `Parameter` y `Module` con registro automático |
@@ -157,6 +162,11 @@ naturaleza.
 | Lectura de imagen | ✅ PNG, JPEG, BMP y Netpbm propios; 64 archivos byte a byte como Pillow |
 | OCR | ✅ canal completo, **3.4%** de error sobre una página de libro (Tesseract 0.1%) |
 | Estructura | ✅ interfaz en `include/`, implementación en `src/`, programas en `demos/`, `apps/` y `tests/` |
+| Lenguaje | ✅ GPT entrenado en español, perplejidad **6.23** sobre un autor nunca visto; RoPE y KV-Cache deslizante |
+| Difusión en píxeles | ✅ 80 000 iteraciones sobre MNIST, DDPM y DDIM, **genera dígitos nuevos** |
+| Difusión latente | ✅ autoencoder (Fase 18): **33.2 dB**, y difundir en el latente cuesta **6.3× menos**. Falta generar sobre él (Fase 19) |
+| Reproducibilidad | ✅ reanudar da pesos **idénticos bit a bit**; checkpoints sellados y transaccionales |
+| Documentación | ✅ guías de uso de los tres flujos y documento de verificación |
 
 | Fase                       | Estado           | Fase              | Estado       |
 | -------------------------- | ---------------- | ----------------- | ------------ |
@@ -166,7 +176,10 @@ naturaleza.
 | 03 `Parameter` y `Module`  | ✅               | 09 Rendimiento    | ✅ parcial   |
 | 04 Verificación matemática | ✅               | 10 Ecosistema     | ✅           |
 | 05 Autograd                | ✅ parcial       | OCR (aparte)      | ✅ parcial   |
-| 11 Estructura              | ✅               |                   |              |
+| 11 Estructura              | ✅               | 12 Deuda previa   | ✅           |
+| 13 Cerrar el motor         | ⬜ falta `dtype` | 14 Vocabulario    | ✅           |
+| 15 Transformer moderno     | ✅               | 16 Datos          | ✅           |
+| 17 Difusión                | ✅               | 18 LDM-1          | ✅           |
 
 El recuento sale del propio documento, no de un número escrito a mano —que ya
 divergió tres veces—. El propio comando falló una cuarta: anclaba en `^- \[` y
@@ -1891,7 +1904,7 @@ Una U-Net real es 5–20× eso, y los DDPM de CIFAR se entrenan 500–800 época
 podemos hacer esto, no tiene sentido añadir latent diffusion»— y con CIFAR esa
 puerta no se abre nunca. Con MNIST el examen se ejecuta en una tarde.
 
-## Fase 18 — LDM-1: autoencoder convolucional ⬜ (corresponde a 0.10)
+## Fase 18 — LDM-1: autoencoder convolucional ✅ (corresponde a 0.10)
 
 Primer paso hacia la difusión latente de Rombach et al.: comprimir la imagen a
 un latente espacial sobre el que después se pueda difundir. Se trocea con el
@@ -2036,19 +2049,53 @@ entrenamiento directo habría escondido.
       que la puerta la mantenía constante. Con `lr_min = lr` vuelve a 31.53 dB;
       el resto sale de la nueva siembra por iteración.
 
-- [ ] **Entrenamiento sobre MNIST**: error de reconstrucción y PSNR sobre
-      validación, PNG de originales y reconstrucciones, y barrido de `C = 1, 2, 4`.
-      Plan: primero **C = 4, 10 épocas** (18 000 iteraciones con lote 32, ~86
-      min medidos), y la curva decide cuántas épocas necesitan C = 2 y C = 1:
+- [x] **Entrenamiento sobre MNIST y barrido de `C`.** Tres runs idénticos salvo
+      por los canales del latente: 18 000 iteraciones (10 épocas sobre 57 000
+      imágenes), unos 78 minutos cada uno, evaluados sobre 1 000 imágenes de
+      validación.
 
-      ```bash
-      caffeinate -i ./bin/train_autoencoder --n_imagenes 0 --n_validacion 3000 --c_lat 4 --lote 32 --iteraciones 18000 --calentamiento 500 --lr 5e-4 --lr_min 1e-5 --evaluar_cada 1000 --n_eval 1000 --guardar_cada 1000 --archivar_cada 3000 --reportar_cada 250 --archivo release/ae_c4.nsf --png release/ae_c4.png > logs/ae_c4.log 2>&1
-      ```
-- [ ] **Estadística del latente y factor de escala** (el paper escala por 1/σ),
-      sellado en el checkpoint igual que el calendario de difusión.
+      | `C` | Números del latente | Compresión | Referencia | PSNR validación | Ventaja |
+      | --- | --- | --- | --- | --- | --- |
+      | 1 | 64 | 16× | 15.01 dB | 29.35 dB | +14.34 dB |
+      | 2 | 128 | 8× | 16.45 dB | 30.90 dB | +14.46 dB |
+      | **4** | 256 | 4× | 19.46 dB | **33.23 dB** | +13.77 dB |
 
-**Criterio de salida:** reconstrucción de validación con PSNR medido, y un
-latente 8×8 que `UNet2D` acepte. La difusión sobre ese latente y la comparación
+      Los tres superan con claridad al compresor tonto del mismo tamaño, y en
+      los tres el PSNR de entrenamiento y el de validación van a la par —menos de
+      0.1 dB—: generaliza, no memoriza.
+
+      **Se elige `C = 4`, y la razón se midió.** Difundir cuesta prácticamente lo
+      mismo con cualquier `C`, porque el coste de la U-Net lo domina su anchura
+      interna y no los canales de entrada:
+
+      | Entrada de la U-Net | ms/paso |
+      | --- | --- |
+      | Latente 8×8, C = 1 | 39.3 |
+      | Latente 8×8, C = 4 | 40.3 |
+      | Píxeles 32×32 | **251.8** |
+
+      De paso, ahí está medida **la promesa del paper**: difundir en el latente es
+      **6.3 veces más barato** que en píxeles. Con el mismo coste conviene la
+      mejor reconstrucción, que además es el **techo de calidad** de la Fase 19.
+
+- [x] **Escala del latente sellada, y la `UNet2D` lo acepta.** `--medir_escala`
+      codifica la validación, mide la distribución del latente y lo guarda en el
+      sello de los tres archivos, sin entrenar. Con `C = 4`: media **−0.6936**,
+      sigma **0.6090**.
+
+      **Una diferencia con el paper, medida.** Allí basta con dividir por σ
+      porque sus latentes ya salen centrados; aquí la media está a más de una
+      desviación de cero, así que se sella **media y escala** y la Fase 19 usará
+      `(z − media) × escala`. Difundir sobre un latente descentrado no da ningún
+      error: solo imágenes peores, y el calendario de ruido deja de corresponder.
+
+      La misma orden comprueba lo que exige el criterio de salida: la `UNet2D`
+      acepta el latente `8×8×4` tal cual y devuelve la misma forma.
+
+**Criterio de salida: cumplido.** Reconstrucción de validación medida (33.23 dB
+con `C = 4`, +13.8 dB sobre el compresor equivalente) y un latente 8×8×4 que
+`UNet2D` acepta, con su escala sellada en el checkpoint. La guía de uso está en
+[GUIA_AUTOENCODER.md](GUIA_AUTOENCODER.md). La difusión sobre ese latente y la comparación
 píxel contra latente con el mismo presupuesto son la Fase 19 (LDM-2).
 
 **Evaluación decidida:** para LDM-2 se usará **FID con un clasificador MNIST
