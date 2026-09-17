@@ -1,5 +1,13 @@
 # Plan de Implementación Unificado: Paridad Total en Ambos Proyectos
 
+> **Documento histórico.** Este plan ya se ejecutó: lo que describe como
+> pendiente **está hecho**. Se conserva porque explica el razonamiento de
+> entonces, no porque describa el estado actual.
+>
+> Para el estado vigente: [ROADMAP.md](../../ROADMAP.md) y
+> [ESTADO.md](../../ESTADO.md). Para cómo se hizo: [el diario de
+> ingeniería](../DIARIO_FASES.md).
+
 > **Estado: 6 de 7 entregables hechos en C++. Sólo falta RoPE.**
 >
 > | | Entregable | C++ |
@@ -14,7 +22,7 @@
 >
 > Lo que exige RoPE está detallado en
 > [FUTURE_PLAN_KVCACHE_ROPE.md](FUTURE_PLAN_KVCACHE_ROPE.md), y ahora también
-> figura como pendiente abierto en [ROADMAP.md](ROADMAP.md), que es donde se
+> figura como pendiente abierto en [ROADMAP.md](../../ROADMAP.md), que es donde se
 > mira. Este documento describe el plan original y se conserva por eso; el
 > estado vigente está arriba.
 >

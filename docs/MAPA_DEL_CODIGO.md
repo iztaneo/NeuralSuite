@@ -1,8 +1,7 @@
 # Mapa del código y orden de lectura
 
-NeuralSuite son unas 26 500 líneas de C++ repartidas en 116 archivos. Este
-documento dice **qué hay en cada sitio** y **en qué orden leerlo** según lo que
-quieras conseguir.
+Este documento dice **qué hay en cada sitio** y **en qué orden leerlo** según lo
+que quieras conseguir.
 
 La regla de organización: **la interfaz y el porqué del diseño están en
 `include/`; el cuerpo de cada función, en `src/`**, con las mismas subcarpetas.
@@ -13,15 +12,19 @@ hace, baja al `.cpp`.
 
 ## El reparto
 
+<!-- BEGIN GENERATED STATS -->
+NeuralSuite son **30 419 líneas** repartidas en **148 archivos**, y **60 pruebas**.
+
 | Carpeta | Líneas | Archivos | Contenido |
 | --- | --- | --- | --- |
 | `include/` | 7 128 | 52 | Interfaces, y la explicación de cada decisión |
 | `src/` | 7 451 | 43 | Implementaciones |
 | `tests/` | 6 659 | 1 | Las 60 pruebas, en un solo archivo |
 | `apps/` | 2 878 | 8 | Los programas de entrenamiento e inferencia |
-| `tools/` | 1 098 | 7 | Paridad con PyTorch y Pillow, corpus y datos |
+| `tools/` | 4 940 | 29 | Paridad con PyTorch y Pillow, corpus y datos |
 | `demos/` | 1 037 | 12 | Una demostración por técnica |
 | `benchmarks/` | 326 | 3 | Mediciones de rendimiento |
+<!-- END GENERATED STATS -->
 
 Que las pruebas ocupen casi tanto como las implementaciones no es casualidad:
 es la proporción que hace posible cambiar el código sin romperlo.

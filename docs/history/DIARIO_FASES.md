@@ -1,0 +1,1948 @@
+# Diario de ingeniería: las fases 00 a 18
+
+Documento **histórico y cerrado**: el detalle de cada fase del proyecto, con los
+defectos que aparecieron, las mediciones que decidieron cada cosa y las
+decisiones que se tomaron por el camino. No es una lista de tareas: todo lo que
+está aquí ya ocurrió.
+
+Para el **estado actual y lo que viene**, ver [ROADMAP.md](../ROADMAP.md); para
+el estado por componente, [ESTADO.md](../ESTADO.md).
+
+El valor de conservarlo es que casi ningún defecto de los que aparecen aquí
+fallaba de forma visible: la mayoría entrenaban «bien» dando resultados peores.
+Quien vaya a tocar el código encontrará aquí por qué está escrito así.
+
+Los dos planes que dieron origen a este trabajo están archivados junto a este
+diario, tal como se escribieron: el [plan unificado](planes_antiguos/UNIFIED_IMPLEMENTATION_PLAN.md)
+y el [plan de KV-Cache y RoPE](planes_antiguos/FUTURE_PLAN_KVCACHE_ROPE.md).
+Lo que describen como pendiente **ya está hecho**; se conservan porque explican
+por qué se eligió ese orden.
+
+
+---
+
+## Fase 00 — Confianza y limpieza ✅
+
+`a8a0629`, `ada1665`
+
+- [x] **`ocr_cli` fabricaba su resultado.** Ignoraba `--image`, corría sobre
+      ruido aleatorio y, si la red no predecía nada, escribía el literal
+      `"MITSUBISHI MOTORS"` — justo el condicional que el comentario del archivo
+      decía haber eliminado.
+- [x] `demo_ocr` llamaba a un método inexistente: el archivo no compilaba.
+- [x] `CRNNModel::DecodeWord` leía `Shape()[2]` sobre un tensor de rango 2.
+- [x] Ejecutables, `libneuralsuite.a`, pesos y `resultado_*.txt` fuera del
+      control de versiones.
+- [x] `LICENSE` Apache-2.0 (las cabeceras la citaban sin que existiera).
+- [x] Clase `Sequential` duplicada en dos cabeceras del mismo namespace.
+- [x] `CMakeLists` pasa de 7 a 15 ejecutables: es la única fuente de verdad.
+- [x] Convención `release/` para los artefactos de entrenamiento.
+
+## Fase 01 — Corrección crítica del núcleo ✅
+
+`3bcea54`
+
+- [x] **`MultiHeadAttention` no sobrescribía `GetGradients()`.** Heredaba la
+      lista vacía de `Layer`, de modo que cada `GPTBlock` exponía 12 parámetros
+      frente a 8 gradientes. El optimizador aplicaba el gradiente de una capa a
+      los pesos de otra y leía fuera de la lista corta.
+- [x] **El weight tying perdía la contribución de la cabeza de salida.**
+      `Embedding::Backward()` reinicia el acumulador después de que el modelo ya
+      la había sumado. El modelo entrenaba y la pérdida bajaba, pero optimizaba
+      una función distinta de la declarada.
+- [x] `SGD` y `AdamW` validan que parámetros y gradientes casen en número y
+      forma; antes el desajuste continuaba en silencio.
+- [x] `Tensor` rechaza dimensiones negativas y desbordamiento de `size_t`.
+- [x] `MatMul` exige rango 2 y dimensiones compatibles; `Embedding` acota el
+      token; `MultiHeadAttention` exige `n_embd % n_head == 0`.
+- [x] `CharTokenizer::Load` acota el vocabulario que lee del archivo.
+- [x] Las pruebas dejan de usar `assert()`, que **desaparece bajo `NDEBUG`** y
+      hacía que la suite pasara sin verificar nada en compilaciones Release.
+
+## Fase 02 — Tensor Core ✅
+
+`5d25002`, `44d0eb3`
+
+- [x] **`Reshape` destruía datos.** Reasignaba y ponía a cero cuando cambiaba el
+      número de elementos. Las 22 llamadas del repositorio querían esa
+      reasignación, no la reinterpretación, así que la operación se separó:
+      `Reshape` reinterpreta y falla si no cuadra; `Resize` reasigna.
+- [x] `operator=` reservaba después de liberar: un `new` fallido dejaba un
+      puntero colgante.
+- [x] Comprobación de índices en compilaciones de depuración.
+- [x] `NormalInit`, declarada sin definición, eliminada.
+- [x] Almacenamiento compartido y `View()` sin copia. Medido sobre un paso de
+      entrenamiento: 118 MB → 72,6 MB reservados. **El tiempo por paso no
+      cambia**: el cuello de botella es el cómputo, no las reservas.
+- [x] **Strides y `Transpose` como vista: medido y descartado.** Toda
+      transposición del repositorio alimenta directamente un `MatMul`, así que
+      se probó lo que una vista permitiría —leer el operando transpuesto sin
+      copiarlo— implementando `MatMulNT` y `MatMulTN` y comparándolas contra
+      transponer primero:
+
+      | | transponer + MatMul | leer transpuesto |
+      | --- | --- | --- |
+      | `A · Bᵀ` 1024×512×512 | **210 GF** | 59 GF |
+      | `Aᵀ · B` 1024×512×512 | 203 GF | 211 GF |
+
+      Evitar la copia sale entre 3 y 4 veces más caro en el caso frecuente. Al
+      leer `B` transpuesta, cada elemento de `C` pasa a ser un producto escalar:
+      una reducción con dependencia en el bucle interno, que atasca el pipeline.
+      La forma original no la tiene, porque cada iteración escribe una columna
+      distinta.
+
+      La conclusión invierte la premisa: **la copia no es un desperdicio, es lo
+      que compra el patrón de acceso rápido**, y se paga sola con creces. Medido
+      de extremo a extremo, el paso de entrenamiento empeoraba de 26.7 a 34.2 ms.
+      Añadir strides al `Tensor` solo tendría sentido para operaciones que
+      todavía no existen, y `Contiguous()` seria precisamente deshacer la vista
+      para volver a este caso.
+
+## Fase 03 — `Parameter` y `Module` ✅
+
+`dc015ed`
+
+- [x] **`Parameter` reúne valor y gradiente en un solo objeto**, creados juntos
+      y con la misma forma. `GetParameters()` y `GetGradients()` dejan de ser
+      dos métodos virtuales independientes y pasan a derivarse de la misma
+      lista: ya no hay dos declaraciones que puedan discrepar, de modo que el
+      defecto de la Fase 01 deja de ser representable en lugar de quedar
+      atrapado por una guarda.
+- [x] **`Module` con registro automático de submódulos.** Un `GPTBlock`
+      enumeraba a mano sus cinco componentes en dos métodos que debían coincidir
+      entre sí; ahora los declara una vez en el constructor y el recorrido del
+      árbol es automático.
+- [x] Los optimizadores aceptan una sola lista de `Parameter*`. Se conserva el
+      constructor anterior, validado, para el código que aún pase dos listas.
+- [x] Las doce demos y `train_llm` construyen el optimizador con la lista
+      única: desaparece el patrón de armar dos vectores paralelos a mano.
+
+## Fase 04 — Verificación matemática ✅
+
+`3bcea54`, `349829f`, `45e9c15`, `1bbc847`
+
+- [x] Gradient check de `GELU`, `MultiHeadAttention`, la matriz `wte`
+      compartida, `LSTM`, `Conv2D` (con stride y padding activos), `LayerNorm`,
+      `CrossEntropyLoss`, `MSELoss`, `MaxPool2D`, `ResidualBlock` y `GraphConv`.
+- [x] **Cada comprobación validada por mutación**, introduciendo un defecto
+      deliberado para confirmar que falla. No es ceremonia: reveló que la prueba
+      de `GraphConv` usaba una adyacencia simétrica y por eso no detectaba que
+      se omitiera la transposición.
+- [x] **La capa `LSTM` se reimplementó entera.** No era una LSTM: su `Forward`
+      calculaba `h = tanh(x[0] + h)` sin usar ninguno de sus cuatro parámetros,
+      sin puertas y sin estado de celda; su `Backward` devolvía ceros.
+
+### Sobre el paso de las diferencias finitas
+
+No hay un valor universal, y elegirlo mal produce falsos positivos que parecen
+defectos graves. Es un compromiso entre dos errores opuestos:
+
+- **Paso pequeño**: `loss(w+ε) − loss(w−ε)` sufre cancelación en float32.
+- **Paso grande**: domina el error de truncamiento, y en capas con ReLU o
+  max-pooling la perturbación cruza el codo, midiendo el promedio de dos
+  regímenes distintos.
+
+Medido en este repositorio: en `MultiHeadAttention` el error baja de 0,48 a
+3e-4 al **agrandar** el paso; en `GraphConv` sube de 1,8e-6 a 1,0 al agrandarlo.
+Cada prueba lleva su calibración documentada en el código.
+
+## Fase 05 — Autograd ✅ (motor y primitivas)
+
+- [x] **Motor de diferenciación automática en modo inverso.** Cada operación
+      registra cómo repartir el gradiente entre sus entradas, y `Backward()`
+      recorre el grafo en orden topológico inverso. Un nodo que alimenta varios
+      caminos acumula las contribuciones de todos.
+- [x] Doce primitivas: `Add`, `Sub`, `Mul`, `MatMul`, `Sum`, `Mean`, `Exp`,
+      `Log`, `Tanh`, `Relu`, `Reshape` y `Transpose`, cada una verificada por
+      diferencias finitas y validada por mutación.
+- [x] `demo_autograd` entrena XOR sin una sola derivada escrita a mano: la
+      pérdida baja de 2.22 a 3e-05 y las cuatro predicciones son correctas.
+- [x] **`Gather` y `Conv2DVar`**, las dos primitivas que faltaban. Eran las
+      operaciones que el motor no sabía derivar solo, y por eso `Embedding` y
+      `Conv2D` sólo existían como capas con backward escrito a mano. Cada una se
+      verifica contra la capa equivalente, que ya tiene paridad con PyTorch. En
+      `Gather` el caso que importa es el token repetido: su fila debe recibir la
+      suma de todas las posiciones que lo usaron, y quedarse con la última en vez
+      de sumarlas pone la prueba en rojo.
+- [x] **`LinearAutograd`**, primera capa migrada. Misma interfaz que `Linear` y
+      mismos parámetros en el mismo orden, pero su `Backward` no lo escribió
+      nadie: sale de encadenar `MatMulVar` y `Add`. **Convive con `Linear` en vez
+      de sustituirla.** `Linear` sigue siendo la de entrenar —el grafo reserva los
+      intermedios de cada pasada—; la del grafo es la que dice si `Linear`
+      acierta, desde un camino que no puede repetir la clase de error de los dos
+      defectos P0, porque no aplica ninguna fórmula escrita a mano.
+- [x] **`EmbeddingAutograd`**, segunda capa migrada. Toda la capa es una llamada
+      a `Gather`. Resuelve sin codigo propio el caso que usa el GPT —el embedding
+      de posicion se calcula con forma `[1, T]` y su gradiente llega `[B, T, D]`,
+      asi que cada posicion suma las `B` contribuciones—: le sale del
+      broadcasting. `Embedding` lo consigue con un `% num_cached` que parece
+      defensivo y en realidad es carga estructural, cosa que ahora una prueba
+      unitaria fija.
+- [x] **Decidido NO migrar el resto de capas.** El concepto quedó demostrado con
+      `Linear` y `Embedding`, y lo que se midió fue: ~330 líneas, dos capas entre
+      2.7× y 20× más lentas que nadie usará para entrenar, y **cero defectos
+      encontrados**. `Conv2D`, `LSTM` y `MultiHeadAttention` costarían otras ~600
+      líneas con el mismo retorno esperado, y **las tres ya tienen su pareja
+      `*Reference`**, así que el oráculo adicional aporta todavía menos que en las
+      dos que no la tenían. Es la primera de [las dos reglas](#las-dos-reglas): no
+      duplicar salvo que aporte corrección demostrable, rendimiento medible o una
+      capacidad nueva. El esfuerzo del autograd se traslada a la Fase 13, que sí
+      habilita arquitecturas nuevas.
+
+  **Antes de seguir migrando, leer [AUTOGRAD_CAPAS.md](../AUTOGRAD_CAPAS.md)**, que
+  recoge lo medido: las versiones del grafo son 2.7x y 20x mas lentas, no han
+  encontrado ni un defecto, y las tres capas que quedan ya tienen su pareja de
+  referencia, asi que el oraculo adicional aporta menos que en `Linear` y
+  `Embedding`. Ese documento tambien deja las cuatro mejoras concretas por si
+  se retoma.
+
+  La duplicación sólo es segura porque hay una prueba que enfrenta a cada
+  pareja. Es la diferencia medida entre los tres pares que el proyecto ya
+  mantiene —`Conv2DReference`, `LSTMReference`, `MultiHeadAttentionReference`,
+  que no han divergido nunca— y las seis listas hechas a mano que nadie
+  comparaba, que divergieron todas.
+- [x] **Broadcasting** en las operaciones elemento a elemento, con la regla
+      habitual de alinear por la derecha. Un eje que se repite en el forward
+      recibe en el backward la suma de todas las posiciones que lo usaron. Sin
+      esto un sesgo `[D]` no podía sumarse a un lote `[N, D]`, y el propio
+      `demo_autograd` tuvo que declararlo con la forma del lote.
+- [x] **Softmax** como primitiva sobre el último eje. Se implementa directamente
+      y no por composición porque la estabilidad numérica exige restar el máximo
+      de cada fila, y expresarlo con primitivas obligaría a derivar también por
+      ese máximo.
+- [x] **LayerNorm compuesta de primitivas, sin backward propio.** Es la razón de
+      tener autograd: la versión escrita a mano necesita una fórmula de tres
+      términos para `dx`, y omitir uno produce un gradiente equivocado que no da
+      síntoma. Aquí se declara el cálculo hacia delante y la derivada sale sola;
+      coincide con la implementación manual a 1e-4 y su gradiente con
+      diferencias finitas a 4.7e-4.
+- [x] Reducciones por eje (`SumLastAxis`, `MeanLastAxis`), `Div`, `Sqrt` y
+      `AddScalar`, que son las que permiten componer normalizaciones.
+- [x] `gather` y convolución como primitivas, verificadas contra `Embedding`
+      y `Conv2D` como oráculo (detalle más arriba, en la Fase 05).
+
+Reduce la superficie de error: cada capa implementaba su backward a mano, que es
+exactamente donde aparecieron los dos defectos P0.
+
+## Fase 06 — Serialización ✅
+
+`051b952`, `0775e18`
+
+- [x] **Formato NSF**: número mágico, versión, metadatos de la arquitectura,
+      tensores con nombre y forma, y suma de comprobación.
+- [x] `Module::NamedParameters()` da a cada peso su ruta en el árbol
+      (`blocks.0.attn.c_attn.weight`), de modo que el archivo es
+      autodescriptivo en lugar de una secuencia numerada.
+- [x] `GPTModel`, `CRNNModel` y `Sequential` lo usan.
+
+Antes se volcaban floats crudos sin cabecera: un checkpoint de otra
+arquitectura se cargaba sin dar error y el modelo se quedaba con datos sin
+sentido. Ahora la carga rechaza, indicando el motivo, un archivo de otra
+arquitectura, truncado, con un byte alterado, o sin cabecera. Los pesos
+guardados con el formato anterior no se pueden cargar y el mensaje lo dice.
+
+## Fase 07 — Runtime y build portable ✅ (parcial)
+
+`cb0c07d`, `49ef343`
+
+- [x] **El build de CMake no funcionaba en macOS.** `find_package(OpenMP
+      REQUIRED)` falla con AppleClang, así que la instrucción principal del
+      README nunca se había ejecutado en una de las tres plataformas que
+      anuncia. OpenMP pasa a ser opcional.
+- [x] `-march=native` y `-ffast-math` dejan de aplicarse siempre. La primera
+      producía binarios que podían no arrancar en otra CPU; la segunda relaja
+      IEEE-754 justo donde se verifican gradientes.
+- [x] **El `Makefile` arrastraba los mismos defectos, sin corregir.** Al quitar
+      OpenMP quedó `CXXFLAGS += -Xpreprocessor -fopenmp 2>/dev/null || true`, y
+      make pasaba esos tres tokens al compilador como ficheros: en macOS no
+      producía ningún objeto. Seguía forzando `-march=native` y `-ffast-math`,
+      así que este build y el de CI no calculaban lo mismo. Y mantenía a mano
+      tres listas de programas que ya habían divergido: `demo_autograd` no se
+      compilaba y `clean` borraba cuatro de los quince binarios. Ahora los
+      programas salen de un `wildcard` y hay una sola regla.
+- [x] **Windows nunca había compilado**: `#pragma omp simd` requiere un flag
+      experimental en MSVC, y su OpenMP exige índice de bucle con signo.
+- [x] `ManualSeed()` fija la semilla del generador. Antes reproducir una
+      inicialización dependía de que nadie hubiera consumido números antes:
+      construir una capa de más desplazaba todo lo que viniera después.
+- [ ] Estado del generador por hilo. Sigue siendo compartido y no es seguro
+      usarlo desde varios hilos a la vez.
+
+## Fase 08 — Tokenizador ✅ (parcial)
+
+- [x] **Token `<UNK>` explícito** en el índice 0. Antes un símbolo fuera del
+      vocabulario se codificaba como token 0, que era un carácter válido: con el
+      vocabulario `{a, b, c}`, codificar y decodificar `"axc"` devolvía `"aac"`,
+      convirtiendo la `x` desconocida en una `a`. Ahora devuelve `"a?c"`, y
+      `CountUnknown()` permite medir cuánto del corpus queda fuera.
+- [x] **`ByteTokenizer`** con vocabulario fijo de 256 símbolos. Por construcción
+      no puede encontrarse un símbolo desconocido, y no necesita reentrenarse
+      para otro idioma: el mismo tokenizador reproduce japonés o emoji sin
+      haberlos visto. Mantiene la dependencia cero, porque tratar bytes no
+      requiere ninguna biblioteca Unicode.
+- [ ] BPE propio, para que las secuencias no crezcan tanto: en el tokenizador
+      de bytes un carácter no ASCII ocupa varios tokens.
+
+## Fase 09 — Rendimiento ✅ (parcial)
+
+- [x] **Perfilado antes de optimizar.** `MatMul` resultó ser el 80% del tiempo
+      de un paso de entrenamiento; el resto se reparte entre los bucles de
+      atención (que a su vez llaman a `MatMul`), GELU y `Transpose`. LayerNorm y
+      softmax juntos no llegan al 1%.
+- [x] **Paralelismo con `std::thread`** en `include/parallel.h`, sustituyendo a
+      OpenMP. Contrastado contra el propio OpenMP —instalándolo aparte y
+      repartiendo el mismo bucle de las dos formas— para descartar que la
+      implementación casera dejara rendimiento sobre la mesa. En un Apple M5
+      están a la par (media ~1.02x); en un runner Linux de 4 vCPU, sobre una
+      base en serie de 3.1 GFLOP/s, el reparto propio da 1.76x y OpenMP 2.00x
+      —un 12% de diferencia, no el 2x que sugerían las primeras cifras, tomadas
+      sin medir el caso de un solo hilo—. Ese margen no compensa mantener dos
+      rutas: duplicaría la superficie a probar, el OpenMP 2.0 de MSVC obliga a
+      índices con signo, y sobre todo OpenMP degrada en silencio cuando falta. El motivo no era preferencia: con AppleClang los `pragma omp` se
+      ignoran, de modo que en macOS todo corría en un solo hilo y `MatMul` usaba
+      una cuarta parte de la máquina. Medido sobre un Apple M5 de cuatro núcleos
+      de rendimiento: `MatMul` pasa de 35 a 232 GFLOP/s, y el paso de
+      entrenamiento de 119 ms a unos 27 ms.
+- [x] **Reparto dinámico en lugar de trozos iguales.** Con un trozo por hilo, el
+      tiempo lo marca el más lento, y los núcleos rara vez son iguales: un
+      Apple M5 mezcla núcleos de rendimiento y de eficiencia, y en un servidor
+      dos hilos pueden compartir el mismo núcleo físico. Repartir bloques que
+      cada hilo toma al desocuparse sube la aceleración de 3.7x a 5.3x y el paso
+      de entrenamiento de 37 ms a 29 ms. Es justo el margen que separaba al
+      reparto propio de OpenMP. El resultado es idéntico bit a bit,
+      porque cada hilo escribe filas disjuntas y no hay reducción que altere el
+      orden de las sumas.
+- [x] **Bloqueo de registros en el GEMM: cuatro filas de C a la vez.** El bucle
+      leía una fila entera de `B` para producir una sola fila de `C`, de modo
+      que cada elemento de `B` viajaba de memoria a registro para una única
+      multiplicación. Medido en un solo hilo: de 35 a 44 GFLOP/s.
+      Cuatro y no más — con seis u ocho acumuladores el compilador se queda sin
+      registros vectoriales y cae a 41 y 33.
+      **El bloqueo de cache no aportó nada** (a veces empeoraba): las matrices
+      de estos tamaños ya caben, y lo que faltaba era reutilizar los datos ya
+      cargados, no traerlos mejor.
+- [x] **Repartir entre hilos las operaciones elementales y el pooling.** No
+      había nada que reformular: `ReLU`, `Sigmoid`, `Tanh`, las tres
+      elementales y `MaxPool2D` simplemente no usaban el pool de hilos, por
+      omisión y no por decisión —`GELU` y el softmax sí lo hacían desde el
+      principio—. Una vez que la convolución y la celda recurrente dejaron de
+      dominar, eran **15.2 ms de un paso de 28.2, el 53.8%**. Ahora **4.6 ms**,
+      y el paso completo baja a **19.5 ms**: 486 imágenes por segundo frente a
+      las 6.6 del punto de partida, **62×**.
+
+      El detalle que importa está en el backward de `MaxPool2D`: el reparto va
+      por plano y no por posición de salida. Dos ventanas solapadas —cuando el
+      paso es menor que la ventana— pueden compartir máximo, de modo que dos
+      posiciones de salida suman sobre la misma de entrada; repartir por
+      posición sería una carrera. El test 30 lo comprueba con ventana 3 y paso
+      2, y esa mutación exacta lo pone en rojo.
+- [x] **Kernel optimizado de `MultiHeadAttention`**, el tercero y último del
+      mismo patrón, con el literal conservado como `MultiHeadAttentionReference`.
+      `Q·Kᵀ` y `P·V` son multiplicaciones de matrices escritas como bucles que
+      recorrían cada elemento, a 1.3 GFLOP/s y en un solo hilo. Hizo falta
+      reordenar memoria: `c_attn` entrega Q, K y V entrelazados en una fila de
+      `3·n_embd` y cada cabeza ocupa un tramo, así que hay que extraerlas como
+      matrices contiguas — el mismo trabajo que `im2col`. Se calcula el cuadrado
+      completo de puntuaciones, incluida la mitad que la máscara descarta: el
+      doble de operaciones que el bucle triangular, y aun así mucho más rápido.
+
+      Medido sobre un paso del GPT (lote 16, 4 capas, n_embd 128):
+
+      | Contexto | Antes | Después | |
+      | --- | --- | --- | --- |
+      | 64 | 483 ms | **126 ms** | 3.8× |
+      | 128 | 1669 ms | **258 ms** | 6.5× |
+      | 256 | 6034 ms | **556 ms** | 10.9× |
+      | 512 | 23410 ms | **1331 ms** | **17.6×** |
+
+      Lo que **no** cambia es que el coste crezca con el cuadrado del contexto:
+      esa es la definición del mecanismo. Lo que cambia es la constante, y con
+      ella el crecimiento observado pasa de 48.5× a **10.6×** al ir de contexto
+      64 a 512 — porque ahora la parte cuadrática ya no domina desde el primer
+      momento. Un entrenamiento de 1000 iteraciones con contexto 512 baja de
+      6 h 30 a 22 minutos.
+
+      El reparto va por pareja (muestra, cabeza) y cada cabeza escribe en un
+      tramo distinto de `dqkv`, así que no hay reducción y el resultado es
+      idéntico con uno o con diez hilos. El test 33 lo exige, junto con seis
+      configuraciones contra la referencia; cinco mutaciones lo ponen en rojo.
+- [x] **Kernel optimizado del LSTM**, con el literal conservado como
+      `LSTMReference`. La preactivación de las puertas es
+      `x_t·W_ihᵀ + h_{t-1}·W_hhᵀ`, dos multiplicaciones de matrices que estaban
+      escritas como productos escalares unidad por unidad: iba a 1.27 GFLOP/s
+      con `MatMul` a 232. La proyección de la entrada no depende del estado
+      anterior, así que los 32 pasos salen en una sola multiplicación; la parte
+      recurrente sigue siendo secuencial. En el backward la asimetría se
+      acentúa: solo `dpre` va paso a paso, y apilarlos convierte `dW_ih`,
+      `dW_hh` y `dx` en tres multiplicaciones grandes —el truco está en que
+      `dW_hh` suma sobre pasos y lote a la vez—. **El BiLSTM baja de 159 a 9.8
+      ms (16.2×) y el paso de entrenamiento de 183 a 28.2 ms.** Frente al
+      original de 1213 ms son **43×**, y 306 imágenes por segundo en vez de 6.6.
+      El cuello pasa a ser `ReLU` y `MaxPool2D`, con el 53.8%.
+- [x] **Kernel optimizado de Conv2D**, con el literal conservado como
+      `Conv2DReference` en el mismo archivo. Medido antes: las tres
+      convoluciones eran el 85.7% de un paso de entrenamiento del CRNN y
+      corrían en un solo hilo teniendo diez. Reformuladas como `im2col` +
+      `MatMul` —que ya estaba paralelizado y con bloqueo de registros— van
+      **54.8× más rápido** ellas solas y el paso completo **6.2×**: de 1213 ms
+      a 195 ms, de 6.6 a 41 imágenes por segundo. La convolución pasa del 85.7%
+      al 8.9% del paso.
+- [ ] Intrínsecos SIMD por arquitectura. Hoy el bucle interno lo autovectoriza
+      el compilador.
+- [x] **KV-Cache**, con `--no_cache` para contrastarlo. Medido con 4 capas y 64
+      tokens generados **dentro de la ventana**: **9.6× más rápido** (0.36
+      ms/token frente a 3.50).
+
+      Dos matices que se añadieron al comprobarlo a fondo, y que corrigen lo que
+      este documento afirmaba antes:
+
+      - Se decía que «las dos rutas generan exactamente la misma secuencia, o
+        sea que acelera sin cambiar el resultado». **Comparar secuencias era
+        demasiado débil**: el argmax absorbe diferencias pequeñas. Comparando
+        *logits* apareció un defecto real —`generate_llm` reinyectaba el último
+        token del prompt, metiéndolo dos veces en la caché— con 0.056 de
+        diferencia frente a la ruta de referencia. Arreglado, y ahora el test 38
+        compara logits en cada paso, no secuencias.
+      - **Pasada la ventana, la caché deja de acelerar.** Medido con
+        `block_size` 32: 0.13 ms/token dentro, 1.29 ms/token al cruzarla, con 73
+        reconstrucciones en 100 tokens. Es consecuencia de usar posiciones
+        aprendidas y absolutas: al deslizar, cada token cambia de posición y las
+        K y V guardadas dejan de valer. **RoPE lo resuelve de raíz**, porque la
+        posición pasa a ser relativa; es el argumento más concreto a favor de la
+        Fase 15.
+- [x] **Deslizar el KV-Cache sin reconstruirlo** (sólo con RoPE). Era el
+      problema medido que justificaba RoPE: con posiciones aprendidas había que
+      rehacer la caché casi en cada paso pasada la ventana. Con rotación basta
+      **desalojar**, porque cada `K` guardada lleva su rotación absoluta y el
+      producto depende de la diferencia.
+
+      Medido con `block_size` 32 y 100 tokens generados:
+
+      | | ms/token | Reconstrucciones |
+      | --- | --- | --- |
+      | Sin RoPE (reconstruye) | 1.69 | 73 |
+      | **Con RoPE (desaloja)** | **0.06** | **0** |
+
+      **28× más rápido, y el coste deja de crecer al cruzar la ventana**: 0.07
+      ms/token con 20 tokens y 0.06 con 100.
+
+      Un matiz que costó entender y conviene dejar fijado: **desalojar y
+      reconstruir sólo dan lo mismo con una capa.** Con más, la caché del bloque
+      `n` guarda salidas del bloque `n-1`, calculadas con contextos distintos en
+      cada camino. Medido: 0.000 con una capa, 0.040 con dos, 0.066 con tres. No
+      es un defecto, y la dirección importa: **desalojar conserva los estados
+      calculados con todo el contexto** y reconstruir los recalcula con menos,
+      así que la ruta rápida es también la más fiel. El test 48 fija la
+      equivalencia exacta donde sí debe darse.
+
+- [x] **Arreglados dos huecos de la integración de RoPE**, encontrados al medir
+      esto y que ninguna prueba cubría. `ForwardWithKVCache` **no rotaba** —ni en
+      la atención ni en el modelo, que además seguía sumando `wpe_`, una tabla
+      que con RoPE ni siquiera es parámetro y por tanto llevaba valores sin
+      entrenar—. Medido: 0.142 de diferencia frente a recalcular el contexto. Un
+      modelo entrenado con `--rope` simplemente generaba peor, sin que nada
+      fallara. El test 47 lo cubre ahora en los dos caminos.
+
+- [ ] KV cache contiguo (hoy `vector<vector<float>>`: un vector por posición, con
+      su reserva propia).
+- [x] **Retirado el esbozo de RoPE.** `ApplyRoPE()` no lo llamaba ningún
+      forward: una función así sugiere una capacidad que el modelo no tiene, y es
+      peor que su ausencia porque nadie sabe que no hace nada. La posición sigue
+      llegando por embeddings aprendidos.
+  **RoPE se trasladó a la Fase 15**, donde le corresponde: no es una mejora de
+  rendimiento sino una pieza del transformer moderno. Su casilla vive allí, y no
+  aquí, para que no cuente dos veces.
+
+  Merece la pena dejar escrito por qué estuvo invisible tanto tiempo. La casilla
+  decía «RoPE decidido» y estaba marcada como hecha, pero lo decidido fue
+  *retirar el esbozo muerto*, no que la técnica estuviera resuelta. Una decisión
+  marcada como logro esconde el trabajo que queda.
+
+## Fase 10 — Ecosistema ✅
+
+`cb0c07d`, `49ef343`
+
+- [x] CI en Linux (GCC y Clang), macOS y Windows, en Debug y Release; suite
+      numérica, demos, entrenamiento de extremo a extremo, paridad con PyTorch y
+      sanitizers.
+- [x] Comparación contra la implementación de referencia en PyTorch.
+- [x] **Benchmarks separados** en `benchmarks/benchmark.cpp`. Responden "cuánto
+      tarda", que es otra pregunta y con otro criterio: no hay nada que pase o
+      falle, solo números que comparar entre versiones. Existen porque las
+      mediciones que guiaron la paralelización se hicieron a mano y no quedaban
+      en el repositorio, de modo que nadie podía reproducirlas ni notar una
+      regresión. Miden `MatMul` por forma, el escalado con hilos y el paso de
+      entrenamiento en tokens/s, y comprueban de paso que el reparto no altera
+      el resultado.
+- [x] `SoftmaxForward` opera sobre el último eje de cualquier rango. Antes
+      exigía rango 2 y leía `Shape()[1]` directamente, de modo que un tensor de
+      rango 3 se normalizaba sobre un eje que no le correspondía.
+- [x] **Grupos de parámetros en AdamW.** El decay se declara por grupo en vez
+      de inferirse del rango del tensor: la heurística anterior acertaba solo
+      porque la convención habitual coincide con ella, y un parámetro 2D que no
+      debiera decaer recibía el trato equivocado sin que nada lo indicara.
+
+## Pendiente aparte — OCR ⬜
+
+El único punto del plan donde el repositorio anuncia algo que no hace: `README`,
+`demo_ocr` y `ocr_cli` hablan de OCR, pero `CRNNModel` no lee imágenes y su
+arquitectura no es la que declara. La referencia es
+`LLMRasec/src/ocr.py`: `Conv×3 → BiLSTM → Linear`.
+
+- [x] **`BiLSTM`.** Dos celdas independientes, una por sentido, con la salida
+      concatenada `[T, B, 2H]`. No reimplementa la recurrencia: invierte el eje
+      temporal y reutiliza la `LSTM` ya verificada, porque duplicar el BPTT es
+      justo donde es fácil equivocarse. Verificada por tres vías distintas —
+      gradient check, una prueba de direccionalidad que mide *de qué depende*
+      cada salida, y paridad contra `nn.LSTM(bidirectional=True)`, que sale
+      dentro de 5.3e-06.
+- [x] **Arquitectura real.** `1→16→32→64` con pools `2,2` / `2,2` / `8,1`,
+      luego `BiLSTM(64, hidden)` y `Linear(2·hidden, clases)`. La red devuelve
+      ahora una predicción por cada cuatro columnas en vez de una por imagen:
+      la diferencia entre leer una palabra y clasificar un carácter suelto.
+      `MaxPool2D` admite ventana rectangular, que es lo que hacía falta para
+      colapsar el alto sin tocar el ancho. Tres defectos que salieron por el
+      camino: la versión anterior compartía una única `Activation` entre dos
+      puntos de la red —y `Activation` guarda su entrada para el backward, así
+      que la segunda pisada borraba la caché de la primera—; `SynthTextGenerator`
+      devolvía ruido gaussiano con etiquetas `i % 4`, sobre el que ninguna red
+      podía acertar más que por azar; y las dos conversiones de disposición
+      estaban escritas como funciones distintas cuando calculaban lo mismo.
+      `demo_ocr` transcribe las 4 líneas del lote sin errores.
+- [x] **Paridad del CRNN completo** contra `LLMRasec/src/ocr.py`. Logits en
+      2.2e-05, `dx` hacia la imagen en 2.5e-04, y 15 de los 16 gradientes por
+      debajo de 3e-04. El que se sale —`conv2.weight`, en 2.3e-03— resultó ser
+      redondeo: el exportador calcula además el modelo en float64 y ambas
+      implementaciones se apartan de él por igual (6.1e-03 PyTorch, 8.3e-03
+      C++), porque el gradiente de una convolución suma miles de términos en un
+      orden que no coincide entre las dos. Ejercita de paso el camino
+      convolucional de extremo a extremo, que hasta ahora solo tenía gradient
+      check — y ya se vio con `GraphConv` que eso puede no comprobar nada.
+- [x] **Lector de imagen.** `include/image/` decodifica PNG, BMP y Netpbm sin
+      ninguna dependencia externa. El PNG obligó a escribir *inflate* completo
+      (RFC 1951 y 1950, con Huffman dinámico y comprobación del Adler-32), y
+      admite profundidades de 1 a 16 bits, los cinco tipos de color, paleta con
+      `tRNS` y entrelazado Adam7. Los 46 archivos del banco se decodifican byte
+      a byte igual que Pillow, incluidos los tres PNG que ya estaban en el
+      repositorio. `ocr_cli --image` ya lee de verdad el archivo que se le pasa.
+- [x] **Tubería de entrenamiento sobre texto real.** `tools/ocr/` genera un
+      corpus con tipografías del sistema y `train_ocr` lo entrena leyendo las
+      imágenes con el decodificador propio: entrenar no necesita Python.
+      Comprobado que la maquinaria es correcta con la prueba que lo decide —
+      sobreajustar ocho imágenes: la pérdida baja de 4.14 a 0.13 en 400 pasos.
+      Sin CTC: como el corpus lo dibujamos nosotros, se conoce en qué columnas
+      cae cada letra y basta `CrossEntropyLoss`.
+- [x] **Entrenamiento largo: hecho, y con un límite encontrado.** La pérdida
+      seguía bajando en la época 30, así que se entrenó hasta 60. **Todas las
+      cifras de validación mejoraron** —pérdida 0.150 → 0.113, acierto por
+      palabra 37.7% → 41.6%, error de carácter 0.122 → 0.112— y sobre imágenes
+      reales no ganó nada:
+
+      | | 30 épocas | 60 épocas |
+      | --- | --- | --- |
+      | Ilíada | 3.5% | 3.4% |
+      | Mitsubishi | **0.0%** | **12.5%** |
+
+      `MITSUBISHI` pasó a leerse `MIlTSUBIlSHI`. Es la misma trampa que apareció
+      al cambiar la forma de los datos, y más afilada: **la validación sale del
+      mismo generador que el entrenamiento, así que mejora con él**. Un modelo
+      que se ajusta mejor a su propio corpus no lee mejor una página que nunca
+      vio.
+
+      Los pesos publicados son los de 30 épocas. La conclusión es negativa y por
+      eso conviene anotarla: el camino para bajar del 3.4% no es entrenar más.
+- [x] **Leer una página, no un renglón.** `ocr_cli --renglones` corta la página
+      y transcribe cada línea. Estado actual, medido con
+      `tools/ocr/evaluar.py`:
+
+      | | NeuralSuite | Tesseract |
+      | --- | --- | --- |
+      | Página de libro (Ilíada) | **3.4%** | 0.1% |
+      | Logotipo (`MITSUBISHI`, `MOTORS`) | **0.0%** | 0.0% |
+
+      Las tres piezas de las que dependía, y cómo quedaron:
+      La vara de medir es Tesseract, que sobre la página original da **0.1%**
+      frente a nuestro **54%**. Esa es la distancia real a un OCR maduro, y
+      conviene tenerla delante.
+
+      Cuánto se aleja cada caso de lo que el modelo sabe leer, medido en error
+      de carácter: **2.3%** en la validación sintética, **54%** en la página de
+      la Ilíada —impresa, pero en serif pequeña y con renglones cinco veces más
+      largos— y **160% en un abecedario manuscrito, frente al 157% que da
+      generar caracteres al azar**. Sobre manuscrito no hay señal ninguna.
+
+      De la Ilíada salió además una corrección: se atribuía el fallo a los
+      acentos y a los espacios, y son 3.5 puntos de 53.6. El grueso es el
+      modelo leyendo mal un régimen que no vio.
+
+      Nota metodológica que casi se pasa por alto: la transcripción de
+      referencia de esa página la escribió el asistente **leyendo la imagen**,
+      con la misma facultad que puede rellenar palabras plausibles. Medir un OCR
+      contra algo que alucina no es medir. Se verificó contra Tesseract: 16 de
+      las 18 líneas coinciden carácter a carácter, y las dos discrepancias son
+      `LIBRO I` frente a `LIBRO 1` y `Leto;` frente a `Leto:` — dos caracteres
+      de 853, el 0.23%. La referencia se sostiene, pero el orden correcto era
+      comprobarlo antes de publicar el número.
+      - [x] **Cortador de renglones** (`include/image/renglones.h`, `ocr_cli
+        --renglones`). Proyección horizontal con umbral de Otsu, que sale del
+        histograma en vez de ser una constante. Encuentra los 18 renglones de la
+        Ilíada y separa el logotipo de Mitsubishi de sus dos palabras. El
+        recorte no es al ras: se calcula el margen que deja la tinta ocupando el
+        72% del alto, que es la proporción medida sobre 800 imágenes del corpus
+        — al ras, cada letra abarca más pasos de los que el modelo vio y aparecen
+        caracteres insertados. `MITSUBISHI` pasó de `MIlT5SUBlISHI` a
+        `MITPSUBISHI` y `MOTORS` de `M0OTO0O0RS` a `MOT0RS` solo con eso.
+      - [x] **Forma de los datos** (corpus `ocr_v2`). El modelo se entrenaba con
+        palabras sueltas de ≤10 caracteres en ocho tipografías sans-serif, y se
+        le pedía leer renglones de libro de ~50 en serif pequeña. Cuatro
+        cambios: 154 tipografías en vez de 8, renglones de varias palabras,
+        512 px de ancho, y degradación (reducir y reampliar, desenfoque, ruido).
+
+        El cambio de fondo fue la **clase de blanco**: la clase 62 hacía de
+        espacio real y de marca «aquí no hay letra» a la vez, y el decodificado
+        la descartaba siempre. Por construcción, el modelo no podía leer una
+        línea de varias palabras. **53% → 7.6%.**
+      - [x] **Vocabulario con acentos y puntuación** (corpus `ocr_v3`). De 63 a
+        91 símbolos más el blanco. **7.6% → 3.4%.**
+
+        Obligó a cambiar la indexación: el vocabulario se leía como
+        `std::vector<char>` —un byte por clase— y en UTF-8 `á` ocupa dos bytes y
+        `—` tres, así que la clase 26 habría dejado de ser una letra. Ahora es
+        `std::vector<std::string>` con un partidor de UTF-8.
+
+        El *tofu* reapareció en versión sutil: 31 de las 154 tipografías dibujan
+        cajas vacías para los acentos —coreanas, bengalíes, de símbolos, con las
+        latinas básicas pero sin `ñ`—. El primer detector tampoco valió, porque
+        comparaba contra el glifo U+FFFD y cada fuente sustituye con lo que le
+        parece. El criterio bueno es el de siempre: si la fuente tiene los
+        caracteres, cada uno se dibuja distinto. Quedan 122 verificadas.
+      - [x] **Herramienta de medida** (`tools/ocr/evaluar.py`), que comprueba
+        **antes de medir**. Existe por un fallo: una medición ejecutó `ocr_cli`
+        con `2>/dev/null`, tiró el aviso de que los pesos no habían cargado, y
+        midió una red sin entrenar como si fuera un resultado —98% de error—.
+        La conclusión que casi se reporta era que los acentos habían empeorado
+        el modelo doce veces. Ahora verifica código de salida y avisos de carga,
+        y aborta con código 1 en vez de dar una cifra. Pone al lado la de
+        Tesseract, que era otro punto del backlog.
+      - [ ] **Decidir qué banda es texto.** Es lo único que queda de esta parte.
+        El cortador entrega también las bandas del dibujo de un logotipo, y el
+        reconocedor devuelve basura sobre ellas porque nunca vio ejemplos
+        negativos. Filtrar por altura funcionaría en ese logotipo y sería
+        tropicalizar; la salida general es que lo decida el propio reconocedor
+        por su confianza, lo que exige **bandas sin texto en el generador**
+        —manchas, líneas, fragmentos gráficos— etiquetadas como vacías.
+
+        Mientras tanto, `evaluar.py` marca ese caso con `solo_texto` para no
+        mezclar el fallo de detección con el de reconocimiento en una sola
+        cifra.
+      - [ ] **Columnas.** Bloqueado: hace falta un documento real a dos
+        columnas. La prueba sintética que se hizo comprimía la página a la mitad
+        de ancho, deformando las letras, así que medía dos cosas a la vez.
+      - [ ] **Manuscrito.** Bloqueado por los datos, igual que las columnas, y
+        aparecía en la tabla de límites sin casilla propia. **160%** de error
+        frente al **157%** de generar caracteres al azar: no hay señal ninguna.
+        El corpus se genera renderizando tipografías, y eso no produce escritura
+        a mano. No es una mejora del modelo: es una fuente de datos que hoy no
+        existe.
+
+- [x] **JPEG**, secuencial de línea base y progresivo. Huffman, cuantización,
+      transformada inversa e interpolación de crominancia. Es el único formato
+      cuya salida **no está especificada bit a bit**: la norma fija requisitos
+      de precisión para la transformada (T.83), no un resultado exacto, así que
+      la comparación con libjpeg necesita un criterio estadístico y la
+      transformada se verifica aparte contra su definición matemática. El modo
+      aritmético, el sin pérdida y el de 12 bits se rechazan diciendo cuál es.
+
+---
+
+## Fase 11 — Estructura del repositorio ✅
+
+`v0.9.0` marca el estado anterior a este cambio, por si hay que volver.
+
+- [x] **Interfaz e implementación separadas.** La biblioteca era de solo
+      cabeceras: 34 archivos y 8356 líneas en `include/`, con 676 en `src/`.
+      Para saber qué ofrecía el `LSTM` había que atravesar 665 líneas cuando su
+      interfaz son 27. Los cuerpos pasan a `src/`, con las mismas subcarpetas.
+
+      | | Antes | Cabecera | Implementación |
+      | --- | --- | --- | --- |
+      | `jpeg.h` | 780 | 218 | 585 |
+      | `lstm.h` | 664 | 259 | 430 |
+      | `attention.h` | 592 | 199 | 422 |
+
+      En total, de 8356 a 4826 líneas de cabecera y de 676 a 4722 en `src/`,
+      repartidas en 25 archivos. Compilar todo baja de 7.9 a 5.3 segundos.
+
+      **Qué no se mueve, y por qué.** Los constructores se quedan: su lista de
+      inicialización dice en qué orden se construye la clase, que es diseño. Los
+      accesores de una línea, también: son interfaz. Y tres archivos enteros —
+      `serialization.h` y `autograd.h` por las plantillas, y `parallel.h` porque
+      lo que hay que entender ahí es el protocolo entre hilos y no se parte en
+      dos archivos sin perderlo. El motivo va escrito dentro de cada uno.
+
+      La transformación destapó una dependencia oculta: `jpeg.h` y `enderezar.h`
+      usaban `kPi` sin incluir `tensor.h`, y compilaban porque otro archivo lo
+      arrastraba antes.
+- [x] **Programas fuera de la raíz**, que tenía 17 `.cpp` mezclados. Van a
+      `demos/`, `apps/` y `tests/`, y los binarios a `bin/`.
+
+**Seis listas escritas a mano se quedaron cortas durante este trabajo**, y
+conviene tenerlas juntas porque es el error que más veces se ha repetido en el
+proyecto:
+
+| Dónde | Qué faltaba | Consecuencia |
+| --- | --- | --- |
+| `.gitignore` | `demo_autograd` | Un binario de 100 KB versionado |
+| `.gitignore` | `train_ocr` | Otro binario versionado |
+| `Makefile`, objetivos | `demo_autograd` | Solo se construía con CMake |
+| `Makefile`, fuentes | `src/image/`, `src/layers/` | No enlazaba |
+| `run_parity.sh` | `src/layers/` | Símbolos sin definir |
+| `CMakeLists.txt` | `train_ocr` | **Días sin construirse con CMake, ni en el CI** |
+
+Todas pasan a derivarse de un patrón. CMake desaconseja `GLOB` porque no se
+entera de los archivos nuevos sin reconfigurar; aquí pesa más que nadie se
+acuerde de tocar la lista.
+
+---
+
+## Fase 12 — Deuda que bloquea cualquier entrenamiento ✅
+
+**Lo primero, porque es barato y porque sin ello entrenar es peligroso.**
+
+- [x] **`--vocab_file` en `train_llm`** (`2b91064`). Existe `--out_file` para redirigir el
+      modelo, pero **no hay forma de redirigir el vocabulario**:
+      `tokenizer.Save()` escribe siempre en `release/vocab_cpp.txt`. Entrenar con
+      el corpus español lo sobrescribiría con sus 111 símbolos y el modelo de
+      Shakespeare —que carga y genera— quedaría inservible, porque el suyo son 53
+      caracteres. Y el daño no sería visible: el modelo seguiría cargando y
+      decodificaría con la tabla equivocada. Basura silenciosa, no un error.
+      **Hoy no se puede entrenar un segundo modelo sin destruir el primero.**
+- [x] **`generate_llm` desliza la ventana en vez de abortar** (`2b91064`).
+      Superado `block_size`, la posición se salía de `wpe_` y reventaba con
+      `std::out_of_range`. La caché se reconstruye ahora con los últimos
+      `block_size` tokens, igual que hacía la ruta sin caché.
+
+      Arreglando esto apareció un tercer defecto que nadie buscaba: el bucle
+      **reinyectaba el último token del prompt** en una posición ya alimentada,
+      metiéndolo dos veces en la caché —0.056 de diferencia en los logits frente
+      a la ruta de referencia, 0.000000 sin reinyectar—. Llevaba ahí sin verse
+      porque la comprobación que existía comparaba *secuencias*, y el argmax
+      absorbe una diferencia pequeña. El test 38 compara ahora logits paso a
+      paso.
+- [x] **Entrenamiento de referencia en español.** 5000 iteraciones sobre los
+      4.9 M caracteres del corpus, **21.8 minutos**, pérdida de 4.73 (azar) a
+      **1.6645**. El canal completo funciona: nadie lo había ejecutado desde los
+      cambios de estructura del repositorio.
+
+      Genera español reconocible —concordancia de artículos, terminaciones
+      verbales, acentos y hasta la raya de diálogo de la novela española—, con
+      palabras que no existen pero suenan a español. Es lo esperable de 858 K
+      parámetros a nivel de carácter: fonotáctica sí, semántica no.
+
+      **Y generaliza**, que es lo que el entrenamiento por sí solo no dice.
+      Medido con `eval_llm --completo`, sobre **todas** las particiones enteras:
+
+      | | Tokens | Pérdida | Perplejidad |
+      | --- | --- | --- | --- |
+      | train | 5 063 680 | 1.7383 | 5.69 |
+      | val (porción interior de los cinco libros) | 280 576 | 1.7641 | 5.84 |
+      | **test** (Blasco Ibáñez, autor nunca visto) | 1 568 768 | **1.8292** | **6.23** |
+
+      El orden es el que debe ser y no lo era antes: `train` < `val` < `test`.
+      `val` queda a 0.026 nats de entrenamiento —es la misma distribución, sale
+      del interior de los mismos cinco libros— y `test` a 0.091, que es lo
+      esperable de un autor entero apartado. **Generaliza a un autor no visto y
+      ha aprendido regularidades del español más allá de memorizar secuencias
+      concretas del corpus.** Ésta es la base contra la que medir el BPE.
+
+      Esa formulación sustituye a la que había aquí, «no memorizó el corpus,
+      aprendió el idioma», que era una **sobreinterpretación**: 858 K parámetros
+      a nivel de carácter aprenden ortografía, morfología y sintaxis local, no el
+      idioma —lo dice dos párrafos más arriba este mismo texto: «fonotáctica sí,
+      semántica no»—.
+
+      Hasta llegar a estas cifras hubo que corregir **tres** medidas equivocadas,
+      y conviene que quede escrito porque las tres fallaban en el instrumento y
+      no en lo medido:
+
+      - El evaluador **informaba de 400 000 caracteres y evaluaba 30 720**:
+        imprimía el tamaño del archivo bajo una columna llamada «caracteres».
+      - Tomaba las ventanas **del principio** de cada archivo, y el principio no
+        es prosa: `train` empezaba con la portada y el índice del Quijote
+        —«Tasa», «Testimonio de las erratas», «El Rey»— y `test` con la página
+        legal de Mare Nostrum —«95.OOO EJEMPLARES», «ES PROPIEDAD.--Reservados
+        todos los derechos»—. No comparaba español con español.
+      - **`val` no era un conjunto de validación.** Se sacaba cortando el 5%
+        final de la concatenación y, como Unamuno era el último de los cinco
+        libros, `val` era sólo Unamuno: prosa ensayística, más difícil que la
+        narrativa del resto. Por eso salía **peor** (6.15) que `test` (5.90)
+        siendo las dos texto no visto, lo cual no tenía sentido. Ahora se toma
+        una porción del interior de cada libro —desde el 45%, para esquivar
+        portada y colofón— y se verifica que un fragmento distintivo de los cinco
+        aparece en `val` y ninguno quedó también en `train`.
+
+      Corregir `val` cambia `train.txt`, así que el modelo se reentrenó entero:
+      20.75 minutos. Las cifras absolutas se movieron respecto a la medición
+      anterior (train 5.28 → 5.69) porque el texto de entrenamiento ya no es el
+      mismo y el vocabulario pasó de 113 a 114 símbolos; lo que importa es que
+      **el orden entre particiones pasó a ser interpretable**.
+
+      Los pesos viven en `release/` y no en el historial. Se reproducen con el
+      comando que hay en [tools/corpus/README.md](../../tools/corpus/README.md).
+
+- [x] **`CrossEntropyLoss` valida formas y objetivos.** Salió de aquí: leía
+      `Shape()[0]` y `Shape()[1]` sin comprobar nada, así que recibir los logits
+      en 3D `[lote, pasos, vocabulario]` en vez de 2D `[N, V]` devolvía 12.13
+      —peor que el azar— **sin avisar**, con un modelo que escribía español
+      correcto. Tampoco comprobaba que el objetivo cayera dentro del vocabulario:
+      uno fuera de rango leía la fila contigua y daba una pérdida plausible.
+
+      Que el framework acepte matemáticas sin sentido y devuelva un número
+      verosímil es el modo de fallo más peligroso en aprendizaje automático,
+      porque no hay nada que revisar. Ahora lanza excepción en los tres casos, y
+      las 38 pruebas siguen en verde: ningún uso existente era incorrecto.
+
+## Fase 13 — Cerrar el motor ⬜ (corresponde a 0.5 y 0.6)
+
+**Contra lo que parecía, aquí faltan dos cosas, no dos fases.** El inventario
+contra el código: `strides`, `views`, `broadcasting`, reducciones por eje,
+`Transpose`, acumulación de gradientes, `Reshape` y `Transpose` derivables,
+backward con broadcasting y `Conv2DVar` **ya existen**. Queda esto:
+
+- [x] **`Concat` y su derivada** (`aad11c8`). Une varios tensores por un eje,
+      acepta ejes negativos y **valida las formas antes de reservar nada**: unir
+      formas incompatibles daría un tensor del tamaño correcto con los datos
+      entrelazados mal, que es de los fallos silenciosos caros.
+
+      `ConcatVar` lleva la derivada, que es **cortar**: a cada entrada le llega
+      la rebanada que ocupa su tramo del eje. El error natural ahí es que el
+      corte se desplace, porque entonces cada entrada recibe casi su gradiente y
+      el resultado sigue pareciendo razonable. El test 39 compara contra índices
+      calculados a mano —no contra la propia implementación— e incluye un nodo
+      concatenado consigo mismo, que debe acumular y no asignar. Cuatro
+      mutaciones, las cuatro rojas.
+- [x] **`Backward(salida, gradiente_externo)`.** Antes exigía una raíz escalar y
+      sembraba el gradiente él mismo, así que propagar un `dout` concreto
+      obligaba al rodeo `Sum(Mul(salida, dout))`, que **materializa un tensor del
+      tamaño de la salida entera**. Ése era el coste fijo del grafo, y quitarlo
+      se nota:
+
+      | | Antes | Ahora | |
+      | --- | --- | --- | --- |
+      | `LinearAutograd` 768×768, 2048 filas | 124.4 ms (2.61×) | **74.9 ms (1.74×)** | −40% |
+      | `EmbeddingAutograd` vocab 50257 | 231.7 ms (19.96×) | **189.4 ms (16.40×)** | −18% |
+
+      Al embedding le queda el otro coste ya diagnosticado: copiar la tabla
+      entera en cada pasada. Por eso baja menos.
+
+      Valida que la semilla tenga la forma de la raíz. Sin eso se propagaría
+      leyendo de donde no debe y los gradientes saldrían plausibles y falsos.
+
+      El test 40 comprueba que sembrar equivale al rodeo **exactamente**, sobre
+      un grafo con ramas y un nodo reutilizado. Conviene saber qué no cubre: es
+      una prueba de **equivalencia entre dos rutas**, así que un recorrido del
+      grafo mal hecho las rompería a las dos por igual y pasaría. La corrección
+      absoluta la dan los gradient checks por diferencias finitas —invertir el
+      orden topológico deja 92 pruebas en rojo—.
+- [ ] **`dtype`.** Lo último de la lista y lo menos urgente: hoy todo es `float`
+      y no hay ningún caso de uso que lo exija. Se anota para no perderlo.
+
+**Criterio de salida: cuando esto funcione, parar.** El objetivo del autograd es
+permitir construir arquitecturas nuevas, no reimplementar NeuralSuite por
+segunda vez.
+
+## Fase 14 — Vocabulario neural compartido ✅ (corresponde a 0.7)
+
+**El cambio de filosofía: dejar de acumular demos y tener piezas reutilizables.**
+`RMSNorm` no pertenece a GPT ni `GroupNorm` a la difusión; son capacidades del
+framework que después usan LLM, visión y OCR.
+
+Hay ya: `LayerNorm`, `Conv2D`, `MaxPool2D`, `MultiHeadAttention`, `Residual`,
+`ReLU`, `GELU`, `Sigmoid`. Faltan seis, en este orden —las dos primeras porque
+desbloquean el transformer moderno, que es el examen principal—:
+
+- [x] **`RMSNorm`.** `y = x / sqrt(media(x²) + eps) · gamma`. Es la de LLaMA,
+      Mistral y Gemma: **no resta la media y no lleva sesgo**. Eso se nota en el
+      backward, donde el gradiente pierde uno de los tres términos que tiene el
+      de `LayerNorm`; el que sobrevive —el que resta la proyección de `x`— es el
+      que lo hace ortogonal a `x`, y **olvidarlo es el error clásico**: la red
+      sigue entrenando, algo peor, y no falla ninguna prueba que no mire el
+      gradiente.
+
+      El backward hace dos pasadas y cada una reparte por un eje distinto: `dx`
+      por filas y `dgamma` por columnas. No es un capricho — `ParallelFor`
+      reparte de forma dinámica y no garantiza qué hilo toma qué rango, así que
+      acumular en un vector por hilo no vale. Repartiendo por columnas, cada
+      hilo escribe posiciones distintas y no hay reducción. Comprobado: **bit a
+      bit idéntico con 1, 2, 4, 8 y 10 hilos**.
+- [x] **`SiLU`** (Swish): `x · sigmoid(x)`. Sirve al transformer moderno y a la
+      U-Net de difusión. Su backward necesita la **entrada**, no la salida,
+      porque SiLU no es inyectiva —tiene un mínimo cerca de x = −1.278, así que
+      dos valores de `x` dan la misma `y`—. Derivarla como si fuera sigmoide da
+      un gradiente equivocado justo en la zona negativa, que es la razón de
+      usarla en vez de ReLU.
+
+  Las dos se comprueban contra **diferencias finitas**, no contra otra
+  implementación propia: el error que importa aquí no es una discrepancia entre
+  versiones sino un término omitido, y ése coincide consigo mismo. Cinco
+  mutaciones, las cinco rojas: quitar el término de proyección, restar la media,
+  normalizar mal `dgamma`, derivar SiLU como sigmoide, e implementarla como ReLU.
+
+  **Y paridad contra PyTorch**, que es lo que el gradient check no puede dar. Un
+  gradient check confirma que el backward deriva el forward *que se escribió*, no
+  que ese forward sea de verdad un RMSNorm: una implementación que restara la
+  media sería coherente consigo misma y pasaría igual. Contra `nn.RMSNorm` y
+  `nn.SiLU`:
+
+  | | Error relativo |
+  | --- | --- |
+  | `rms_y` | 7.7e-08 |
+  | `rms_dx` | 3.8e-08 |
+  | `rms_dgamma` | 5.8e-08 |
+  | `silu_y` | **0** (exacto) |
+  | `silu_dx` | 5.1e-09 |
+
+  El caso nuevo (`run_case bloques`) entra en `run_parity.sh` con los otros
+  cuatro. Comprobado que muerde: restando una media falsa en el forward, la
+  paridad da discrepancia de 5.1e-02 en `rms_y`.
+- [x] **`GroupNorm`.** Divide `C` en `G` grupos y normaliza sobre
+      `(C/G, alto, ancho)`. Es la normalización de las U-Net de difusión, y la
+      razón de usarla en vez de `BatchNorm` es que **no mira el lote**: cada
+      ejemplo se normaliza con sus propias estadísticas. En difusión los lotes
+      son pequeños —la memoria se va en los mapas de activación— y `BatchNorm`
+      con lotes pequeños estima mal la varianza y mete ruido que depende de con
+      quién te tocó compartir lote.
+
+      Tiene dos asimetrías fáciles de equivocar. Las estadísticas son **por
+      grupo** pero `gamma` y `beta` son **por canal**. Y a diferencia de
+      `RMSNorm`, sí lleva sesgo.
+
+      Mismo esquema de reparto que `RMSNorm`: `dx` por (ejemplo, grupo) y
+      `dgamma`/`dbeta` por canal, salidas disjuntas y sin reducción entre hilos.
+
+      Verificada en dos capas que comprueban cosas distintas. **Paridad contra
+      `nn.GroupNorm`** —peor error relativo 1.3e-07 en las cuatro salidas—, que
+      dice que el forward es de verdad un GroupNorm. Y **diferencias finitas**,
+      que dicen que el gradiente sale de derivar *ese* forward. La prueba
+      unitaria fija además que cada grupo queda con media 0 y varianza 1 tras
+      deshacer la escala, y que procesar un ejemplo suelto da lo mismo que
+      dentro del lote —que es justo lo que la distingue de `BatchNorm`—.
+
+      Tres mutaciones, y las tres caen en **ambas** capas: aplicar gamma por
+      grupo, normalizar por canal en vez de por grupo, y omitir el término de la
+      varianza en `dx`.
+- [x] **`Upsample2D`** (vecino más próximo) y **`Downsample2D`** (promedio de
+      bloques). Son los bloques de subida y bajada de una U-Net, y se hicieron
+      juntas porque **son adjuntas una de otra** salvo el factor `1/f²`: donde
+      una copia, la otra suma; donde una promedia, la otra reparte.
+
+      Esa simetría es también la de sus errores. En `Upsample` cada píxel
+      aparece `f²` veces, así que hacia atrás hay que **sumar**; asignar deja el
+      gradiente `f²` veces más pequeño. En `Downsample` pasa lo contrario:
+      olvidar el `1/f²` lo deja `f²` veces más grande. En los dos casos la red
+      sigue entrenando, algo peor, y nada que no mire el gradiente lo nota. Es
+      el mismo error que en `Gather` con un token repetido.
+
+      `Downsample2D` promedia en vez de tomar el máximo —que es lo que hace
+      `MaxPool2D`— porque el máximo tira información de golpe y su gradiente
+      llega a un solo píxel de cada bloque; en una red generativa eso deja
+      huecos sin señal. Y exige que la resolución sea múltiplo del factor: un
+      borde sobrante habría que recortarlo o rellenarlo, y las dos opciones
+      cambian el resultado en silencio, así que aborta.
+
+      **Paridad exacta** contra `nn.Upsample` y `nn.AvgPool2d`: `0.000e+00` en
+      las cuatro salidas, porque son copias y promedios de potencias de dos y no
+      hay redondeo de por medio.
+
+      La prueba unitaria añade lo que la paridad no mira: que se cumpla
+      `⟨Upsample(x), g⟩ = ⟨x, Upsampleᵀ(g)⟩` en las dos capas. Comprobar la
+      adjunción es más fuerte que comparar valores sueltos —un backward que
+      asignara en vez de sumar podría dar números plausibles y aun así romper la
+      identidad—. Tres mutaciones, las tres rojas en ambas capas de verificación,
+      con el estado base comprobado antes de mutar.
+- [x] **`CrossAttention`** — `Q` del latente, `K` y `V` del condicionamiento. Es
+      la pieza que conecta lenguaje y visión, y la que convierte dos modelos
+      separados en un sistema multimodal.
+
+      Tres diferencias con `MultiHeadAttention`, y las tres importan:
+
+      - **Dos entradas y dos gradientes.** `Backward` devuelve el de la consulta
+        —lo que exige la interfaz de `Layer`— y el del contexto se recoge con
+        `GradContexto()`. El contexto alimenta `K` y `V`, así que recibe la
+        **suma** de las dos ramas; quedarse con una deja al codificador de texto
+        entrenando a la mitad, sin que nada falle.
+      - **No es causal.** Una posición de la imagen mira todo el prompt: no hay
+        un «antes» en un texto de condicionamiento.
+      - **Longitudes independientes.** `[B, Tq, C]` con `[B, Tc, Cctx]` da
+        `[B, Tq, C]`, y `Cctx` puede diferir.
+
+      **Paridad contra `nn.MultiheadAttention`** pasándole `query` distinto de
+      `key`/`value`, que es la única forma de obtener atención cruzada en
+      PyTorch. Hubo que desmontar tres convenciones suyas: `batch_first` va en
+      `False` por defecto, empaqueta las tres proyecciones en un
+      `in_proj_weight` de `[3E, E]`, y **guarda los pesos como `[salida,
+      entrada]` mientras el nuestro los guarda como `[entrada, salida]`**, así
+      que van todos traspuestos. Peor error relativo 3.2e-07 en salida,
+      gradiente de la consulta y gradiente del contexto.
+
+      Cuatro mutaciones, las cuatro rojas en ambas capas: perder la rama `V` del
+      contexto, aplicar máscara causal, no restar la suma en el backward del
+      softmax, y olvidar el escalado `1/√d`.
+
+Cada una con su paridad contra PyTorch, como el resto.
+
+## Fase 15 — Transformer moderno ✅ (corresponde a 0.8)
+
+**Sigue siendo el examen principal del framework, y está a mitad.** Ya hay
+KV-Cache (medido: 9.6×, misma secuencia exacta), recorte de gradiente,
+planificador de tasa de aprendizaje, checkpoint/resume, paridad de entrenamiento
+con PyTorch y ahora corpus en español.
+
+- [x] **RoPE como primitiva verificada** (`RopeForward` / `RopeBackward`).
+      Codifica la posición rotando pares de canales adyacentes; el ángulo del
+      par `i` en la posición `p` es `p / base^(2i/hd)`, así que cada par gira a
+      su velocidad. De ahí sale la propiedad que le da valor: **el producto
+      `q·k` depende sólo de la diferencia de posiciones**, porque el producto
+      escalar de dos vectores rotados depende del ángulo relativo.
+
+      La rotación es ortogonal, así que el backward es la rotación por el ángulo
+      opuesto. Paridad 6.9e-08 en la salida y 4.4e-08 en el gradiente.
+
+      **La referencia de PyTorch se escribió en el propio arnés de paridad, sin
+      tocar `LLMRasec`.** Para una operación cerrada como ésta basta: la fórmula
+      está en el artículo y lo que se contrasta es la aritmética, no una
+      implementación ajena.
+
+      Dos mutaciones enseñaron un hueco de la prueba unitaria y conviene
+      registrarlo, porque es el mejor argumento a favor de tener las dos capas:
+      usar el emparejamiento de LLaMA —`i` con `i + hd/2`— y hacer que todos los
+      pares giren igual **pasaban la prueba unitaria** y sólo las cazaba la
+      paridad. Las dos siguen siendo rotaciones ortogonales que codifican
+      posición relativa, así que cumplían todo lo que la prueba comprobaba. Se
+      añadieron dos comprobaciones —que la energía vaya al canal adyacente y que
+      el primer par gire diez veces más que el último— y ahora las cuatro
+      mutaciones caen en ambas capas.
+
+- [x] **RoPE integrado en el GPT, conservando lo anterior.** `GPTConfig::use_rope`
+      viene **apagado por defecto**, y con eso el modelo hace exactamente lo de
+      siempre: los pesos guardados —incluido el modelo en español de la Fase 12—
+      siguen cargando, y la paridad contra `LLMRasec` sigue siendo válida **sin
+      tocar el oráculo**. Las dos variantes conviven y se entrena con la que se
+      quiera, con `--rope` en `train_llm` y `generate_llm`.
+
+      Las tres decisiones que lo bloqueaban se resolvieron así:
+
+      - **`wpe_`** deja de registrarse como parámetro cuando RoPE está activo, y
+        el bloque no la suma. No se borra la tabla: el camino de siempre la
+        sigue usando igual.
+      - **La compatibilidad** sale del propio formato. El cargador NSF exige las
+        claves que el modelo *declara esperar* e ignora las que sobran, así que
+        `use_rope` se escribe **sólo cuando está activa**. Eso da: modelo sin
+        RoPE con archivo antiguo → carga; modelo con RoPE con archivo antiguo →
+        **falla diciendo que el archivo no declara `use_rope`**; y al revés falla
+        por el número de tensores. El caso cruzado *debe* fallar: cargar pesos
+        de posiciones aprendidas en un modelo que rota daría basura sin avisar.
+      - **El KV-Cache** rota con la posición real, que es para lo que la
+        primitiva acepta `pos_inicial`.
+
+      El test 47 fija lo que hace segura la bifurcación, que es más fuerte que
+      comparar dos implementaciones: **con `use_rope = false` la salida es
+      idéntica bit a bit** a la de la configuración por defecto; con `true` es
+      distinta —si no, la bandera no llegaría a la atención—; la diferencia de
+      parámetros es exactamente `block_size × n_embd`; y los pesos **no se
+      mezclan en ninguna de las dos direcciones**. Comprobado además de extremo
+      a extremo: entrenar con `--rope`, guardar, cargar y generar.
+
+- [x] **GQA: decidido no implementarlo todavía, con el número delante.** Varias
+      cabezas de consulta comparten un juego de `K`/`V`, así que la caché ocupa
+      la fracción correspondiente. Su beneficio es **memoria de caché**, y eso
+      depende del tamaño:
+
+      | | Caché KV | GQA 4:1 ahorraría |
+      | --- | --- | --- |
+      | El nuestro (4 capas, `n_embd` 128, ctx 256) | 1.0 MB | **0.79 MB** |
+      | GPT-2 small | 75.5 MB | 56 MB |
+      | LLaMA-7B | 4.3 GB | 3.2 GB |
+      | Un 70B con contexto 32k | 171.8 GB | 129 GB |
+
+      Las dos últimas filas son **órdenes de magnitud, no configuraciones
+      reales**: suponen atención multi-cabeza pura y `float32`, mientras que los
+      modelos de esa talla ya usan GQA y suelen servirse en 16 bits. Valen para
+      ver la escala del problema —a ese tamaño la caché no cabe en la GPU y GQA
+      decide si el modelo se puede servir—, no para comparar configuraciones
+      equivalentes. Aquí ahorraría 0.79 MB.
+
+      Y no es gratis: **cambia capacidad por memoria**. Con `n_embd` 128 y sólo 4
+      cabezas, una proporción 4:1 dejaría **una única** cabeza de clave-valor
+      —el extremo, Multi-Query Attention—, que es un recorte grande en un modelo
+      ya pequeño. Pagaría un coste real de capacidad para ahorrar algo que no
+      falta: medido, la generación va a 0.06 ms/token con 1 MB de caché, y el
+      cuello de botella es el `MatMul`, que GQA apenas toca.
+
+      Es el caso que describe [la primera regla](#las-dos-reglas): no aporta
+      corrección demostrable, ni rendimiento medible, ni capacidad nueva.
+      **Cobra sentido cuando la memoria sea la restricción que ata**; con esta
+      arquitectura, alrededor de 12 capas y contexto 2048 la caché ya ronda los
+      150 MB y ahí empieza a notarse.
+- [x] **Perplejidad** como métrica, sobre validación y sobre prueba. La da
+      `apps/eval_llm.cpp`, añadido al cerrar la Fase 12: recorre las tres
+      particiones enteras con `--completo` y aborta si los pesos no cargan, en
+      vez de medir ruido y dar una cifra.
+- [x] **Evaluar la validación durante el entrenamiento.** `train_llm --val_path
+      <texto> --eval_cada <n>`. Antes el sobreajuste era invisible hasta que el
+      entrenamiento terminaba y se pasaba `eval_llm` a mano.
+
+      **Las ventanas de validación son fijas y no tocan el generador aleatorio**,
+      y eso no es un detalle. Si salieran del mismo generador que los lotes de
+      entrenamiento, evaluar cambiaría la secuencia de números que consume el
+      bucle principal y **el entrenamiento dejaría de ser reproducible por culpa
+      de la medición**. Comprobado de extremo a extremo: dos corridas iguales,
+      una con validación y otra sin ella, dan **pesos con el mismo `md5`** y las
+      mismas pérdidas paso a paso.
+
+      Muestra el cambio **respecto a la evaluación anterior**, no la brecha con
+      la pérdida de entrenamiento. La primera versión mostraba esa brecha y en
+      una prueba real salió **negativa dos veces de cuatro**, porque compara
+      contra un solo lote y ése es ruidoso; invitaba a leer «validación mejor que
+      entrenamiento» cuando sólo era el lote que tocó. El cambio entre
+      evaluaciones sí es comparable, porque las ventanas son siempre las mismas.
+
+      Sobre el corpus español, 400 iteraciones: la validación baja `0.075 →
+      0.038 → 0.016` mientras la pérdida de entrenamiento rebota. Eso es
+      exactamente lo que aporta —una señal limpia donde la del lote no lo es— y
+      avisa con `<- posible sobreajuste` en cuanto sube.
+
+**Criterio de salida:** entrenar un transformer pequeño de verdad y demostrar que
+NeuralSuite y PyTorch siguen trayectorias de entrenamiento equivalentes. Eso es
+más fuerte que la paridad de un solo paso que ya existe.
+
+## Fase 16 — Datos ✅
+
+**Fase que el plan original no tenía y sin la cual las siguientes no arrancan.**
+Hoy **no existe ningún cargador de datasets**: nada lee MNIST ni CIFAR. El mismo
+agujero que costó medio día descubrir en el LLM —donde el corpus eran 3.2 KB de
+Shakespeare— está intacto en visión.
+
+- [x] **Lector de MNIST** (formato IDX). Su única trampa es que **los enteros
+      van en big-endian**: leerlos como little-endian —lo nativo aquí— convierte
+      60 000 imágenes en 50 331 648, un número tan absurdo que revienta en la
+      reserva de memoria. Peor sería que cuadrase.
+
+      Comprueba las dos cosas que fallan en silencio: que el número mágico sea el
+      que toca —confundir el archivo de imágenes con el de etiquetas es el error
+      fácil, porque los nombres sólo se diferencian en una palabra— y que las dos
+      cuentas coincidan, porque emparejar mal dejaría entrenando con etiquetas
+      corridas sin que nada fallara.
+
+      El orden de las comprobaciones importa y lo enseñó la prueba: al validar
+      primero el **tamaño** de la cabecera, intercambiar los archivos daba
+      «cabecera truncada», que no dice nada. Ahora el número mágico se comprueba
+      primero —bastan 4 bytes— y el mensaje señala el problema real.
+
+- [x] **`DataLoader`**: lotes, barajado y partición reproducibles. Tres
+      decisiones que parecen detalles:
+
+      - **Generador propio.** El barajado no toca el generador global. Si lo
+        tocara, cambiar el tamaño de lote alteraría la inicialización de los
+        pesos y dos entrenamientos dejarían de ser comparables por algo que no
+        tiene que ver con lo que se cambió. Es el mismo cuidado que en la
+        validación de `train_llm`, y hay una prueba que lo fija.
+      - **Partición por índices**, no por copia, y el corte va sobre los índices
+        **ya barajados**: cortar el orden original daría particiones sesgadas si
+        los datos vienen agrupados por clase, que es como vienen muchos
+        conjuntos.
+
+        **La primera versión no cumplía la mitad de esa promesa.** Pasaba los
+        tensores como *lvalue* a un parámetro por valor, y el constructor de
+        copia de `Tensor` reserva memoria nueva: cada hijo se llevaba una copia
+        completa del conjunto. Nada fallaba —los datos eran correctos— pero
+        partir gastaba el doble de memoria mientras la documentación afirmaba lo
+        contrario. Con MNIST son ~180 MB de más; con algo mayor, una bomba
+        silenciosa. Se arregla pasando `View()`, que comparte almacenamiento y,
+        al ser un temporal, entra moviéndose en vez de copiándose.
+
+        **La promesa es ahora comprobable**: `CompartioDatosCon()` y una prueba
+        que exige que los dos hijos compartan el almacenamiento con el padre. La
+        prueba anterior verificaba el comportamiento —los índices se reparten
+        bien— pero no la propiedad de arquitectura que el texto afirmaba.
+      - **El último lote incompleto se descarta** por defecto, para mantener el
+        tamaño de lote constante. La primera versión justificaba esto diciendo
+        que «cambia la escala del gradiente», y **era incorrecto**:
+        `CrossEntropyLoss` promedia y su backward divide entre `num_samples`, así
+        que 17 ejemplos y 32 dan gradientes de la misma escala. Lo que sí varía
+        es el **ruido** del gradiente, el rendimiento y cualquier estadística que
+        dependa del lote.
+
+      Los archivos IDX de la prueba se **fabrican byte a byte** en vez de
+      descargar MNIST: así es reproducible y sin red, y comprueba que el lector
+      entiende el formato: escribir la cabecera con la misma función que la lee
+      habría cancelado un error de endianness. Cinco mutaciones, las cinco rojas.
+
+## Fase 17 — Difusión de verdad ✅ (corresponde a 0.9)
+
+La demo actual es un `beta = 0.3f` fijo y un MLP pequeño. Se conserva como
+juguete didáctico y se construye la implementación real:
+
+- [x] **`DiffusionSchedule`** — `beta[t]`, `alpha[t]`, `alpha_bar[t]`,
+      `QSample()` y `PredecirX0()`. Primer escalón de la fase, con su examen:
+      paridad contra PyTorch.
+
+      `alpha_bar` es lo que hace práctico entrenar: permite saltar directamente
+      al paso `t` sin recorrer los anteriores, así que cada ejemplo del lote
+      puede llevar su propio `t` sorteado. Sin ese atajo habría que simular `t`
+      pasos por muestra.
+
+      **Paridad**: `beta` 9.3e-08, `alpha_bar` 6.0e-08 —con los 1000 pasos
+      acumulados—, `q_sample` 5.8e-07 y la reconstrucción de `x0` 5.1e-06.
+
+      La prueba unitaria fija lo que la paridad no mira: que **la varianza se
+      conserva**. Que los coeficientes sean `sqrt(ab)` y `sqrt(1−ab)` en vez de
+      `ab` y `1−ab` es justo lo que mantiene la escala de `x_0` a lo largo del
+      proceso; sin las raíces la señal se apagaría antes de lo que dice el
+      calendario y el modelo vería entradas de otra escala, sin que nada
+      fallara. Se comprueba midiendo la varianza en seis pasos distintos, que en
+      `t=0` la imagen se parece a sí misma y que en el último ya no, y que
+      `PredecirX0` deshace `QSample` exactamente.
+
+      Cuatro mutaciones. Tres rojas en ambas capas: quitar las raíces, no
+      acumular `alpha_bar`, y usar el paso del primer ejemplo para todo el lote.
+      **La cuarta no muerde, y está bien que no lo haga**: acumular en `float` en
+      vez de `double` se desvía 7.1e-07 en relativo —medido—, así que no es un
+      defecto. El comentario del código decía que float «pierde dígitos justo
+      donde más importa» y era falso; corregido.
+- [x] **`TimeEmbedding` sinusoidal.** Segundo escalón. La U-Net necesita saber en
+      qué paso está, porque quitar ruido cuando queda mucho no se parece a
+      quitarlo cuando queda poco. Pasarle el número crudo no sirve: un escalar
+      entre 0 y 999 entra con una escala que no se parece a la de las
+      activaciones, y una sola dimensión da muy poca señal para condicionar
+      cientos de canales.
+
+      La solución es la misma que la posición en un transformer: proyectar el
+      paso sobre senos y cosenos de periodos muy distintos, de modo que **pasos
+      cercanos den vectores parecidos**. Eso es lo que permite a la red
+      interpolar entre pasos que no vio exactamente.
+
+      Convención de DDPM: primero todos los senos, luego todos los cosenos,
+      **concatenados, no intercalados**. La variante intercalada es igual de
+      válida y produce un embedding igual de suave, así que mezclarlas no rompe
+      nada visible y no coincide con ninguna referencia. Se fija explícitamente
+      en los dos lados de la paridad.
+
+      Paridad 8.6e-06. La prueba unitaria añade la continuidad —que `t=501` esté
+      más cerca de `t=500` que `t=900`— y que los canales giren a velocidades
+      muy distintas, que es la misma comprobación que hizo falta en RoPE cuando
+      poner todas las frecuencias iguales pasaba desapercibido. Tres mutaciones,
+      las tres rojas en ambas capas.
+- [x] **`DDPMSampler` y `DDIMSampler`.** Ver el escalón 6, más abajo.
+- [x] **`ResBlockTiempo`**, la pieza que se repite por toda la U-Net. Tercer
+      escalón, y el primero con peso real: combina `GroupNorm`, `SiLU`, `Conv2D`
+      y la inyección del paso, y su backward tiene cuatro ramas.
+
+      Tres decisiones que no son evidentes: **el tiempo se suma por canal, no por
+      píxel** —el paso es una propiedad de la imagen entera, y por eso el mismo
+      bloque sirve a cualquier resolución—; **el atajo lleva convolución sólo si
+      cambian los canales**, porque con los mismos la identidad es lo que deja
+      llegar el gradiente intacto hacia abajo; y la normalización va **antes** de
+      la activación, igual que en el transformer del proyecto.
+
+      Paridad: salida 1.3e-07, `dx` 1.8e-07, gradiente del tiempo 2.2e-07.
+      Referencia compuesta con `nn.GroupNorm`, `F.silu`, `nn.Conv2d` y
+      `nn.Linear` —no hay módulo que importar—, lo que es una garantía más débil
+      pero suficiente aquí, porque lo que interesa es que el autograd de PyTorch
+      derive la composición y contrastar contra eso el backward de cuatro ramas.
+
+      La prueba unitaria comprueba los gradientes de **las dos entradas** contra
+      diferencias finitas, que el residuo suma de verdad —anulando la última
+      convolución, la salida debe ser exactamente el atajo— y que el bloque
+      funciona a otra resolución con los mismos pesos.
+
+      Esa última comprobación sustituyó a una equivocada: la primera versión
+      exigía que el efecto del tiempo fuese constante dentro de cada canal **a la
+      salida**, y falló. La suma sí es constante donde se inyecta, pero después
+      pasa por `GroupNorm` y una convolución 3×3 que la redistribuyen. La
+      propiedad se cumple donde se inyecta, no donde se mide.
+
+      Cuatro mutaciones, las cuatro rojas en ambas capas: olvidar el atajo en el
+      backward, no sumar sobre las posiciones al propagar el tiempo, no sumar el
+      atajo en el forward, y derivar `SiLU` con la salida en vez de la entrada.
+
+- [x] **`UNet2D` y la puerta de sobreajuste.** Cuarto escalón, el que decide.
+      Bloques residuales condicionados por tiempo, skips por `Concat` (de ahí la
+      Fase 13) y up/downsampling. 246 273 parámetros con `canales=32`.
+
+      **La puerta pasa.** 16 imágenes, 400 iteraciones, 32 s: la pérdida cae de
+      1.2706 a 0.04–0.14 (predecir cero da 1.0). La red memoriza.
+
+      Tres cosas que esto enseñó y no estaban en el plan:
+
+      1. **La pérdida baja más con `t` grande, no con `t` pequeño** —al revés de
+         lo que yo había escrito en el código. Como
+         `eps = (x_t − √ab·x_0) / √(1−ab)`, con `t` grande `√ab → 0` y
+         `eps → x_t`: la red casi puede copiar su entrada. Con `t` pequeño hay
+         que dividir una diferencia pequeña entre `√(1−ab)`, que es diminuto, y
+         ahí sí hace falta conocer `x_0`. Lo difícil con `t` grande es predecir
+         `x_0`, no `eps`. Medido: 0.1397 en `t∈[0,50)` frente a 0.0417 en
+         `t∈[150,200)`.
+      2. **La reconstrucción visual a `t` bajo no demuestra nada.** El primer
+         dibujo se hizo a `t=20` y salió un cinco perfecto. Se comprobó qué hace
+         ahí una red **sin entrenar**: dibuja el mismo cinco, porque a `t=20`
+         `x_t` ya es casi la imagen limpia y `PredecirX0` deshace un ruido que
+         apenas tapaba nada. La prueba se movió a `t=140`, donde `x_t` es
+         irreconocible, y el programa imprime siempre al lado el control sin
+         entrenar. Ahí la entrenada recupera el dígito y el control da ruido.
+      3. **El exportador de paridad tenía todos los casos en un solo ámbito.**
+         Al escribir la referencia de la U-Net se reutilizó el nombre `xu`, que
+         ya usaba `Upsample2D`, y `up_x` acabó conteniendo la entrada de la
+         U-Net. Se notó porque las formas no cuadraban y el binario abortó; si
+         hubieran cuadrado, la comparación habría pasado midiendo el tensor
+         equivocado. La referencia vive ahora en su propia función.
+
+      Paridad contra PyTorch: `un_y` 5.7e-07, `un_dx` 3.7e-07. Lo que verifica no
+      son los números de cada capa —eso ya lo cubren los casos anteriores— sino
+      el **cableado**: orden de canales al concatenar, qué salto se une con qué
+      subida, y que el gradiente que vuelve a cada salto sume los dos caminos.
+      Los pesos entran por nombre, submódulo a submódulo, para que un fallo
+      señale al cableado y no a un orden mal adivinado.
+
+      La prueba unitaria añade lo que la paridad no da: diferencias finitas de
+      extremo a extremo, que los 62 tensores de gradiente reciban señal —una rama
+      mal conectada no rompe nada, solo se queda congelada—, que cambiar el paso
+      cambie la salida, y que una resolución que no sea múltiplo de 4 proteste.
+      Tres mutaciones, las tres rojas: sobrescribir en vez de sumar en un salto,
+      ignorar la rama de arriba, y partir el `Concat` por el canal equivocado.
+
+- [x] **`DDPMSampler` y `DDIMSampler`** (escalón 6, adelantado al 5 a propósito).
+      Se hicieron antes del entrenamiento largo porque se pueden validar contra
+      el modelo sobreajustado de 16 imágenes **en minutos**: si el muestreador
+      estuviera mal, descubrirlo después de horas de entrenamiento no diría si
+      la culpa es del bucle o del modelo.
+
+      Toman el modelo como una función `(x_t, t) -> eps` en vez de una `UNet2D`.
+      Eso permite probarlos con un **oráculo analítico** cuya respuesta exacta se
+      conoce, sin ningún modelo entrenado.
+
+      **Lo que enseñó medir la cobertura, y cambió el diseño.** El oráculo
+      parecía una prueba fortísima —aterriza exacto, sin tolerancia— y cazaba
+      **una de cuatro** mutaciones deliberadas:
+
+      | mutación | oráculo | prueba 54 final | paridad |
+      | --- | --- | --- | --- |
+      | varianza `beta[t]` en vez de la posterior | ✗ | ✅ | ✅ (solo DDPM) |
+      | coeficiente de `eps` con `sqrt(beta)` | ✅ | ✅ | ✅ |
+      | DDIM sin restar `σ²` en la dirección | ✗ | ✅ | ✅ (solo `eta=1`) |
+      | `ab[τ−1]` en vez del siguiente de la subsecuencia | ✗ | ✅ | ✅ (solo subsecuencias cortas) |
+      | subsecuencia que no llega a 0 | — | ✅ | — |
+
+      El oráculo falla porque **se autocorrige**: recalcula `eps` a partir del
+      `x` que le den, así que cualquier trayectoria que mantenga `x_0 = m` acaba
+      en `m`. Fija el punto de llegada, no el camino. Se añadieron dos
+      comprobaciones que sí lo fijan sin PyTorch: que `eta=1` sobre la secuencia
+      completa **reproduzca DDPM paso a paso** (con el control de que `eta=0` dé
+      otra cosa, o la comparación no distinguiría nada), y **el telescopio** —con
+      un predictor que devuelve ruido cero, el producto de escalas de DDIM tiene
+      que dar `1/√ab[T−1]` para cualquier número de pasos, que es lo único que
+      fija el índice de `ab[anterior]`.
+
+      Paridad contra PyTorch de la trayectoria completa con el ruido **inyectado
+      desde la referencia**: `sm_ddpm` 1.0e-06, `sm_ddim0` 1.5e-07, `sm_ddim1`
+      7.8e-07, `sm_ddim_full1` 6.0e-07.
+
+- [x] **Muestreo desde ruido puro con el modelo sobreajustado.** La prueba de
+      extremo a extremo, y donde salió un fallo que ninguna de las capas de
+      verificación podía ver.
+
+      El primer intento generó manchas. La causa **no era el muestreador ni la
+      red**: con `T=200` pasos y `beta_final=0.02` —los valores del artículo,
+      que están calibrados para **1000** pasos— `x_T` conserva el **36% de la
+      imagen**. El modelo nunca veía ruido puro al entrenar y el muestreo
+      arrancaba de una distribución que no conocía. La pérdida, las diferencias
+      finitas y la paridad eran todas correctas y ninguna podía avisar.
+
+      `DiffusionSchedule::SenalResidual()` expone ahora `√ab[T−1]`, y el
+      entrenador escala `beta_final` por `1000/pasos` y lo imprime con su aviso.
+      Con eso queda el 0.56%.
+
+      Corregido eso, faltaba presupuesto. Con 800 iteraciones las muestras
+      seguían sin ser dígitos; con **5000 (5.6 min)** sí: distancia a la imagen
+      más cercana **0.089–0.25 frente a 0.61–0.73** de media a todas, una
+      separación de 5–7×. DDPM 2.0 s por lote (200 pasos), DDIM 0.2 s (20 pasos).
+
+      Un diagnóstico que corrigió una métrica mía: el error de `x_0` predicho es
+      enorme con `t` grande (5.15 en `t=195`) y **eso es normal en cualquier DDPM
+      correcto** —despejar `x_0` divide por `√ab`, que ahí vale 0.0056, y
+      amplifica el error de `eps` por 178×. Lo que sí es informativo es que con
+      `t` grande **copiar la entrada da error 0.0000**: la solución trivial es
+      casi perfecta, y lo único que sirve para generar es la desviación pequeña
+      respecto a ella. Por eso una pérdida baja en esa franja no dice nada.
+
+- [x] **Lo que hacía falta antes de un entrenamiento de horas.** Seis huecos que
+      un run de minutos no expone y uno de cinco horas sí. Se revisaron sobre el
+      código, no de memoria.
+
+      1. **`UNet2D` no era serializable.** No era `Module` y no tenía
+         `GuardarPesos`/`CargarPesos`: `train_diffusion` entrenaba y **no dejaba
+         nada en disco**. Ahora deriva de `Module` y registra sus ocho
+         submódulos, así que `GetParameters()` y `GetGradients()` se derivan de
+         `Parameters()` en vez de ser dos listas escritas a mano en paralelo
+         —exactamente lo que el docstring de `Layer` advierte—. 62 tensores con
+         su ruta (`res_baja0.conv1.weight`); cargar pesos de otra arquitectura
+         se rechaza nombrando el motivo.
+      2. **Checkpoint periódico y reanudación** (`--guardar_cada`, `--reanudar`,
+         `--parar_en`). Un checkpoint son tres archivos: pesos, sombra de la EMA
+         y estado de Adam. Los tres o ninguno — guardar solo los pesos permite
+         muestrear pero no continuar, porque `m` y `v` de Adam son medias
+         móviles y reanudar con ellas a cero da una sacudida justo al retomar.
+         Se añadieron accesores de estado a `AdamW` para eso.
+      3. **EMA de los pesos.** No es un adorno en difusión: el gradiente ve un
+         `t` sorteado y un ruido nuevo en cada paso, así que los pesos finales
+         oscilan alrededor del bueno. Lleva rampa de calentamiento
+         `(1+n)/(10+n)`: con decaimiento fijo la sombra arrastra los pesos
+         **iniciales al azar** durante ~1000 pasos, y muestrear de ella al
+         principio daría ruido y parecería que el entrenamiento no avanza.
+      4. **Schedule de learning rate**: calentamiento lineal y coseno hasta
+         `--lr_min`, el patrón que ya usaba `train_llm`.
+      5. **Validación** (`--n_validacion`): imágenes que el optimizador no ve,
+         con `t` barrido y ruido fijo entre evaluaciones para que la curva se
+         mueva por el modelo y no por el sorteo.
+      6. **Muestreo periódico** con los pesos de la EMA durante el
+         entrenamiento: dos segundos por vistazo, y evita descubrir a las cinco
+         horas que no iba a ninguna parte.
+
+      **Reanudar es byte a byte idéntico a no haber parado**, en los tres
+      archivos. Llegar ahí obligó a corregir dos cosas y a desechar una medición
+      propia:
+
+      - La primera comparación daba distinto y **la culpa era del experimento**:
+        a la corrida interrumpida le había pasado `--iteraciones 150`, así que
+        su coseno decaía en 150 pasos y no en 300. Era otro entrenamiento, no un
+        fallo del checkpoint. De ahí `--parar_en`, que corta sin tocar el plan.
+      - El estado del RNG no se guardaba. En vez de guardarlo, **cada iteración
+        se siembra en función de `(semilla, it)`**: la iteración *n* usa el
+        mismo lote y el mismo ruido se llegue de un tirón o reanudando, y no hay
+        estado que sincronizar. Guardar el estado habría exigido acordarse del
+        `mt19937` global *y* del generador de lotes, y además la evaluación y el
+        muestreo periódicos tocan el global por el camino.
+      - Con eso, pesos y estado de Adam salían idénticos y **la EMA no**:
+        guardaba los valores de la sombra pero no su contador de pasos, así que
+        al reanudar la rampa se reiniciaba y la sombra se reenganchaba de golpe
+        a los pesos vivos. **Ninguna pérdida lo detecta**, porque la pérdida se
+        calcula con los pesos vivos; se encontró comparando los archivos byte a
+        byte contra un run sin cortes.
+
+      Prueba 55 en la suite: la sombra arranca en los pesos iniciales, dos
+      `Intercambiar()` son la identidad, la rampa mide (no supone) que tras 20
+      pasos la sombra ya se movió, la ida y vuelta de los pesos es exacta y una
+      arquitectura distinta se rechaza. `nsf::Load` devuelve ahora también los
+      metadatos que no se le exigen, que es lo que permite guardar el número de
+      iteración dentro del propio checkpoint en vez de en un archivo al lado que
+      se pueda desincronizar.
+
+- [x] **Dos correcciones de una revisión externa, antes de lanzar el run largo.**
+      Las dos ciertas, y una de ellas invalidaba una métrica que yo venía
+      imprimiendo desde el escalón 4.
+
+      **El checkpoint no era «los tres o ninguno», por mucho que lo dijera el
+      comentario.** `guardar()` escribía los tres archivos secuencialmente en su
+      sitio definitivo, así que un corte a mitad dejaba pesos nuevos con estado
+      de Adam viejo. Los tres son válidos por separado, así que **reanudar de
+      esa mezcla no daba ningún error: solo entrenaba mal.** Ahora se escriben
+      como `.tmp` y solo se mueven cuando los tres están completos, y los tres
+      llevan un `checkpoint_id` común que se comprueba al reanudar. Los tres
+      renombrados no son atómicos *como grupo* —eso no se puede cerrar sin
+      soporte del sistema de archivos y no se pretende—; lo que cubre esa
+      ventana de microsegundos es el sello. Probado mezclando a mano archivos de
+      dos checkpoints: aborta con código 1 nombrando los tres identificadores.
+
+      **`t bajo` / `t alto` estaban mal calculados.** Sumaban la pérdida del
+      **lote entero** a la franja de cada muestra, así que las dos columnas eran
+      la misma cifra pesada por la composición del lote. Debí sospecharlo: en
+      todas las corridas se movían juntas (0.1155/0.0981, 0.0586/0.0501…).
+      Corregido a pérdida por ejemplo, ahora separan de verdad —0.0821 frente a
+      0.0086, un factor 10— y **coinciden con la evaluación por franjas**, que
+      es la comprobación de que están bien.
+
+      Importa acotar el daño: la conclusión de que la pérdida baja más con `t`
+      grande **no venía de esas columnas** sino de la evaluación final por
+      franjas, que sortea todos los `t` del lote dentro de la misma franja y
+      siempre estuvo bien. Los 0.1397 vs 0.0417 del escalón 4 se mantienen.
+
+      **Y una tercera observación que se midió en vez de aceptarse.** La revisión
+      señalaba que la validación usa un corte contiguo del final en vez de
+      `DataLoader::Partir()`. El principio es correcto —si el `DataLoader` se
+      queda solo en su prueba, los dos caminos divergen— pero el riesgo concreto
+      no existe en MNIST: las últimas 5000 imágenes tienen la misma distribución
+      de clases que el conjunto entero (12.6% de desviación frente al 12.4% del
+      total, que es el desbalance natural de MNIST). Queda anotado como lo
+      siguiente a integrar, no como un bloqueo.
+
+- [x] **Usar `DataLoader::Partir()` en `train_diffusion`.** Nueva opción
+      `--particion barajada|contigua`, `barajada` por defecto. El `DataLoader`
+      se usa **solo para partir**, no para entregar lotes: el entrenamiento
+      sigue sorteando cada lote con un generador sembrado por `(semilla, it)`,
+      que es lo que hace que reanudar sea idéntico a no haber parado, y recorrer
+      épocas con estado rompería esa garantía.
+
+      El modo, la semilla y el tamaño de validación quedan **sellados en el
+      checkpoint**. Al reanudar manda lo que dice el checkpoint, y pedir otra
+      cosa aborta: si cambiaran, imágenes de validación pasarían a entrenarse y
+      la curva dejaría de significar nada. Los checkpoints del escalón 5 no
+      llevan el sello y se leen como `contigua`, que es como se entrenaron.
+
+      Verificado: `contigua` produce pesos y EMA **idénticos** al programa
+      anterior; `barajada` es determinista y reanudar sigue dando resultados
+      idénticos a no parar; el checkpoint `it070000` se reanuda como `contigua`
+      y rechaza `barajada`.
+- [x] **DDPM sobre MNIST completo (escalón 5).** Todo lo que necesita está
+      construido y verificado; falta lanzarlo. El plan, con los números medidos
+      en esta máquina y no estimados:
+
+      | canales | lote | ms/iter | img/s | 1 época (60k) | params | checkpoint |
+      | --- | --- | --- | --- | --- | --- | --- |
+      | 32 | 8 | 62.5 | 128 | 7.8 min | 246 273 | 3.8 MB |
+      | 32 | 16 | 125.0 | 128 | 7.8 min | | |
+      | **32** | **32** | **225.0** | **142** | **7.0 min** | | |
+      | 64 | 16 | 365.0 | 44 | 22.8 min | 951 297 | 14.5 MB |
+      | 64 | 32 | 662.5 | 48 | 20.7 min | | |
+
+      El tamaño de lote casi no cambia el rendimiento con 32 canales (128 → 142
+      img/s), así que elegir 32 es gratis y reduce el ruido del gradiente, que
+      en difusión importa porque cada paso ve un `t` distinto.
+
+      **80 000 iteraciones = 45 épocas ≈ 5 h**, en segundo plano con log:
+
+      ```bash
+      mkdir -p release logs
+      nohup ./bin/train_diffusion \
+        --n_imagenes 0 --n_validacion 3000 \
+        --canales 32 --pasos 1000 --lote 32 \
+        --iteraciones 80000 --calentamiento 1000 \
+        --lr 2e-4 --lr_min 1e-5 --ema 0.9995 \
+        --evaluar_cada 2000 --muestrear_cada 5000 \
+        --guardar_cada 2000 --archivar_cada 10000 \
+        --archivo release/unet_mnist.nsf \
+        > logs/difusion_mnist.log 2>&1 &
+      ```
+
+      Por qué cada cosa:
+
+      - **`--pasos 1000`** y no los 200 que se validaron. Se midió que **no
+        cuesta nada en entrenamiento** —el coste no depende de `T`, cada muestra
+        lleva un solo `t`— y es la configuración del artículo. El muestreo con
+        DDPM sí se encarece ×5, pero para eso está DDIM. La contrapartida real
+        es que cada `t` concreto recibe 5× menos cobertura; se asume porque el
+        *time embedding* es continuo (Test 51) y la red interpola entre vecinos.
+      - **`--lr 2e-4`** y no el 2e-3 del sobreajuste: aquello eran 16 imágenes
+        memorizadas, esto son 57 000 diversas.
+      - **`--ema 0.9995`** da una ventana de ~2000 pasos sobre 80 000. El 0.9999
+        del artículo está pensado para 800 000.
+      - **`--archivar_cada 10000`**: 8 copias de 3.8 MB = 30 MB. La rotativa se
+        sobrescribe cada 2000 para poder reanudar tras un corte; las archivadas
+        existen porque si el modelo empeora al final —que en difusión pasa—
+        sobrescribir habría borrado el momento bueno. Cada copia archivada es un
+        trío completo con su propio sello, así que **se puede reanudar desde
+        cualquiera de ellas**.
+      - **`--parar_en`** para trocearlo. El coseno del learning rate se calcula
+        sobre `--iteraciones`, así que el total hay que fijarlo ahora: reanudar
+        con un número mayor daría otra curva. Parar antes sí se puede, pero
+        entonces el coseno no habrá terminado de decaer.
+
+      **Criterio de éxito, acordado antes y no después:**
+
+      1. La **brecha de validación** se mantiene cerca de cero. Si se abre, está
+         memorizando.
+      2. Las **muestras cada 5000 iteraciones** pasan de manchas a trazos y de
+         trazos a dígitos legibles.
+      3. **Reanudar a mitad** y comprobar que sigue igual.
+      4. El **examen**: generar con DDPM y con DDIM, y medir la distancia a la
+         imagen más cercana del conjunto — que ahora debe ser **grande**, al
+         revés que en la puerta de sobreajuste. Si es pequeña, está copiando en
+         vez de generando. Ese cambio de signo conviene tenerlo claro de
+         antemano.
+- [x] **Resultado del escalón 5.** 80 000 iteraciones en **4 h 50 min** (218
+      ms/iteración), sin cortes, con los 27 archivos esperados.
+
+      - **Brecha de validación plana** todo el run: entre +0.0015 y +0.0019
+        desde la iteración 2 000 hasta la 80 000. No memoriza.
+      - **La pérdida se estanca hacia la 60 000** (0.0225 → 0.0223 en las
+        últimas 20 000), cuando el coseno del learning rate llega al mínimo. La
+        muestra periódica —mismo ruido cada vez— converge a la misma forma hacia
+        la 40 000.
+      - Pérdida final por franja: 0.0598 / 0.0231 / 0.0052 / 0.0003 de `t` bajo
+        a `t` alto, el patrón medido en el escalón 4.
+
+      Dos cosas del run que hubo que arreglar sobre la marcha: el log salía
+      vacío porque `printf` a un archivo acumula en bloques (se paró al minuto,
+      sin checkpoint escrito, y se relanzó con buffer de línea), y se añadió
+      `caffeinate -i` para que el Mac no se durmiera.
+
+- [x] **Examen: generar dígitos MNIST reconocibles con DDPM.** Con
+      `apps/sample_diffusion.cpp`, sobre los pesos EMA finales, 64 muestras
+      guardadas en PNG a resolución completa. El ASCII del log no servía para
+      juzgar: salta una fila de cada dos.
+
+      | | DDPM, 1000 pasos | DDIM, 100 pasos |
+      | --- | --- | --- |
+      | legibles sin dudar (a ojo) | **~45 de 64** | ~25–30 de 64 |
+      | clases según la vecina más cercana | **10 de 10** | 10 de 10 |
+      | distancia a la vecina / media al conjunto | **0.50** | 0.59 |
+      | tiempo para 64 muestras | 113.6 s | 10.8 s |
+
+      **Aprobado con DDPM.** Trazos limpios, las diez clases, y el cociente de
+      distancias lejos del 0.15–0.35 de la puerta de sobreajuste, que copiaba:
+      genera, no copia. La etiqueta de la vecina más cercana es un clasificador
+      tosco —la distancia en píxeles no es la forma—, pero basta para descartar
+      un colapso a pocas clases.
+
+      **DDIM a 100 pasos es notablemente peor**: misma diversidad, pero motas,
+      trazos rotos y alguna mancha. Diez veces más rápido y, con este modelo, se
+      paga en calidad. Falta averiguar si es por los pocos pasos o por DDIM
+      determinista.
+
+      Un fallo del propio examen: la primera ejecución dio las 64 muestras en la
+      clase 5 con distancia 0.0000. Era `ParallelFor(0, N, fn)` con la firma mal
+      supuesta —es `(cuenta, mínimo_por_hilo, fn)`—, que con cuenta 0 no
+      calculaba nada. Un resultado imposible como ese hay que tratarlo como
+      fallo del medidor antes que del modelo.
+
+      Para escribir el PNG se añadió `image::EncodePngGris`: mínimo, sin filtros
+      y con bloques DEFLATE almacenados, reutilizando el CRC-32 y el Adler-32
+      del decodificador. Verificado contra el decodificador propio y contra
+      Pillow, incluida una imagen que obliga a varios bloques (Test 56).
+
+- [x] **Tres correcciones de una revisión externa**, las tres ciertas.
+
+      **Reanudar no respetaba su propio contrato.** El comentario decía «manda
+      el checkpoint», pero `semilla` y `n_validacion` se comparaban contra los
+      valores por defecto del programa: reanudar un run con 3000 imágenes de
+      validación sin repetir `--n_validacion 3000` abortaba. Y el problema era
+      más amplio que esos dos: `--iteraciones`, `--lote`, `--lr` o el calendario
+      no se comprobaban en absoluto, así que reanudar con otro total cambiaba el
+      coseno sin avisar. Ahora hay un único mecanismo: todo lo que decide la
+      trayectoria va **sellado en los tres archivos**, se lee con
+      `nsf::ReadMetadata` antes de construir nada, se adopta si no se pasa y
+      aborta si se pasa distinto. Verificado: reanudar **sin repetir ninguna
+      opción** da pesos y EMA idénticos a no parar.
+
+      **`sample_diffusion` reconstruía el calendario de memoria.** Con otro
+      calendario los pesos cargan igual y las muestras salen peores sin ningún
+      error. Ahora el calendario (`pasos`, `beta_ini`, `beta_fin`) y la
+      normalización van en el sello y el muestreador los adopta; pedir otro
+      aborta, y un checkpoint sin sello avisa de que se asume la regla por
+      defecto. De cara a la difusión latente, ahí irán también el factor de
+      reducción y la escala del latente.
+
+      **DDIM aceptaba un solo paso**, que genera la subsecuencia `{0}` y le
+      presenta ruido puro al modelo como si fuera `t=0`. Lo peor: **el Test 54
+      eximía ese caso** (`taus.front() == T - 1 || np == 1`) en vez de
+      detectarlo. Ahora exige al menos dos pasos cuando `T > 1`, y la prueba
+      comprueba que protesta.
+
+      De paso, `EncodePngGris` usaba `static_cast<long>` para desplazar
+      iteradores, y `long` es de 32 bits en Windows; pasa a `std::ptrdiff_t`.
+
+- [x] **Reanudar a mitad con el modelo real: idéntico.** Desde la copia de
+      `unet_mnist_it070000` hasta la 80 000 (10 000 iteraciones, 38 min), con
+      los mismos argumentos del run original. La predicción era falsable —diferencia
+      cero— y se cumplió en todo: **pesos vivos, sombra de la EMA y momentos `m`
+      y `v` de Adam idénticos** a los de `release/unet_mnist.nsf`, mismos
+      contadores, y la evaluación de la iteración 80 000 igual (entren. 0.0223,
+      valid. 0.0239).
+
+      Por qué no era obvio: el binario había cambiado desde el run —buffer de
+      línea, partición con `DataLoader`, arreglo del recorte de DDIM—, la
+      partición tuvo que leerse del checkpoint antiguo como `contigua`, y durante
+      el run se compilaba y probaba en paralelo. Nada de eso movió un bit, porque
+      cada iteración se siembra por `(semilla, it)`, el muestreo periódico
+      intercambia la EMA y la devuelve, y las operaciones paralelas son
+      idénticas con cualquier reparto de hilos.
+
+      Un detalle de la comprobación: el `.opt` no se puede comparar byte a byte
+      entre binarios, porque el nuevo escribe más claves de metadatos y eso
+      desplaza todo el archivo. Hay que cargar los tensores y compararlos.
+- [x] **DDIM con 250 y 500 pasos: no eran los pasos, era un bug.** Con `eta=0`
+      las muestras **empeoraban al añadir pasos** —cociente de distancias 0.59
+      con 100, 0.65 con 250, 0.71 con 500, con manchas a la vista—, cuando la
+      teoría dice que deben estabilizarse. DDIM con `eta=1` a 100 pasos salía
+      limpio (0.53), y DDIM `eta=0` **sin recorte** daba 0.56 tanto con 100
+      como con 500 pasos.
+
+      La causa: `DDIMSampler` recortaba `x₀` a [-1, 1] pero seguía usando el
+      `eps` original, que corresponde a un `x₀` que ya no es el que se usa. El
+      paso quedaba incoherente, y sin ruido que lo lavara el error se acumulaba.
+      Ahora recalcula `eps` a partir del `x₀` recortado, como hace diffusers.
+      DDPM no lo sufría porque recompone la media posterior desde el `x₀`
+      recortado. Con el arreglo, 100 y 500 pasos dan 0.56 y salen limpios.
+
+      **Ninguna prueba lo habría visto**: la ruta con recorte no tenía paridad,
+      y una prueba de punto final no lo delata, porque el último paso devuelve
+      `clip(x₀)` exacto con o sin el bug. Se añadió al Test 54 una prueba de
+      **trayectoria**: con un `eps` que fija `x₀ = 1` por recorte, un paso
+      coherente conserva la coordenada de ruido `(x − √ab)/√(1−ab)`. Con el bug
+      deriva 3.85. Y paridad para las dos rutas con recorte (`sm_ddpm_rec`
+      1.7e-04, `sm_ddim0_rec` 1.0e-06); la de DDIM da 0.46 con el bug.
+
+  **El orden importa, y cada escalón lleva su examen.** Construir la U-Net entera
+  de golpe y descubrir a las ocho horas que no aprende es la forma cara de
+  averiguarlo:
+
+  1. `DiffusionSchedule` — `q_sample` contra PyTorch
+  2. `SinusoidalTimeEmbedding` — paridad numérica
+  3. Bloque residual condicionado por tiempo — paridad de forward y backward
+  4. **U-Net mínima: sobreajustar 8–32 imágenes a propósito** ✅
+  5. DDPM sobre MNIST completo ⬜
+  6. DDIM — mismo modelo, otro muestreador ✅ (adelantado al 5)
+
+  El paso 4 es el que decide si se sigue. Si la red **no puede memorizar** un
+  puñado de dígitos, hay un defecto en la arquitectura, en el backward o en el
+  entrenamiento, y ninguna cantidad de épocas lo va a arreglar. Es una puerta de
+  minutos que ahorra una tarde.
+
+### Por qué MNIST y no CIFAR
+
+Ésta es la corrección más importante al plan propuesto, y sale de medir. Una
+pila convolucional al tamaño de la U-Net de un DDPM para CIFAR —**sin** atención,
+**sin** skips, **sin** *time embedding*, o sea una cota inferior generosa—:
+
+| | Por paso | 1 época | 200 épocas |
+| --- | --- | --- | --- |
+| CIFAR-10, canales 64–128 | 150 ms | 7.8 min | **26 horas** |
+| MNIST, canales 32–64 | 78 ms | 2.4 min | **8.2 horas** |
+
+Una U-Net real es 5–20× eso, y los DDPM de CIFAR se entrenan 500–800 épocas:
+**semanas o meses de CPU**. El plan propuesto colocaba ahí la puerta —«si no
+podemos hacer esto, no tiene sentido añadir latent diffusion»— y con CIFAR esa
+puerta no se abre nunca. Con MNIST el examen se ejecuta en una tarde.
+
+## Fase 18 — LDM-1: autoencoder convolucional ✅ (corresponde a 0.10)
+
+Primer paso hacia la difusión latente de Rombach et al.: comprimir la imagen a
+un latente espacial sobre el que después se pueda difundir. Se trocea con el
+mismo patrón que la Fase 17 —escalones pequeños, cada uno con su examen, y una
+puerta antes de gastar horas—, porque ese patrón encontró defectos que un
+entrenamiento directo habría escondido.
+
+**Tres hechos del código que dieron forma al plan:**
+
+- **No hace falta convolución transpuesta.** `Conv2D` ya admite *stride* y
+  *padding*, y el decodificador sube con `Upsample2D` más una convolución, que
+  es como lo hace el propio decodificador del paper.
+- **Falta un bloque residual convolucional sin tiempo.** `ResBlockTiempo` exige
+  el embedding del paso; hay que escribir `ResBlock2D`.
+- **MNIST no cuadra tal cual.** 28×28 con `f=4` da un latente de 7×7, y
+  `UNet2D` exige múltiplos de 4. Se rellena MNIST a **32×32** y el latente queda
+  en **8×8**.
+
+- [x] **`ResBlock2D`.** GroupNorm → SiLU → Conv 3×3 → GroupNorm → SiLU → Conv
+      3×3, más el atajo (identidad, o Conv 1×1 si cambian los canales). Es
+      `ResBlockTiempo` sin la inyección del paso, escrito aparte en vez de hacer
+      opcional el tiempo en aquel: aquel ya está verificado y su backward tiene
+      cuatro ramas.
+
+      Paridad contra una composición de `nn.GroupNorm`, `F.silu` y `nn.Conv2d`,
+      con canales distintos para que el atajo 1×1 entre en la comparación:
+      `r2_y` 2.2e-07, `r2_dx` 1.8e-07, y dos gradientes de pesos, uno por mitad
+      del bloque (3e-07 y 2e-07). La referencia vive en su propia función.
+
+      El Test 57 comprueba, con y sin atajo, el gradiente de la entrada y el de
+      todos los pesos contra diferencias finitas, que ningún gradiente quede sin
+      señal, que anulando la última convolución la salida sea exactamente el
+      atajo, y que funcione a otra resolución —se usará a 32×32 y a 8×8—. Dos
+      mutaciones, las dos rojas: quitar el gradiente del atajo y derivar SiLU
+      con la activación en vez de con la preactivación.
+
+      Al escribir la paridad se usaron `WeightGrad()` y `GammaGrad()`, que no
+      existen; los gradientes se leen con `GetGradients()`, en el orden de
+      registro. Tercera vez en el proyecto que se supone una API en vez de
+      mirarla.
+- [x] **Codificador y decodificador** (`latent/autoencoder.h`). El codificador
+      baja por `f = 4` con dos `Downsample2D` entre `ResBlock2D` y termina en
+      `2·C` canales —media y log-varianza del latente, que se reparten en el
+      escalón siguiente—; el decodificador es su espejo y sube con `Upsample2D`
+      más convoluciones, sin convolución transpuesta.
+
+      Paridad del conjunto contra una composición en PyTorch, con los pesos por
+      nombre: codificador `ae_cy` 3.7e-07 y `ae_cdx` 2.0e-06, decodificador
+      `ae_dy` 5.3e-07 y `ae_ddz` 8.2e-07, más el gradiente de la primera
+      convolución de cada uno, que atraviesa la red entera hacia atrás.
+
+      El Test 58 comprueba formas, gradiente de la entrada contra diferencias
+      finitas de extremo a extremo, que todos los pesos reciban señal, el caso
+      real 32×32 → 8×8 → 32×32 y que una resolución no múltiplo de 4 proteste.
+      Saltarse la derivada de SiLU en el codificador lo pone en rojo (0.77).
+
+      **Y una comprobación de por qué hace falta la paridad:** se movió una
+      subida del decodificador de sitio, en el forward y en el backward a la
+      vez. **El Test 58 siguió en verde** —un cableado equivocado pero
+      coherente deriva bien su propio forward— y **la paridad lo rechazó** con
+      error relativo 2.2. Las diferencias finitas dicen que el backward deriva
+      ESE forward; solo la paridad dice que ese forward es la arquitectura que
+      se pretendía.
+- [x] **Reparametrización y KL** (`latent/gaussiana.h`). `GaussianaDiagonal`
+      reparte la salida del codificador en media y log-varianza, recorta la
+      log-varianza a [-30, 20] como Stable Diffusion, sortea
+      `z = mu + exp(logvar/2)·ruido` con el ruido inyectado, y calcula la KL
+      contra N(0, 1) sumada sobre el latente y promediada en el lote. `Backward`
+      suma dentro los dos caminos —reconstrucción y `peso_kl · KL`— para que
+      ningún entrenador pueda olvidarse de uno.
+
+      El Test 59 empieza por respuestas exactas: con media 0 y log-varianza 0 la
+      KL vale **exactamente** 0 y el latente es **exactamente** el ruido; con
+      media 1 y varianza 2 la KL coincide con el valor calculado a mano. Después,
+      diferencias finitas de la pérdida completa, que los dos caminos se suman, y
+      que por una log-varianza recortada no pase gradiente. Tres mutaciones, las
+      tres errores típicos de un VAE, las tres rojas: olvidar el ½ al derivar
+      `exp(logvar/2)` (1.31), no dividir la KL por el lote (0.95) y dejar pasar
+      gradiente por el recorte.
+
+      Paridad contra una transcripción de la `DiagonalGaussianDistribution` de
+      Stable Diffusion, con una log-varianza por encima y otra por debajo del
+      recorte: `z` 5e-12, gradiente 7e-08. La KL da error **absoluto** 8.0 sobre
+      un valor de ~1.2·10⁸ —el elemento recortado a 20 aporta `exp(20)` y
+      `float32` redondea—, relativo 6.6e-08; es el precio de meter el recorte
+      en la comparación.
+- [x] **Puerta de sobreajuste: pasada.** `apps/train_autoencoder.cpp` monta
+      codificador → latente gaussiano → decodificador con la pérdida del
+      autoencoder KL de Stable Diffusion —error de reconstrucción **sumado** por
+      imagen y promediado en el lote, más `peso_kl · KL` con su 1e-6—, con error
+      cuadrático en vez del L1 + perceptual del paper, porque la perceptual
+      necesita una VGG. 16 imágenes, 600 iteraciones, 77 s, 280 969 parámetros:
+      **PSNR de 2.5 a 32.0 dB** reconstruyendo con la media del latente. En el
+      PNG, originales y reconstrucciones son prácticamente indistinguibles.
+
+      **Con su control, que era necesario.** Un codificador sin entrenar ya
+      convierte la imagen en rasgos con información, así que el decodificador
+      podría memorizar 16 imágenes aunque el gradiente no llegara nunca al
+      codificador, y la puerta no probaría nada sobre él. Se repitió con el
+      codificador congelado: **se atasca en 21.45 dB** y la KL no se mueve de
+      ~113, frente a 31.98 dB y una KL que crece a ~1300 con el codificador
+      aprendiendo —error por píxel 11 veces menor—. El codificador aprende.
+
+      La lección para el escalón siguiente: **un umbral absoluto de PSNR
+      engañaría**, porque un codificador aleatorio ya da 21 dB. La
+      reconstrucción hay que juzgarla contra ese control.
+
+      Y una nota para el escalón 6: con `peso_kl = 1e-6` la KL pesa ~0.001
+      frente a un error de reconstrucción de ~3 por imagen, así que casi no
+      regulariza y el latente se expande (KL de 113 a 1293). Es lo esperado con
+      el peso del paper, y es precisamente por lo que Stable Diffusion reescala
+      el latente por 1/σ antes de difundir.
+- [x] **Infraestructura para el entrenamiento largo, extraída a la biblioteca.**
+      La lógica de checkpoint vivía dentro de `train_diffusion`, y el
+      autoencoder necesitaba exactamente lo mismo. Copiarla habrían sido ~150
+      líneas duplicadas que acabarían divergiendo, justo donde un descuido no da
+      error sino un entrenamiento que continúa mal. Ahora está en
+      `entrenamiento/checkpoint.h`: `RegistroSellado` (manda el sello salvo
+      contradicción explícita), `GuardarCheckpoint` (transaccional, con un
+      identificador común), `ComprobarMismoCheckpoint`, el estado de Adam, la
+      tasa con calentamiento y coseno, la semilla por iteración y las rutas
+      archivadas. Cubierto por el Test 60.
+
+      **La extracción no cambió un bit**: con el binario de antes como
+      referencia, `train_diffusion` produce pesos, EMA y momentos de Adam
+      idénticos en las dos particiones y en las copias archivadas, los
+      metadatos coinciden clave a clave, la reanudación sigue siendo exacta y el
+      checkpoint antiguo del escalón 5 se sigue reanudando.
+
+      `train_autoencoder` gana todo eso, más validación con `DataLoader::Partir`,
+      persistencia sellada de `Codificador` y `Decodificador`, PNG en cada
+      evaluación y **el control acordado**: un compresor tonto que guarda los
+      mismos números que el latente, reduciendo por promedio y ampliando por
+      bilineal. Sobre 1000 imágenes de validación marca el listón en **15.0 dB
+      con C=1, 16.5 con C=2 y 19.5 con C=4**. Verificado: reanudar sin opciones
+      da pesos y Adam idénticos, la partición es determinista, y el sello
+      contradicho y la mezcla de checkpoints se rechazan.
+
+      Una diferencia que se midió en vez de suponerse: la puerta de sobreajuste
+      bajó de 31.98 a 27.27 dB con el entrenador nuevo. Era el coseno: con
+      `lr_min = 0` por defecto la tasa llega a cero en un run corto, mientras
+      que la puerta la mantenía constante. Con `lr_min = lr` vuelve a 31.53 dB;
+      el resto sale de la nueva siembra por iteración.
+
+- [x] **Entrenamiento sobre MNIST y barrido de `C`.** Tres runs idénticos salvo
+      por los canales del latente: 18 000 iteraciones (10 épocas sobre 57 000
+      imágenes), unos 78 minutos cada uno, evaluados sobre 1 000 imágenes de
+      validación.
+
+      | `C` | Números del latente | Compresión | Referencia | PSNR validación | Ventaja |
+      | --- | --- | --- | --- | --- | --- |
+      | 1 | 64 | 16× | 15.01 dB | 29.35 dB | +14.34 dB |
+      | 2 | 128 | 8× | 16.45 dB | 30.90 dB | +14.46 dB |
+      | **4** | 256 | 4× | 19.46 dB | **33.23 dB** | +13.77 dB |
+
+      Los tres superan con claridad al compresor tonto del mismo tamaño, y en
+      los tres el PSNR de entrenamiento y el de validación van a la par —menos de
+      0.1 dB—: generaliza, no memoriza.
+
+      **Se elige `C = 4`, y la razón se midió.** Difundir cuesta prácticamente lo
+      mismo con cualquier `C`, porque el coste de la U-Net lo domina su anchura
+      interna y no los canales de entrada:
+
+      | Entrada de la U-Net | ms/paso |
+      | --- | --- |
+      | Latente 8×8, C = 1 | 39.3 |
+      | Latente 8×8, C = 4 | 40.3 |
+      | Píxeles 32×32 | **251.8** |
+
+      De paso, ahí está medida **la promesa del paper**: difundir en el latente es
+      **6.3 veces más barato** que en píxeles. Con el mismo coste conviene la
+      mejor reconstrucción, que además es el **techo de calidad** de la Fase 19.
+
+- [x] **Escala del latente sellada, y la `UNet2D` lo acepta.** `--medir_escala`
+      codifica la validación, mide la distribución del latente y lo guarda en el
+      sello de los tres archivos, sin entrenar. Con `C = 4`: media **−0.6936**,
+      sigma **0.6090**.
+
+      **Una diferencia con el paper, medida.** Allí basta con dividir por σ
+      porque sus latentes ya salen centrados; aquí la media está a más de una
+      desviación de cero, así que se sella **media y escala** y la Fase 19 usará
+      `(z − media) × escala`. Difundir sobre un latente descentrado no da ningún
+      error: solo imágenes peores, y el calendario de ruido deja de corresponder.
+
+      La misma orden comprueba lo que exige el criterio de salida: la `UNet2D`
+      acepta el latente `8×8×4` tal cual y devuelve la misma forma.
+
+**Criterio de salida: cumplido.** Reconstrucción de validación medida (33.23 dB
+con `C = 4`, +13.8 dB sobre el compresor equivalente) y un latente 8×8×4 que
+`UNet2D` acepta, con su escala sellada en el checkpoint. La guía de uso está en
+[GUIA_AUTOENCODER.md](../GUIA_AUTOENCODER.md). La difusión sobre ese latente y la comparación
+píxel contra latente con el mismo presupuesto son la Fase 19 (LDM-2).
+
+**Evaluación decidida:** para LDM-2 se usará **FID con un clasificador MNIST
+entrenado en NeuralSuite**, calculando la distancia de Fréchet con sus
+características. Es lo habitual en la literatura sobre MNIST y mantiene la premisa
+de «solo NeuralSuite»; importar Inception habría roto esa premisa y además es un
+uso forzado —está pensada para imágenes naturales de 299×299—. Exige implementar
+la raíz de matrices simétricas (Jacobi), con paridad contra scipy. El LDM-1 no
+lo necesita: un autoencoder se evalúa por reconstrucción.
+
+## Lo que cada capa de verificación encontró
+
+Vale la pena registrarlo, porque justifica el orden del plan: cada capa
+detectó defectos que la anterior no podía ver.
+
+| Capa                       | Encontró                                                          |
+| -------------------------- | ----------------------------------------------------------------- |
+| Lectura del código         | Los dos P0 de gradientes; que `LSTM` no era una LSTM               |
+| Gradient checks            | Nada nuevo — pero fijan las correcciones como regresión            |
+| Mutación de las pruebas    | Que la prueba de `GraphConv` no comprobaba lo que decía            |
+| Prueba de ida y vuelta     | Que el número mágico entraba en el checksum al escribir y no al leer |
+| Paridad contra PyTorch     | Detecta errores de semántica que el gradient check no puede ver    |
+| Pruebas de dependencia     | De qué entradas depende cada salida: un `BiLSTM` que no mirara hacia atrás sería derivable y consistente consigo mismo |
+| Integración continua       | Que Windows nunca compiló; dos rutas que solo existían en una máquina |
+
+El gradient checking compara el código consigo mismo: confirma que el
+`Backward` deriva el `Forward` escrito, no que ese `Forward` sea lo que dice
+ser. Por eso un gradient check sobre la `LSTM` original **habría pasado**.
+
+Dos lecciones que se repitieron lo bastante como para anotarlas:
+
+**Probar que lo correcto pasa importa tanto como probar que lo incorrecto
+falla.** El formato NSF rechazaba bien las seis situaciones inválidas, pero
+tampoco aceptaba las válidas: el número mágico se sumaba al checksum al
+escribir y no al leer. Solo la prueba de ida y vuelta lo vio.
+
+**El código que funciona en una sola máquina no da síntoma hasta que sale de
+ella.** Aparecieron una ruta absoluta del directorio del autor en el arnés de
+paridad y rutas `/tmp` en la prueba de serialización, que no existen en
+Windows. Ninguna verificación local podía detectarlo.
+

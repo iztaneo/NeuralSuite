@@ -157,3 +157,23 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           ASAN_OPTIONS: detect_leaks=1
         run: ctest --output-on-failure --timeout 900
+
+  # La documentacion tambien se rompe, solo que en silencio: dos planes ya
+  # ejecutados siguieron anunciando "RoPE pendiente" durante meses, y mover un
+  # documento de carpeta dejo media docena de enlaces apuntando a la nada. Este
+  # job convierte ese tipo de error en un fallo visible.
+  docs:
+    name: Coherencia de la documentacion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Enlaces, rutas de codigo y documentos huerfanos
+        run: python3 tools/docs/comprobar_docs.py
+
+      - name: Cifras del proyecto al dia
+        run: python3 tools/docs/update_stats.py --comprobar

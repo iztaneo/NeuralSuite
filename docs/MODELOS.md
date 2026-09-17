@@ -8,6 +8,14 @@ Ninguno se versiona en git: `release/` está excluido. Se reproducen con los
 comandos de aquí, o se distribuyen como adjuntos de un
 [GitHub Release](https://github.com/iztaneo/NeuralSuite/releases).
 
+**Cada ficha lleva su procedencia**: el commit con el que se entrenó, el hash del
+conjunto de datos, la semilla, el build y la máquina. Sin eso, un número medido
+no se puede volver a obtener, y en unos meses nadie sabría con qué código salió.
+
+Todos los runs se hicieron en la misma máquina: **Apple M5, 10 núcleos**, macOS
+26, **AppleClang 17.0.0**, build `Release` del `Makefile` (`-O3`, sin
+`-march=native`), en CPU y con un solo proceso.
+
 ---
 
 ## 1. `es_base` — modelo de lenguaje en español
@@ -19,6 +27,17 @@ comandos de aquí, o se distribuyen como adjuntos de un
 | **Tamaño** | ~858 000 parámetros: 4 capas, 4 cabezas, embedding de 128, contexto de 128 |
 | **Datos** | 4.9 M caracteres de siete obras de dominio público (Cervantes, Clarín, Pardo Bazán, Unamuno) |
 | **Entrenamiento** | 5 000 iteraciones, lote 16, **21.8 minutos** |
+
+**Procedencia**
+
+| | |
+| --- | --- |
+| Fecha del run | 2026-09-08 |
+| Commit vigente | `4d3c286` |
+| Datos | `corpus/es/train.txt`, SHA-256 `bb77e27d77cbf7f8…` |
+| Semilla | la del programa (el RNG de datos se fija con 1337 en `train_llm`) |
+| Checkpoint | `es_base.bin`, SHA-256 `ea0609e93a7954e4…` |
+| Vocabulario | `es_base_vocab.txt`, 113 caracteres más `<UNK>` |
 
 ### Cómo se entrenó
 
@@ -37,7 +56,12 @@ Con `eval_llm --completo`, sobre las particiones **enteras**:
 | **test: Blasco Ibáñez, autor nunca visto** | 1 568 768 | **1.8292** | **6.23** |
 
 El orden `train < val < test` es el correcto, y la distancia al autor apartado
-—0.091 nats— es la esperable. **Generaliza al español**, no memoriza sus autores.
+—0.091 nats— es pequeña. **Generaliza al autor apartado**: la perplejidad pasa de
+5.69 en entrenamiento a 6.23 sobre un autor que no se usó para entrenar.
+
+Conviene no estirar esa conclusión. Un autor apartado **no demuestra**
+generalización al español en sentido amplio, ni descarta memorización parcial de
+fragmentos: demuestra que el modelo no depende de haber visto ese texto.
 
 ### Qué hace y qué no
 
@@ -62,6 +86,17 @@ idioma, no lo que significa.
 | **Datos** | 57 000 imágenes de MNIST (3 000 apartadas para validación) |
 | **Entrenamiento** | 80 000 iteraciones, lote 32, **4 h 50 min** |
 
+**Procedencia**
+
+| | |
+| --- | --- |
+| Fecha del run | 2026-09-12 |
+| Commit vigente | `26e9f73`, **más un parche sin commitear** que solo cambiaba el buffer de salida del log, después commiteado como `a817348`. No afecta al cálculo |
+| Datos | MNIST, imágenes SHA-256 `ba891046e6505d7a…`, etiquetas `65a50cbbf4e906d7…` |
+| Semilla | 7 (por defecto); partición **contigua**, las 3 000 últimas |
+| Checkpoint | `unet_mnist.nsf`, SHA-256 `bcf9aca4a092be4e…` |
+| Pesos promediados | `.ema`, SHA-256 `bcc60413415f4c0e…` |
+
 ### Cómo se entrenó
 
 ```bash
@@ -79,9 +114,11 @@ Generando 64 muestras desde ruido puro, con los pesos promediados (`.ema`):
 | Distancia a la vecina más cercana / distancia media | 0.50 | 0.56 |
 | Legibles a ojo | ~45 de 64 | — |
 
-**No copia.** Ese cociente de distancias está lejos del 0.15–0.35 que daba el
-modelo cuando memorizaba 16 imágenes a propósito: las muestras son dígitos
-nuevos, no reproducciones del conjunto.
+**No hay evidencia de copia directa**, según la distancia a la imagen de
+entrenamiento más cercana: el cociente está lejos del 0.15–0.35 que daba el mismo
+modelo cuando memorizaba 16 imágenes a propósito. Es una evidencia fuerte, no una
+demostración de ausencia de memorización: una medida de distancia en píxeles no
+detecta una copia ligeramente desplazada o engrosada.
 
 La brecha de validación se mantuvo plana todo el entrenamiento (+0.0015 a
 +0.0019), así que tampoco memoriza el conjunto grande.
@@ -111,6 +148,21 @@ La brecha de validación se mantuvo plana todo el entrenamiento (+0.0015 a
 | **Tamaño** | 280 969 parámetros; 32 canales, latente de 4 canales |
 | **Datos** | 57 000 imágenes de MNIST rellenadas a 32×32 (3 000 de validación) |
 | **Entrenamiento** | 18 000 iteraciones (10 épocas), lote 32, **78 minutos** |
+
+**Procedencia**
+
+| | |
+| --- | --- |
+| Fecha del run | 2026-09-15 |
+| Commit vigente | `ed3ab61` |
+| Datos | MNIST, imágenes SHA-256 `ba891046e6505d7a…` |
+| Semilla | 7; partición **barajada** con `DataLoader::Partir` |
+| Codificador | `ae_c4.nsf`, SHA-256 `8ad31c7ab6687e67…` |
+| Decodificador | `ae_c4.nsf.dec`, SHA-256 `07ea6b58233fa226…` |
+
+Los hashes del codificador corresponden al archivo **después de sellar la escala
+del latente** con `--medir_escala`: esa orden reescribe los metadatos, así que
+cambia el hash sin cambiar un solo peso.
 
 ### Cómo se entrenó
 

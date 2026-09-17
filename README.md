@@ -4,9 +4,10 @@
 
 [![CI](https://github.com/iztaneo/NeuralSuite/actions/workflows/ci.yml/badge.svg)](https://github.com/iztaneo/NeuralSuite/actions/workflows/ci.yml)
 
-**NeuralSuite** es un framework de aprendizaje profundo escrito en **C++17 puro
-desde cero**: sin PyTorch, TensorFlow, BLAS, Eigen ni bibliotecas externas de IA.
-Entrena, evalúa e infiere modelos reales, y cada pieza se verifica contra PyTorch.
+**NeuralSuite** es un framework de aprendizaje profundo escrito en **C++17**, sin
+PyTorch, TensorFlow, BLAS, Eigen ni ninguna otra biblioteca externa de IA o de
+álgebra lineal: solo la biblioteca estándar. Entrena, evalúa e infiere modelos
+reales, y cada pieza se verifica contra PyTorch.
 
 Es **multiplataforma (Linux, macOS y Windows)** y paraleliza en CPU con
 `std::thread`, sin OpenMP.
@@ -34,6 +35,10 @@ modelos pequeños y MNIST.
 
 El índice completo está en **[docs/](docs/README.md)**. Los principales:
 
+**Para probarlo en diez minutos**
+
+- **[Guía rápida](docs/QUICKSTART.md)**: compilar, ejecutar las pruebas y generar tu primera imagen.
+
 **Para entender el proyecto**
 
 - **[Mapa del código](docs/MAPA_DEL_CODIGO.md)**: qué hay en cada carpeta y en qué orden leerlo.
@@ -52,6 +57,11 @@ El índice completo está en **[docs/](docs/README.md)**. Los principales:
 - **[Teoría e implementación](docs/TEORIA_E_IMPLEMENTACION.md)**: cada concepto con su matemática, su sitio en el código, cómo se verifica y de dónde sale.
 - **[Referencias bibliográficas](docs/REFERENCIAS.md)**: qué artículo implementa cada pieza y en qué nos apartamos de él.
 - **[Cómo se verifica](docs/VERIFICACION.md)**: paridad, diferencias finitas, mutaciones y controles, con los fallos reales que encontró cada capa.
+
+**Para saber qué hay hecho y qué falta**
+
+- **[Estado por componente](docs/ESTADO.md)**: qué existe, qué está verificado, qué está integrado en un modelo y qué ha entrenado de verdad.
+- **[Hoja de ruta](docs/ROADMAP.md)**: lo que falta y en qué orden. El historial fase a fase está en [el diario](docs/history/DIARIO_FASES.md).
 
 ---
 
@@ -197,21 +207,6 @@ en dos.
 Los modelos entrenados se escriben siempre en `release/`, que no se versiona. Los
 que se quieran distribuir se adjuntan a un
 [GitHub Release](https://github.com/iztaneo/NeuralSuite/releases).
-
----
-
-## Documentación
-
-- **[docs/ROADMAP.md](docs/ROADMAP.md)**: la hoja de ruta fase a fase, con los
-  defectos encontrados, las mediciones y las decisiones de diseño. Incluye **el
-  foco del proyecto**: tres columnas (lenguaje, visión y generación) y el puente
-  que las une.
-- **[DOCS_MATHEMATICS.md](DOCS_MATHEMATICS.md)**: derivación matemática de los
-  Transformers.
-- **[DOCS_PROGRAMMING_CPP.md](DOCS_PROGRAMMING_CPP.md)**: patrones de diseño C++17.
-- **[tools/parity/README.md](tools/parity/README.md)** e
-  **[tools/image/README.md](tools/image/README.md)**: las herramientas de
-  comparación.
 
 ---
 

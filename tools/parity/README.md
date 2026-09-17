@@ -50,7 +50,7 @@ comparación queda fuera de tolerancia.
 | `gpt`  | Pérdida, logits y los 28 gradientes de parámetros del `GPTModel`       |
 | `lstm` | Pérdida, secuencia de salida, `dx` y los 4 gradientes frente a `nn.LSTM` |
 | `bilstm` | Lo mismo con `bidirectional=True`: 8 gradientes, y cada mitad de la salida por separado |
-| `crnn` | El OCR completo: logits, `dx` hacia la imagen y los 16 gradientes frente a `src/ocr.py` |
+| `crnn` | El OCR completo: logits, `dx` hacia la imagen y los 16 gradientes frente al `src/ocr.py` de LLMRasec |
 
 ## Diferencias que se controlan
 

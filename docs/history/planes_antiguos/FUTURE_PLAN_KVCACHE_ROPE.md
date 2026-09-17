@@ -1,5 +1,13 @@
 # KV-Cache y RoPE
 
+> **Documento histórico.** Este plan ya se ejecutó: lo que describe como
+> pendiente **está hecho**. Se conserva porque explica el razonamiento de
+> entonces, no porque describa el estado actual.
+>
+> Para el estado vigente: [ROADMAP.md](../../ROADMAP.md) y
+> [ESTADO.md](../../ESTADO.md). Para cómo se hizo: [el diario de
+> ingeniería](../DIARIO_FASES.md).
+
 Este documento cubría dos técnicas planteadas juntas. **Ya no están en el mismo
 estado**, así que conviene leerlas por separado:
 
@@ -17,7 +25,7 @@ reutiliza los tensores K y V ya calculados.
 
 Está implementado en `MultiHeadAttention` (`k_cache_`, `v_cache_`), expuesto por
 `GPTModel::ForwardWithKVCache(token, pos)` y `ClearKVCache()`, y conectado en
-[apps/generate_llm.cpp](../apps/generate_llm.cpp), que además acepta
+[apps/generate_llm.cpp](../../../apps/generate_llm.cpp), que además acepta
 `--no_cache` para desactivarlo.
 
 **Medido** con 4 capas, 4 cabezas, `n_embd` 128, generando 64 tokens tras un
