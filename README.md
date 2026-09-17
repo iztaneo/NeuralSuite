@@ -43,7 +43,7 @@ El índice completo está en **[docs/](docs/README.md)**. Los principales:
 
 - **[Mapa del código](docs/MAPA_DEL_CODIGO.md)**: qué hay en cada carpeta y en qué orden leerlo.
 - **[Arquitectura](docs/ARQUITECTURA.md)**: cómo encaja todo, con diagramas.
-- **[Glosario](docs/GLOSARIO.md)**: cada término explicado una vez.
+- **[Glosario](docs/GLOSARIO.md)**: el vocabulario del código y de los logs, de `shape` a `ᾱ`, explicado una vez.
 
 **Para usarlo**
 
@@ -55,7 +55,7 @@ El índice completo está en **[docs/](docs/README.md)**. Los principales:
 **Para estudiar**
 
 - **[Teoría e implementación](docs/TEORIA_E_IMPLEMENTACION.md)**: cada concepto con su matemática, su sitio en el código, cómo se verifica y de dónde sale.
-- **[Referencias bibliográficas](docs/REFERENCIAS.md)**: qué artículo implementa cada pieza y en qué nos apartamos de él.
+- **[Referencias](docs/REFERENCIAS.md)**: los papers fundamentales con su sitio en el código, cuatro rutas de estudio, libros y cursos, y la trazabilidad pieza a pieza.
 - **[Cómo se verifica](docs/VERIFICACION.md)**: paridad, diferencias finitas, mutaciones y controles, con los fallos reales que encontró cada capa.
 
 **Para saber qué hay hecho y qué falta**

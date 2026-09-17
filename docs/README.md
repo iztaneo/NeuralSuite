@@ -7,7 +7,7 @@
 | [QUICKSTART.md](QUICKSTART.md) | Compilar, comprobar y generar tu primera imagen, en diez minutos |
 | [MAPA_DEL_CODIGO.md](MAPA_DEL_CODIGO.md) | Qué hay en cada carpeta y **en qué orden leerlo**, con tres recorridos según lo que busques |
 | [ARQUITECTURA.md](ARQUITECTURA.md) | Cómo encaja todo, con diagramas: del `Tensor` al modelo que genera imágenes |
-| [GLOSARIO.md](GLOSARIO.md) | Cada término explicado una vez, sin dar nada por sabido |
+| [GLOSARIO.md](GLOSARIO.md) | Los términos del código y los logs, en cuatro líneas cada uno y diez bloques temáticos |
 
 ## Para usar
 

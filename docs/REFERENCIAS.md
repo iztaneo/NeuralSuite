@@ -1,18 +1,17 @@
 # Referencias: de dónde sale cada cosa y dónde estudiarla
 
-Este documento tiene dos mitades y sirven para cosas distintas.
+Cuatro cosas, en este orden:
 
-La **primera** es una biblioteca: libros, cursos, explicaciones en línea e
-implementaciones de referencia, ordenados por tema, con qué cubre cada uno de lo
-que hay implementado aquí. Es lo que leer si quieres **aprender** el fondo.
-
-La **segunda** es la trazabilidad: qué artículo concreto implementa cada pieza,
-dónde vive el código y **en qué nos apartamos del original**. Es lo que consultar
-si quieres **auditar** una implementación o entender por qué no es idéntica al
-artículo.
-
-Al final hay [rutas de estudio](#rutas-de-estudio): itinerarios cerrados que
-combinan lectura, código de este repositorio y la prueba que lo verifica.
+1. **[Los papers fundamentales](#papers-fundamentales)**: los diecisiete
+   artículos sobre los que se sostiene el proyecto, con qué introdujo cada uno,
+   dónde vive en el código y en qué estado está.
+2. **[Rutas de estudio](#rutas-de-estudio)**: cuatro itinerarios cerrados que
+   combinan lectura, código de este repositorio y la prueba que lo verifica.
+3. **[La biblioteca](#la-biblioteca)**: libros, cursos, explicaciones en línea e
+   implementaciones de referencia, con qué cubre cada uno de lo que hay aquí.
+4. **[La trazabilidad, pieza a pieza](#trazabilidad-pieza-a-pieza)**: qué
+   artículo implementa cada componente y **en qué nos apartamos de él**. Es lo
+   que consultar para auditar, no para aprender.
 
 Casi todo lo enlazado es **gratuito y legal**: los autores publican sus libros en
 abierto. Cuando algo solo existe en papel, se da el ISBN y se dice por qué vale
@@ -20,7 +19,122 @@ la pena.
 
 ---
 
-# Parte 1 — La biblioteca
+---
+
+# Papers fundamentales
+
+Si la pregunta es «¿en qué se sostiene todo esto?», la respuesta son estos
+diecisiete artículos. Cada fila dice qué introdujo, dónde vive en el código y en
+qué estado está, con el mismo criterio que [ESTADO.md](ESTADO.md): **P** significa
+paridad comprobada contra PyTorch.
+
+| Año | Artículo | Qué introdujo | Dónde está aquí | Estado |
+| --- | --- | --- | --- | --- |
+| 1986 | Rumelhart, Hinton y Williams. *Learning representations by back-propagating errors* | La retropropagación | Todo el framework | Base de todo; cada capa se comprueba por diferencias finitas |
+| 1997 | Hochreiter y Schmidhuber. *Long Short-Term Memory* | Memoria recurrente con puertas | `include/layers/lstm.h` | ✅ **P**, entrenada en el OCR |
+| 1998 | LeCun et al. *Gradient-based learning applied to document recognition* | La convolución aplicada a visión | `include/layers/conv2d.h` | ✅ **P**, entrenada |
+| 2013 | Kingma y Welling. *[Auto-Encoding Variational Bayes](https://arxiv.org/abs/1312.6114)* | Latentes probabilísticos y reparametrización | `include/latent/gaussiana.h` | ✅ **P**, entrenada en `ae_c4` |
+| 2014 | Goodfellow et al. *[Generative Adversarial Networks](https://arxiv.org/abs/1406.2661)* | Generación adversarial | `demos/demo_gan.cpp` | ⚠️ solo demostración; no es aún el discriminador del autoencoder |
+| 2014 | Kingma y Ba. *[Adam](https://arxiv.org/abs/1412.6980)* | Optimización adaptativa | `include/optimizers.h` | ✅ es el optimizador de los tres modelos |
+| 2015 | He et al. *[Deep Residual Learning](https://arxiv.org/abs/1512.03385)* | Conexiones residuales | `include/layers/resblock2d.h` | ✅ **P**, entrenada en el autoencoder |
+| 2015 | Ronneberger, Fischer y Brox. *[U-Net](https://arxiv.org/abs/1505.04597)* | El esqueleto de la difusión | `include/diffusion/unet.h` | ✅ **P**, entrenada; **sin las capas de atención** del original |
+| 2015 | Shi, Bai y Yao. *[CRNN](https://arxiv.org/abs/1507.05717)* | Leer texto de una imagen | `include/models/ocr.h` | ✅ **P**, entrenada; **sin CTC** |
+| 2016 | Ba, Kiros y Hinton. *[Layer Normalization](https://arxiv.org/abs/1607.06450)* | La normalización del Transformer | `include/layers/layernorm.h` | ✅ **P**, integrada en el GPT |
+| **2017** | **Vaswani et al. *[Attention Is All You Need](https://arxiv.org/abs/1706.03762)*** | **La atención multi-cabeza: el nacimiento de la arquitectura** | `include/layers/attention.h`, `include/gpt.h` | ✅ **P**, entrenada en `es_base` |
+| 2018–19 | Radford et al. *Improving Language Understanding by Generative Pre-Training*; *Language Models are Unsupervised Multitask Learners* | El decodificador solo, autorregresivo | `include/gpt.h` | ✅ **P**, entrenado; tokenizador de caracteres, no BPE |
+| 2018 | Wu y He. *[Group Normalization](https://arxiv.org/abs/1803.08494)* | Normalizar sin depender del lote | `include/layers/groupnorm.h` | ✅ **P**, entrenada |
+| 2020 | Ho, Jain y Abbeel. *[DDPM](https://arxiv.org/abs/2006.11239)* | La difusión como modelo generativo | `include/diffusion/` | ✅ **P**, entrenada en `unet_mnist` |
+| 2020 | Song, Meng y Ermon. *[DDIM](https://arxiv.org/abs/2010.02502)* | Muestreo acelerado y determinista | `include/diffusion/sampler.h` | ✅ **P**; 100 pasos en vez de 1000 |
+| 2021 | Su et al. *[RoFormer (RoPE)](https://arxiv.org/abs/2104.09864)* | La posición por rotación | `include/layers/attention.h`, `include/tensor.h` | ⚠️ **P** e integrado con `--rope`, pero **ningún modelo entrenado lo usa** |
+| 2021 | Rombach et al. *[Latent Diffusion](https://arxiv.org/abs/2112.10752)* | Difundir en el latente, no en los píxeles | `include/latent/autoencoder.h` | ⏳ autoencoder hecho y medido (Fase 18); **generar sobre el latente es la Fase 19** |
+
+Cuatro de esas filas no son verdes, y esa es justo la información que un índice
+de referencias no suele dar: la GAN es una demostración aislada, RoPE está
+implementado pero sin entrenar, y de la difusión latente existe la mitad.
+
+# Rutas de estudio
+
+Cuatro itinerarios cerrados. Cada paso dice **qué leer**, **qué mirar en el
+repositorio** y **qué ejecutar** para comprobar que lo entendiste. Las pruebas se
+lanzan con `./bin/test_suite`; cada una se anuncia con su número.
+
+## Ruta 1 — Entender una red neuronal desde cero
+
+Para quien empieza. Unas dos semanas a ritmo tranquilo.
+
+1. Nielsen, capítulos 1 y 2, y el vídeo de [micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0).
+2. Mira `include/tensor.h` y `include/layers/linear.h`: una capa es una matriz y
+   un sesgo, nada más.
+3. Lee `include/losses.h` y ejecuta `./bin/demo_mlp`.
+4. Estudia cómo se comprueba un gradiente: busca `Test 4` en
+   `tests/test_suite.cpp` —GELU contra diferencias finitas—. Ese patrón se
+   repite en casi todas las 60 pruebas.
+5. Cierra con [Ruder](https://www.ruder.io/optimizing-gradient-descent/) e
+   `include/optimizers.h`.
+
+## Ruta 2 — Del MLP al Transformer
+
+Presupone la ruta 1.
+
+1. [El Transformer ilustrado](https://jalammar.github.io/illustrated-transformer/).
+2. [DOCS_MATHEMATICS.md](../DOCS_MATHEMATICS.md): la derivación propia, con las
+   formas de cada matriz.
+3. `include/layers/attention.h`, en este orden: `MultiHeadAttentionReference`
+   —lenta y obvia— y después la rápida. Son el mismo cálculo.
+4. `include/gpt.h`: bloque, residual, normalización y pesos compartidos.
+5. [El Transformer anotado](https://nlp.seas.harvard.edu/annotated-transformer/)
+   y [«Let's build GPT»](https://www.youtube.com/watch?v=kCc8FmEb1nY) para
+   contrastar con otra implementación.
+6. Entrena el tuyo con [GUIA_LLM.md](GUIA_LLM.md) y compáralo con lo que salió en
+   [MODELOS.md](MODELOS.md).
+7. Extra: RoPE, en Su et al. y en `RopeForward` / `RopeBackward`
+   (`include/tensor.h`), y por qué aquí rota pares adyacentes. El gradiente es
+   la misma rotación por el ángulo opuesto, que es una de las derivaciones más
+   bonitas del repositorio.
+
+## Ruta 3 — Generar imágenes
+
+Presupone la ruta 1. Es la parte con más matemática del proyecto.
+
+1. [Weng sobre difusión](https://lilianweng.github.io/posts/2021-07-11-diffusion-models/),
+   entera. Vuelve a ella cada vez que dudes.
+2. `include/diffusion/schedule.h`: `x_t = √ᾱ·x₀ + √(1−ᾱ)·ε` es toda la parte
+   directa, y está en diez líneas.
+3. `include/diffusion/sampler.h`: DDPM y DDIM, con el detalle del recorte de
+   `x₀`. Ese trozo existe por un defecto real; está contado en
+   [VERIFICACION.md](VERIFICACION.md).
+4. Ejecuta `Test 54`: los muestreadores contra un oráculo analítico.
+5. [GUIA_DIFUSION.md](GUIA_DIFUSION.md), y genera imágenes con un modelo ya
+   entrenado antes de entrenar ninguno.
+6. Para el latente: [Weng sobre VAE](https://lilianweng.github.io/posts/2018-08-12-vae/),
+   `include/latent/gaussiana.h` y [GUIA_AUTOENCODER.md](GUIA_AUTOENCODER.md).
+7. Cierra con [Rombach et al.](https://arxiv.org/abs/2112.10752) y el
+   [código de CompVis](https://github.com/CompVis/latent-diffusion), que es
+   adonde apunta la Fase 19.
+
+## Ruta 4 — Construir un framework, no solo usarlo
+
+La que no cubre ningún curso.
+
+1. [DOCS_PROGRAMMING_CPP.md](../DOCS_PROGRAMMING_CPP.md): los ocho patrones del
+   código, cada uno con el defecto real que lo motivó.
+2. [ARQUITECTURA.md](ARQUITECTURA.md), con los diagramas.
+3. `include/parallel.h` y el capítulo de hilos de Williams: por qué el reparto es
+   dinámico y por qué **ningún hilo reduce sobre otro**.
+4. [VERIFICACION.md](VERIFICACION.md), completo. Es el documento más
+   característico del proyecto: diferencias finitas, paridad, mutación y
+   controles, con lo que encontró cada capa.
+5. `tools/parity/`: exportar pesos, ejecutar las dos versiones, comparar.
+   Reprodúcelo contra [LLMRasec](https://github.com/iztaneo/LLMRasec).
+6. `include/serialization.h` y `include/entrenamiento/checkpoint.h`: qué hace
+   falta guardar para que reanudar sea **idéntico bit a bit**. La respuesta
+   incluye cosas que no son obvias, como el contador de pasos de la EMA.
+7. Compara con [llm.c](https://github.com/karpathy/llm.c), que resuelve el mismo
+   problema en C.
+
+---
+
+# La biblioteca
 
 ## Libros
 
@@ -128,7 +242,7 @@ verificar NeuralSuite.
 
 ---
 
-# Parte 2 — Qué artículo implementa cada pieza
+# Trazabilidad, pieza a pieza
 
 Las desviaciones no son descuidos: casi todas son decisiones tomadas por lo que
 cabe en una CPU o por la premisa del proyecto de no depender de pesos ajenos.
@@ -260,85 +374,3 @@ Tres cosas que suelen darse por sentadas y aquí se decidieron a propósito:
 - **La verificación contra PyTorch** no viene de ningún artículo: es la práctica
   de comparar contra una implementación de referencia, descrita en
   [VERIFICACION.md](VERIFICACION.md).
-
----
-
-# Rutas de estudio
-
-Cuatro itinerarios cerrados. Cada paso dice **qué leer**, **qué mirar en el
-repositorio** y **qué ejecutar** para comprobar que lo entendiste. Las pruebas se
-lanzan con `./bin/test_suite`; cada una se anuncia con su número.
-
-## Ruta 1 — Entender una red neuronal desde cero
-
-Para quien empieza. Unas dos semanas a ritmo tranquilo.
-
-1. Nielsen, capítulos 1 y 2, y el vídeo de [micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0).
-2. Mira `include/tensor.h` y `include/layers/linear.h`: una capa es una matriz y
-   un sesgo, nada más.
-3. Lee `include/losses.h` y ejecuta `./bin/demo_mlp`.
-4. Estudia cómo se comprueba un gradiente: busca `Test 4` en
-   `tests/test_suite.cpp` —GELU contra diferencias finitas—. Ese patrón se
-   repite en casi todas las 60 pruebas.
-5. Cierra con [Ruder](https://www.ruder.io/optimizing-gradient-descent/) e
-   `include/optimizers.h`.
-
-## Ruta 2 — Del MLP al Transformer
-
-Presupone la ruta 1.
-
-1. [El Transformer ilustrado](https://jalammar.github.io/illustrated-transformer/).
-2. [DOCS_MATHEMATICS.md](../DOCS_MATHEMATICS.md): la derivación propia, con las
-   formas de cada matriz.
-3. `include/layers/attention.h`, en este orden: `MultiHeadAttentionReference`
-   —lenta y obvia— y después la rápida. Son el mismo cálculo.
-4. `include/gpt.h`: bloque, residual, normalización y pesos compartidos.
-5. [El Transformer anotado](https://nlp.seas.harvard.edu/annotated-transformer/)
-   y [«Let's build GPT»](https://www.youtube.com/watch?v=kCc8FmEb1nY) para
-   contrastar con otra implementación.
-6. Entrena el tuyo con [GUIA_LLM.md](GUIA_LLM.md) y compáralo con lo que salió en
-   [MODELOS.md](MODELOS.md).
-7. Extra: RoPE, en Su et al. y en `RopeForward` / `RopeBackward`
-   (`include/tensor.h`), y por qué aquí rota pares adyacentes. El gradiente es
-   la misma rotación por el ángulo opuesto, que es una de las derivaciones más
-   bonitas del repositorio.
-
-## Ruta 3 — Generar imágenes
-
-Presupone la ruta 1. Es la parte con más matemática del proyecto.
-
-1. [Weng sobre difusión](https://lilianweng.github.io/posts/2021-07-11-diffusion-models/),
-   entera. Vuelve a ella cada vez que dudes.
-2. `include/diffusion/schedule.h`: `x_t = √ᾱ·x₀ + √(1−ᾱ)·ε` es toda la parte
-   directa, y está en diez líneas.
-3. `include/diffusion/sampler.h`: DDPM y DDIM, con el detalle del recorte de
-   `x₀`. Ese trozo existe por un defecto real; está contado en
-   [VERIFICACION.md](VERIFICACION.md).
-4. Ejecuta `Test 54`: los muestreadores contra un oráculo analítico.
-5. [GUIA_DIFUSION.md](GUIA_DIFUSION.md), y genera imágenes con un modelo ya
-   entrenado antes de entrenar ninguno.
-6. Para el latente: [Weng sobre VAE](https://lilianweng.github.io/posts/2018-08-12-vae/),
-   `include/latent/gaussiana.h` y [GUIA_AUTOENCODER.md](GUIA_AUTOENCODER.md).
-7. Cierra con [Rombach et al.](https://arxiv.org/abs/2112.10752) y el
-   [código de CompVis](https://github.com/CompVis/latent-diffusion), que es
-   adonde apunta la Fase 19.
-
-## Ruta 4 — Construir un framework, no solo usarlo
-
-La que no cubre ningún curso.
-
-1. [DOCS_PROGRAMMING_CPP.md](../DOCS_PROGRAMMING_CPP.md): los ocho patrones del
-   código, cada uno con el defecto real que lo motivó.
-2. [ARQUITECTURA.md](ARQUITECTURA.md), con los diagramas.
-3. `include/parallel.h` y el capítulo de hilos de Williams: por qué el reparto es
-   dinámico y por qué **ningún hilo reduce sobre otro**.
-4. [VERIFICACION.md](VERIFICACION.md), completo. Es el documento más
-   característico del proyecto: diferencias finitas, paridad, mutación y
-   controles, con lo que encontró cada capa.
-5. `tools/parity/`: exportar pesos, ejecutar las dos versiones, comparar.
-   Reprodúcelo contra [LLMRasec](https://github.com/iztaneo/LLMRasec).
-6. `include/serialization.h` y `include/entrenamiento/checkpoint.h`: qué hace
-   falta guardar para que reanudar sea **idéntico bit a bit**. La respuesta
-   incluye cosas que no son obvias, como el contador de pasos de la EMA.
-7. Compara con [llm.c](https://github.com/karpathy/llm.c), que resuelve el mismo
-   problema en C.
