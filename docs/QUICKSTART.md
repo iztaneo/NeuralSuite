@@ -37,6 +37,8 @@ que es lo que demuestra que la arquitectura es la que dice ser— se explica en
 
 ## 3. Ver una red aprender, sin datos ni descargas
 
+Esto funciona **recién clonado el repositorio**, sin descargar nada:
+
 ```bash
 ./bin/demo_mlp
 ```
@@ -46,16 +48,40 @@ sobre grafos, autograd, difusión. Todas son autocontenidas, generan sus propios
 datos y terminan en segundos. El código de cada una está en `demos/`, y está
 escrito para leerse.
 
+Lo más cercano a la difusión que funciona sin descargar nada es
+
+```bash
+./bin/demo_diffusion
+```
+
+que entrena un desruidificador diminuto sobre vectores sintéticos: añade ruido
+según el calendario y aprende a predecirlo, que es el núcleo del DDPM y cabe en
+una pantalla. **No muestrea**: no genera imágenes. Para eso hacen falta el
+modelo entrenado y `sample_diffusion`.
+
 ---
 
-## 4. Generar imágenes con un modelo ya entrenado
+## 4. Lo que necesita descargas
 
-Los modelos entrenados **no están en el repositorio**: `release/` no se versiona
-porque son binarios de megabytes. Se descargan del
-[GitHub Release](https://github.com/iztaneo/NeuralSuite/releases) y se dejan en
-`release/`.
+El repositorio contiene **el código, no los datos ni los pesos**. Ni el corpus,
+ni MNIST, ni los modelos entrenados se versionan: son megabytes derivados, y git
+no olvida lo que entra en su historial.
 
-Con `unet_mnist.nsf.ema` en su sitio:
+| Para… | Hace falta | Cómo se consigue |
+| --- | --- | --- |
+| Entrenar el LLM | `corpus/es/train.txt` | `python3 tools/corpus/preparar_corpus.py` (descarga de Project Gutenberg) |
+| Entrenar difusión o autoencoder | `corpus/mnist/` | `python3 tools/data/descargar_mnist.py` |
+| Generar con los modelos de [MODELOS.md](MODELOS.md) | `release/*.nsf`, `release/es_base.bin` | **Todavía no hay ningún GitHub Release publicado**: hoy solo los tiene quien los entrene |
+
+Esa última fila es una limitación real y conviene decirla sin rodeos: los
+resultados de [MODELOS.md](MODELOS.md) son reproducibles con los comandos que
+están ahí —hay procedencia completa, con hashes y semillas—, pero **no
+descargables**. Mientras no exista el release, los apartados 5 y 6 requieren
+haber entrenado antes.
+
+## 5. Generar imágenes, con el modelo de difusión entrenado
+
+Con `release/unet_mnist.nsf.ema` en su sitio:
 
 ```bash
 ./bin/sample_diffusion --muestreador ddim --n 64 --salida muestras.png
@@ -66,7 +92,7 @@ tarda unos 10 segundos; con `--muestreador ddpm` y los 1000 pasos, unos dos
 minutos y la calidad es algo mejor. Los detalles, en
 [GUIA_DIFUSION.md](GUIA_DIFUSION.md).
 
-## 5. Generar texto en español
+## 6. Generar texto en español
 
 Con `es_base.bin` y `es_base_vocab.txt` en `release/`:
 
@@ -80,10 +106,15 @@ no un defecto; está explicado en [MODELOS.md](MODELOS.md).
 
 ---
 
-## 6. Entrenar algo tú mismo
+## 7. Entrenar algo tú mismo
 
 El entrenamiento más corto que da un resultado medible es el modelo de lenguaje:
-**5 000 iteraciones en 21.8 minutos** en un Apple M5, con el corpus incluido.
+**5 000 iteraciones en 21.8 minutos** en un Apple M5. Primero el corpus, que
+tarda un par de minutos en descargarse y limpiarse:
+
+```bash
+python3 tools/corpus/preparar_corpus.py
+```
 
 ```bash
 ./bin/train_llm --data_path corpus/es/train.txt --out_file release/mi_modelo.bin --vocab_file release/mi_vocab.txt --max_iters 5000 --block_size 128 --n_embd 128 --n_layer 4 --n_head 4 --batch_size 16

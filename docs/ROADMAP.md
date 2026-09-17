@@ -7,8 +7,10 @@ commit que lo cerró.
 El principio que ordena el plan: **cada operación debe ser correcta,
 comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 
-Este documento es el diario de ingeniería: qué se construyó, qué falló y qué se
-midió. Para **usar** el proyecto están las guías:
+Este documento dice **qué falta y en qué orden**. Lo que ya ocurrió —qué se
+construyó, qué falló y qué se midió— está en
+[history/DIARIO_FASES.md](history/DIARIO_FASES.md); el estado pieza a pieza, en
+[ESTADO.md](ESTADO.md). Para **usar** el proyecto están las guías:
 [LLM](GUIA_LLM.md), [difusión](GUIA_DIFUSION.md),
 [autoencoder](GUIA_AUTOENCODER.md), [cómo se verifica](VERIFICACION.md) y las
 [referencias bibliográficas](REFERENCIAS.md) de cada pieza.
@@ -164,7 +166,8 @@ grep -cE '^ *- \[x\]' docs/history/DIARIO_FASES.md docs/ROADMAP.md
 | Estructura | ✅ interfaz en `include/`, implementación en `src/`, programas en `demos/`, `apps/` y `tests/` |
 | Lenguaje | ✅ GPT entrenado en español, perplejidad **6.23** sobre un autor nunca visto; RoPE y KV-Cache deslizante |
 | Difusión en píxeles | ✅ 80 000 iteraciones sobre MNIST, DDPM y DDIM, **genera dígitos nuevos** |
-| Difusión latente | ✅ autoencoder (Fase 18): **33.2 dB**, y difundir en el latente cuesta **6.3× menos**. Falta generar sobre él (Fase 19) |
+| Autoencoder latente | ✅ Fase 18: **33.2 dB**, y difundir en el latente cuesta **6.3× menos** que en píxeles |
+| Difusión latente (LDM-2) | ⏳ Fase 19: generar sobre ese latente está **por hacer** |
 | Reproducibilidad | ✅ reanudar da pesos **idénticos bit a bit**; checkpoints sellados y transaccionales |
 | Documentación | ✅ guías de uso de los tres flujos y documento de verificación |
 
@@ -214,40 +217,35 @@ sitio y la medición a otro.
 
 ## Horizonte — sin casillas, deliberadamente
 
-Latent diffusion, compresión perceptual y condicionamiento multimodal son la
-**dirección declarada** del proyecto, no un plan con casillas. Se escriben aquí
-para que el rumbo esté claro y para no volver a discutirlo desde cero, pero no se
-trocean en tareas hasta que la Fase 17 esté cerrada.
+Lo que viene después de la Fase 19 es la **dirección declarada** del proyecto, no
+un plan con casillas. Se escribe aquí para que el rumbo esté claro y para no
+volver a discutirlo desde cero, pero no se trocea en tareas hasta que la fase
+anterior esté cerrada y medida.
 
 La razón es la que ya conoce este documento: **un plan de once fases inalcanzables
 es otra lista que diverge**, y este proyecto ya arregló siete.
 
-- **Autoencoder convolucional** (0.10). El actual es `Linear(8,4) → Linear(4,2)`:
-  densas, no convolucional, sin latente espacial. Habría que rehacerlo con
-  `ConvEncoder`/`ConvDecoder`, latente `[B,C,H/f,W/f]` con `f=4`, y KL.
-- **Latent diffusion** (0.12). El experimento interesante sería comparar, con el
-  mismo presupuesto, DDPM en píxeles contra DDPM en latente: tiempo de
-  entrenamiento, tiempo de muestreo, memoria pico y calidad. Eso ya es un
-  experimento y no una demo. Y la aritmética favorece al latente: a `f=4`, un
-  32×32 pasa a 8×8, dieciséis veces menos posiciones.
-- **Compresión perceptual** (0.13), donde la GAN actual dejaría de ser una demo
-  aislada para convertirse en el discriminador por parches del autoencoder.
-- **Condicionamiento texto→imagen** (0.14), una vez exista `CrossAttention`.
+- **Compresión perceptual.** La GAN de `demos/demo_gan.cpp` dejaría de ser una
+  demo aislada para convertirse en el discriminador por parches del autoencoder,
+  como en el artículo de Rombach. Hoy el autoencoder entrena solo con pérdida
+  cuadrática.
+- **Condicionamiento texto→imagen.** `CrossAttention` ya existe y está verificada
+  contra PyTorch, pero **ningún modelo la usa**: falta el puente entre el
+  Transformer y la U-Net, y un corpus de pares texto-imagen que hoy no hay.
+- **Muestreo guiado.** Sin condicionamiento no hay guía que aplicar; es el paso
+  siguiente al anterior, no uno paralelo.
 
 ### Dos dependencias ocultas que hay que resolver antes de prometer nada
 
-- **FID** necesita una Inception preentrenada y **perceptual loss** una VGG.
-  Ninguna se puede entrenar en CPU. O se importan pesos de PyTorch —y entonces la
-  métrica deja de ser «solo NeuralSuite», que es la premisa del proyecto— o esas
-  fases no se pueden evaluar tal como están escritas. Hay que decidirlo antes,
-  no al llegar.
-  **Resuelto para FID** al abrir la Fase 18: clasificador MNIST propio. Queda
-  abierto para la pérdida perceptual.
+- **La pérdida perceptual necesita una VGG preentrenada**, que no se puede
+  entrenar en CPU. O se importan pesos ajenos —y entonces deja de ser «solo
+  NeuralSuite», que es la premisa del proyecto— o esa idea no se puede evaluar
+  como está escrita. Hay que decidirlo antes, no al llegar.
+  El mismo problema con **FID** se resolvió al abrir la Fase 18: se calculará con
+  un clasificador MNIST propio, no con Inception.
 - **BF16/FP16** en CPU sin AVX512-BF16 ni AMX no da ganancia, y convertir un
   framework que usa `float` en todas partes es un refactor grande. No es una
   opción de compilador.
-
----
 
 ---
 

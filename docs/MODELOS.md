@@ -5,8 +5,10 @@ Cada ficha dice **con qué datos**, **cómo se entrenó**, **qué resultados dio
 medidos** y **qué no hace**.
 
 Ninguno se versiona en git: `release/` está excluido. Se reproducen con los
-comandos de aquí, o se distribuyen como adjuntos de un
-[GitHub Release](https://github.com/iztaneo/NeuralSuite/releases).
+comandos de aquí. **Todavía no hay ningún
+[GitHub Release](https://github.com/iztaneo/NeuralSuite/releases) publicado**,
+así que hoy estos pesos solo los tiene quien los entrene: lo de abajo es
+reproducible, no descargable.
 
 **Cada ficha lleva su procedencia**: el commit con el que se entrenó, el hash del
 conjunto de datos, la semilla, el build y la máquina. Sin eso, un número medido
@@ -121,7 +123,9 @@ demostración de ausencia de memorización: una medida de distancia en píxeles 
 detecta una copia ligeramente desplazada o engrosada.
 
 La brecha de validación se mantuvo plana todo el entrenamiento (+0.0015 a
-+0.0019), así que tampoco memoriza el conjunto grande.
++0.0019): **sin señales de sobreajuste según esa métrica**. Que la brecha no se
+abra descarta la memorización que se vería en la pérdida, no cualquier forma de
+memorización.
 
 ### Qué hace y qué no
 
@@ -209,8 +213,10 @@ Sellada en el checkpoint: media **−0.6936**, sigma **0.6090**, de donde
   la Fase 19.
 - **Pérdida cuadrática**, sin la perceptual ni el discriminador del artículo de
   Rombach, porque la perceptual necesitaría una VGG preentrenada.
-- Su reconstrucción de 33.2 dB es el **techo de calidad** de lo que se genere
-  sobre él.
+- Los 33.2 dB miden el **límite observado de fidelidad de reconstrucción**: lo
+  que el latente es capaz de representar. Acota lo que puede salir de él, pero no
+  es una predicción de la calidad de lo generado: una imagen nueva no tiene
+  original contra el que calcular PSNR.
 
 ---
 

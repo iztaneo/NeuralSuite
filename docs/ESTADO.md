@@ -29,7 +29,12 @@ Estado medido en el commit de este documento. La forma de comprobarlo está en
 | Serialización NSF | ✅ | ✅ | ✅ | ✅ |
 | Checkpoint sellado y transaccional | ✅ | ✅ | ✅ | ✅ |
 | `DataLoader` y lector de MNIST | ✅ | ✅ | ✅ | ✅ |
-| Tokenizador de caracteres y de bytes | ✅ | ✅ | ✅ | ✅ |
+| `CharTokenizer` | ✅ | ✅ | ✅ GPT | ✅ `es_base` |
+| `ByteTokenizer` | ✅ | ✅ | ❌ **solo lo usan las pruebas** | — |
+
+`train_llm` construye siempre un `CharTokenizer`. El de bytes existe, está
+probado y sería lo correcto para texto no ASCII, pero hoy ningún programa lo
+instancia.
 
 **El autograd está verificado pero no lo usa ningún modelo.** Fue una decisión
 medida, no un olvido: las parejas `LinearAutograd` y `EmbeddingAutograd`
@@ -48,7 +53,7 @@ detalle, en [AUTOGRAD_CAPAS.md](AUTOGRAD_CAPAS.md).
 | `LSTM` y `BiLSTM` | ✅ | ✅ **P** | ✅ OCR | ✅ |
 | `Embedding` | ✅ | ✅ **P** | ✅ GPT | ✅ |
 | `MultiHeadAttention` | ✅ | ✅ **P** | ✅ GPT | ✅ |
-| RoPE | ✅ | ✅ **P** | ✅ GPT, **opcional** (`--rope`) | ⚠️ el modelo de referencia usa posición aprendida |
+| RoPE | ✅ | ✅ **P** | ✅ GPT, **opcional** (`--rope`) | ❌ **ningún modelo entrenado lo usa**: `es_base` lleva posición aprendida |
 | KV-Cache con ventana deslizante | ✅ | ✅ | ✅ `generate_llm` | n/a |
 | `LayerNormLayer` | ✅ | ✅ **P** | ✅ GPT | ✅ |
 | `GroupNormLayer` | ✅ | ✅ **P** | ✅ difusión y autoencoder | ✅ |
@@ -61,10 +66,15 @@ detalle, en [AUTOGRAD_CAPAS.md](AUTOGRAD_CAPAS.md).
 | `GraphConv` | ✅ | ✅ | ⚠️ solo demo | — |
 | Activaciones (ReLU, GELU, SiLU, …) | ✅ | ✅ **P** | ✅ | ✅ |
 
-**Las tres filas en rojo son las que más confusión causan.** `RMSNorm` y
-`SwiGLU` son piezas del «transformer moderno» que se construyeron y verificaron,
-pero el `GPTModel` sigue usando `LayerNorm` y un MLP con GELU. `CrossAttention`
-se construyó para el puente texto→imagen, que todavía no existe.
+**Las filas en rojo son las que más confusión causan.** `RMSNorm` y `SwiGLU` son
+piezas del «transformer moderno» que se construyeron y verificaron, pero el
+`GPTModel` sigue usando `LayerNorm` y un MLP con GELU. `CrossAttention` se
+construyó para el puente texto→imagen, que todavía no existe.
+
+RoPE es un caso distinto y merece leerse con cuidado: **sí está integrado** —el
+GPT lo usa con `--rope`, y su paridad contra PyTorch pasa— pero el único modelo
+de lenguaje entrenado y medido, `es_base`, se entrenó con posición aprendida.
+Según la definición de la última columna, eso es un guion, no un aviso.
 
 ---
 
