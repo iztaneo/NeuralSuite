@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Descarga y prepara un corpus de español para entrenar el LLM.
 
 Por qué existe

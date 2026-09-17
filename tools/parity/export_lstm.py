@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Exporta un nn.LSTM de PyTorch para compararlo con la capa LSTM de C++.
 
 Esta comparación es la que da sentido a la reimplementación de la capa: un

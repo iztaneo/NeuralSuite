@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Recalcula las cifras del proyecto que aparecen en la documentación.
 
 Un documento que dice «26 500 líneas» o «60 pruebas» envejece en silencio: nadie

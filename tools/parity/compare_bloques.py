@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Contrasta RMSNorm y SiLU de C++ contra los de PyTorch."""
 
 import argparse

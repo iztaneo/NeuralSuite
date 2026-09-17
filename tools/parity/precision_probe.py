@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Decide si una discrepancia de paridad es un defecto o ruido de float32.
 
 Calcula el mismo GPT en float64 y lo usa como referencia de "valor verdadero".

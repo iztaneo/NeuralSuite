@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Comprueba que la documentación no miente sobre el árbol de archivos.
 
 Existe por un caso real: dos planes ya ejecutados siguieron anunciando «RoPE

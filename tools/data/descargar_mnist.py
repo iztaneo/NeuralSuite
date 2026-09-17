@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Descarga MNIST y lo deja en formato IDX, listo para el lector de C++.
 
 MNIST son 70 000 imágenes de dígitos manuscritos de 28×28, etiquetadas del 0 al

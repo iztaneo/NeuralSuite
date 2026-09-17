@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Exporta el CRNN de referencia (LLMRasec/src/ocr.py) para compararlo con C++.
 
 Es la comparación que cierra el OCR. Las pruebas internas del CRNN son gruesas

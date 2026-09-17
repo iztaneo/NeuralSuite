@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Exporta RMSNorm, SiLU, GroupNorm y el remuestreo 2D, para comparar con C++.
 
 Por qué hace falta, si ya hay gradient check: un gradient check confirma que el

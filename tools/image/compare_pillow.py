@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Compara el decodificador de imagen de NeuralSuite contra Pillow, byte a byte.
 
 Es el mismo planteamiento que `tools/parity` aplica a PyTorch: una

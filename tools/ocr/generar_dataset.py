@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Genera un corpus de líneas de texto renderizadas con tipografías reales.
 
 Escribe imágenes PNG en escala de grises y un archivo de etiquetas, de modo que

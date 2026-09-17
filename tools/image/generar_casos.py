@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Genera el banco de imágenes con que se compara el decodificador.
 
 Cada archivo se escribe junto a un `.npy` que guarda los píxeles tal y como los

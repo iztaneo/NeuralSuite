@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Exporta un GPT de PyTorch (LLMRasec) para compararlo con el GPT de C++.
 
 Escribe los pesos en el orden exacto que devuelve `GPTModel::GetParameters()`

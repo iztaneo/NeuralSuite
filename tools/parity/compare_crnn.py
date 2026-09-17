@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Compara el CRNN de C++ contra la implementación de referencia en PyTorch.
 
 Contrasta la pérdida, la secuencia completa de logits, el gradiente de la imagen

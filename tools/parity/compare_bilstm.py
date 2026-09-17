@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Compara la capa BiLSTM de C++ contra nn.LSTM(bidirectional=True).
 
 Contrasta la salida completa, la pérdida, el gradiente de entrada —que es la

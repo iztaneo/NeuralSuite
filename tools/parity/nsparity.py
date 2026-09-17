@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Formato de intercambio para las pruebas de paridad entre PyTorch y C++.
 
 Un contenedor mínimo y autodescriptivo: cabecera con número mágico y versión,

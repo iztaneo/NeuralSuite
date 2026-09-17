@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Mide el OCR contra una referencia y contra Tesseract.
 
 Existe por un fallo concreto. Cada medición se hacía a mano con un fragmento de

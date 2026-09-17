@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Compara los resultados de PyTorch y de C++ para el mismo GPT.
 
 Lee el archivo de referencia producido por export_gpt.py y el que escribe el

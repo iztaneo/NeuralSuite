@@ -214,4 +214,13 @@ descargar aún.
 
 ## 📄 Licencia
 
-Distribuido bajo la [Licencia Apache 2.0](LICENSE).
+El **código** se distribuye bajo la [Licencia Apache 2.0](LICENSE): uso libre,
+incluido el comercial, con concesión expresa de patentes y la obligación de
+dejar constancia de los cambios. Quién es el titular que firma cada cabecera
+está en [AUTHORS](AUTHORS).
+
+Los **modelos entrenados** que se adjuntan a un
+[Release](https://github.com/iztaneo/NeuralSuite/releases) no son código y no
+llevan licencia propia: son obra derivada de los datos con los que se
+entrenaron, y la procedencia de cada uno está documentada en
+[docs/MODELOS.md](docs/MODELOS.md) y en las notas del propio release.

@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Exporta un nn.LSTM bidireccional de PyTorch para compararlo con BiLSTM.
 
 La capa de C++ no reimplementa la recurrencia: invierte el eje temporal y

@@ -1,3 +1,5 @@
+# Copyright 2026 NeuralSuite Authors.
+# Licensed under the Apache License, Version 2.0.
 """Compara la capa LSTM de C++ contra nn.LSTM de PyTorch.
 
 Contrasta la salida de la secuencia completa, la pérdida, el gradiente de

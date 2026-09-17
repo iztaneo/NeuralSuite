@@ -13,7 +13,7 @@ hace, baja al `.cpp`.
 ## El reparto
 
 <!-- BEGIN GENERATED STATS -->
-NeuralSuite son **30 419 líneas** repartidas en **148 archivos**, y **60 pruebas**.
+NeuralSuite son **30 459 líneas** repartidas en **148 archivos**, y **60 pruebas**.
 
 | Carpeta | Líneas | Archivos | Contenido |
 | --- | --- | --- | --- |
@@ -21,7 +21,7 @@ NeuralSuite son **30 419 líneas** repartidas en **148 archivos**, y **60 prueba
 | `src/` | 7 451 | 43 | Implementaciones |
 | `tests/` | 6 659 | 1 | Las 60 pruebas, en un solo archivo |
 | `apps/` | 2 878 | 8 | Los programas de entrenamiento e inferencia |
-| `tools/` | 4 940 | 29 | Paridad con PyTorch y Pillow, corpus y datos |
+| `tools/` | 4 980 | 29 | Paridad con PyTorch y Pillow, corpus y datos |
 | `demos/` | 1 037 | 12 | Una demostración por técnica |
 | `benchmarks/` | 326 | 3 | Mediciones de rendimiento |
 <!-- END GENERATED STATS -->
