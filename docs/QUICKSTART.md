@@ -71,13 +71,14 @@ no olvida lo que entra en su historial.
 | --- | --- | --- |
 | Entrenar el LLM | `corpus/es/train.txt` | `python3 tools/corpus/preparar_corpus.py` (descarga de Project Gutenberg) |
 | Entrenar difusión o autoencoder | `corpus/mnist/` | `python3 tools/data/descargar_mnist.py` |
-| Generar con los modelos de [MODELOS.md](MODELOS.md) | `release/*.nsf`, `release/es_base.bin` | **Todavía no hay ningún GitHub Release publicado**: hoy solo los tiene quien los entrene |
+| Generar con los modelos de [MODELOS.md](MODELOS.md) | `release/*.nsf`, `release/es_base.bin` | [Release v0.1.0](https://github.com/iztaneo/NeuralSuite/releases/tag/v0.1.0), 6.3 MB en total |
 
-Esa última fila es una limitación real y conviene decirla sin rodeos: los
-resultados de [MODELOS.md](MODELOS.md) son reproducibles con los comandos que
-están ahí —hay procedencia completa, con hashes y semillas—, pero **no
-descargables**. Mientras no exista el release, los apartados 5 y 6 requieren
-haber entrenado antes.
+Los pesos van a `release/`. Comprueba que has bajado lo que crees antes de
+usarlos —el release trae los hashes— y ya funcionan los apartados 5 y 6:
+
+```bash
+shasum -a 256 -c release/SHA256SUMS.txt
+```
 
 ## 5. Generar imágenes, con el modelo de difusión entrenado
 

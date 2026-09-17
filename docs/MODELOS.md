@@ -5,10 +5,13 @@ Cada ficha dice **con qué datos**, **cómo se entrenó**, **qué resultados dio
 medidos** y **qué no hace**.
 
 Ninguno se versiona en git: `release/` está excluido. Se reproducen con los
-comandos de aquí. **Todavía no hay ningún
-[GitHub Release](https://github.com/iztaneo/NeuralSuite/releases) publicado**,
-así que hoy estos pesos solo los tiene quien los entrene: lo de abajo es
-reproducible, no descargable.
+comandos de aquí, y se descargan del
+**[release v0.1.0](https://github.com/iztaneo/NeuralSuite/releases/tag/v0.1.0)**,
+que trae también un `SHA256SUMS.txt` para comprobar que lo bajado es esto:
+
+```bash
+shasum -a 256 -c release/SHA256SUMS.txt
+```
 
 **Cada ficha lleva su procedencia**: el commit con el que se entrenó, el hash del
 conjunto de datos, la semilla, el build y la máquina. Sin eso, un número medido

@@ -205,10 +205,9 @@ plantillas, y `parallel.h` porque su protocolo entre hilos no se entiende partid
 en dos.
 
 Los modelos entrenados se escriben siempre en `release/`, que no se versiona.
-**Todavía no hay ningún [GitHub Release](https://github.com/iztaneo/NeuralSuite/releases)
-publicado**: los resultados de [MODELOS.md](docs/MODELOS.md) son reproducibles
-con los comandos y la procedencia que hay ahí, pero los pesos no se pueden
-descargar aún.
+Los tres de [MODELOS.md](docs/MODELOS.md) se descargan del
+[release v0.1.0](https://github.com/iztaneo/NeuralSuite/releases/tag/v0.1.0),
+con sus hashes para comprobarlos.
 
 ---
 
