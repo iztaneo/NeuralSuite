@@ -17,8 +17,9 @@ que hay y lo que no, pieza a pieza, está en [ESTADO.md](ESTADO.md).
 
 ## 1. Matemática y tensores
 
-**Tensor.** Una matriz de números con forma. `[32, 1, 28, 28]` son 32 imágenes de
-un canal y 28×28 píxeles. Es el tipo sobre el que gira todo.
+**Tensor.** Un arreglo multidimensional de números con forma. `[32, 1, 28, 28]`
+son 32 imágenes de un canal y 28×28 píxeles: cuatro dimensiones, así que no es
+una matriz. Es el tipo sobre el que gira todo.
 
 **Forma (*shape*).** La lista de tamaños de cada dimensión. Casi todos los
 defectos de este proyecto empezaron por una forma que no era la esperada, y por
@@ -49,9 +50,10 @@ para alinear `[lote, cabeza, paso, canal]` con la multiplicación que toca.
 bibliotecas de álgebra lineal, y aquí está escrita a mano en `src/tensor.cpp`:
 es la operación que se lleva la mayor parte del tiempo de cálculo.
 
-**Reducción.** Colapsar un eje sumando, promediando o tomando el máximo. Es la
-operación que **no se puede repartir entre hilos sin cambiar el resultado**, y de
-ahí que `parallel.h` la evite entre hilos.
+**Reducción.** Colapsar un eje sumando, promediando o tomando el máximo.
+Repartirla entre hilos es perfectamente válido en matemáticas, pero cambia el
+**orden de las sumas**, y en `float` eso mueve los últimos bits: el resultado
+deja de ser idéntico bit a bit. Por eso aquí se evita reducir entre hilos.
 
 **Difusión de formas (*broadcasting*).** Operar dos tensores de formas distintas
 estirando virtualmente el pequeño, como sumar un sesgo `[C]` a un `[B, C]`. En
@@ -227,11 +229,14 @@ necesitado, y en la paridad se fuerza a cero en el lado de PyTorch.
 
 ## 5. Transformer y lenguaje
 
-**Token.** La unidad mínima de texto. Aquí es **un carácter**; en modelos grandes
-suele ser un fragmento de palabra.
+**Token.** La unidad mínima de texto. Aquí es **un byte**, no un carácter: el
+`CharTokenizer` trabaja sobre `char`, que en C++ es un byte, así que en UTF-8 una
+`ñ` son **dos** tokens. En modelos grandes un token suele ser un fragmento de
+palabra. El `ByteTokenizer` tiene el nombre más honesto de los dos.
 
 **Vocabulario.** El conjunto de tokens que el modelo conoce. El de `es_base` son
-113 caracteres más `<UNK>`.
+113 símbolos más `<UNK>`: 80 son ASCII imprimibles y **32 son bytes por encima de
+127**, las mitades de las letras acentuadas.
 
 **BPE (*byte pair encoding*).** Construir el vocabulario fusionando los pares de
 caracteres más frecuentes, para que una palabra común sea un solo token.

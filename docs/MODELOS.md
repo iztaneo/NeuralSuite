@@ -28,7 +28,7 @@ Todos los runs se hicieron en la misma máquina: **Apple M5, 10 núcleos**, macO
 | | |
 | --- | --- |
 | **Qué es** | Un Transformer tipo GPT que genera texto en español, carácter a carácter |
-| **Archivos** | `release/es_base.bin` (3.3 MB) y `release/es_base_vocab.txt` (113 caracteres más `<UNK>`, vocabulario de 114) |
+| **Archivos** | `release/es_base.bin` (3.3 MB) y `release/es_base_vocab.txt` (113 símbolos más `<UNK>`, vocabulario de 114) |
 | **Tamaño** | ~858 000 parámetros: 4 capas, 4 cabezas, embedding de 128, contexto de 128 |
 | **Datos** | 4.9 M caracteres de siete obras de dominio público (Cervantes, Clarín, Pardo Bazán, Unamuno) |
 | **Entrenamiento** | 5 000 iteraciones, lote 16, **21.8 minutos** |
@@ -42,7 +42,7 @@ Todos los runs se hicieron en la misma máquina: **Apple M5, 10 núcleos**, macO
 | Datos | `corpus/es/train.txt`, SHA-256 `bb77e27d77cbf7f8…` |
 | Semilla | la del programa (el RNG de datos se fija con 1337 en `train_llm`) |
 | Checkpoint | `es_base.bin`, SHA-256 `ea0609e93a7954e4…` |
-| Vocabulario | `es_base_vocab.txt`, 113 caracteres más `<UNK>` |
+| Vocabulario | `es_base_vocab.txt`, 113 símbolos más `<UNK>` |
 
 ### Cómo se entrenó
 
@@ -76,7 +76,12 @@ esperable de 858 K parámetros a nivel de carácter: aprende **cómo suena** el
 idioma, no lo que significa.
 
 - **No responde preguntas ni sigue instrucciones**: no es un modelo de chat.
-- **Vocabulario de caracteres**, no BPE: las secuencias son largas.
+- **Vocabulario de bytes**, no BPE: las secuencias son largas. El
+  `CharTokenizer` trabaja sobre `char`, que en C++ es un byte, así que de los
+  113 símbolos **32 están por encima de 127**: son las mitades de las letras
+  acentuadas. El modelo aprendió a emitir `ñ` como los dos bytes 195 y 177, y
+  acierta —el texto generado lleva acentos bien puestos—, pero nunca ve el
+  carácter entero.
 - **Contexto de 128 caracteres.**
 
 ---

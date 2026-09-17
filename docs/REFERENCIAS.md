@@ -37,7 +37,7 @@ paridad comprobada contra PyTorch.
 | 2014 | Goodfellow et al. *[Generative Adversarial Networks](https://arxiv.org/abs/1406.2661)* | Generación adversarial | `demos/demo_gan.cpp` | ⚠️ solo demostración; no es aún el discriminador del autoencoder |
 | 2014 | Kingma y Ba. *[Adam](https://arxiv.org/abs/1412.6980)* | Optimización adaptativa | `include/optimizers.h` | ✅ es el optimizador de los tres modelos |
 | 2015 | He et al. *[Deep Residual Learning](https://arxiv.org/abs/1512.03385)* | Conexiones residuales | `include/layers/resblock2d.h` | ✅ **P**, entrenada en el autoencoder |
-| 2015 | Ronneberger, Fischer y Brox. *[U-Net](https://arxiv.org/abs/1505.04597)* | El esqueleto de la difusión | `include/diffusion/unet.h` | ✅ **P**, entrenada; **sin las capas de atención** del original |
+| 2015 | Ronneberger, Fischer y Brox. *[U-Net](https://arxiv.org/abs/1505.04597)* | El esqueleto de la difusión: bajar, subir y saltos | `include/diffusion/unet.h` | ✅ **P**, entrenada; omite la **self-attention a 16×16** que añadió la U-Net de Ho et al., no el artículo original |
 | 2015 | Shi, Bai y Yao. *[CRNN](https://arxiv.org/abs/1507.05717)* | Leer texto de una imagen | `include/models/ocr.h` | ✅ **P**, entrenada; **sin CTC** |
 | 2016 | Ba, Kiros y Hinton. *[Layer Normalization](https://arxiv.org/abs/1607.06450)* | La normalización del Transformer | `include/layers/layernorm.h` | ✅ **P**, integrada en el GPT |
 | **2017** | **Vaswani et al. *[Attention Is All You Need](https://arxiv.org/abs/1706.03762)*** | **La atención multi-cabeza: el nacimiento de la arquitectura** | `include/layers/attention.h`, `include/gpt.h` | ✅ **P**, entrenada en `es_base` |
@@ -48,8 +48,8 @@ paridad comprobada contra PyTorch.
 | 2021 | Su et al. *[RoFormer (RoPE)](https://arxiv.org/abs/2104.09864)* | La posición por rotación | `include/layers/attention.h`, `include/tensor.h` | ⚠️ **P** e integrado con `--rope`, pero **ningún modelo entrenado lo usa** |
 | 2021 | Rombach et al. *[Latent Diffusion](https://arxiv.org/abs/2112.10752)* | Difundir en el latente, no en los píxeles | `include/latent/autoencoder.h` | ⏳ autoencoder hecho y medido (Fase 18); **generar sobre el latente es la Fase 19** |
 
-Cuatro de esas filas no son verdes, y esa es justo la información que un índice
-de referencias no suele dar: la GAN es una demostración aislada, RoPE está
+Tres de esas filas no son verdes, y esa es justo la información que un índice de
+referencias no suele dar: la GAN es una demostración aislada, RoPE está
 implementado pero sin entrenar, y de la difusión latente existe la mitad.
 
 # Rutas de estudio
@@ -330,7 +330,7 @@ explica en media hora lo que aquí se evitó y por qué.
 | GAN | `demos/demo_gan.cpp` | Goodfellow et al. (2014), [arXiv:1406.2661](https://arxiv.org/abs/1406.2661) | Demostración; todavía no es el discriminador del autoencoder |
 | Difusión (DDPM) | `include/diffusion/schedule.h`, `include/diffusion/sampler.h` | Ho, Jain y Abbeel (2020), [arXiv:2006.11239](https://arxiv.org/abs/2006.11239) | Varianza posterior, no `beta` a secas |
 | Muestreo acelerado (DDIM) | `include/diffusion/sampler.h` | Song, Meng y Ermon (2020), [arXiv:2010.02502](https://arxiv.org/abs/2010.02502) | Al recortar `x₀` se **recalcula** `eps`, como en las implementaciones de referencia; sin eso, empeoraba al añadir pasos |
-| U-Net | `include/diffusion/unet.h` | Ronneberger, Fischer y Brox (2015), [arXiv:1505.04597](https://arxiv.org/abs/1505.04597) | **Sin capas de atención**: el DDPM original las pone a 16×16, aquí no hay ninguna |
+| U-Net | `include/diffusion/unet.h` | Ronneberger, Fischer y Brox (2015), [arXiv:1505.04597](https://arxiv.org/abs/1505.04597) | El artículo de 2015 **no lleva atención**: es un camino contractivo, uno expansivo y los saltos. La que sí la lleva —self-attention a 16×16— es la U-Net que Ho et al. usan en el DDPM, y esa capa aquí no está |
 | GroupNorm | `include/layers/groupnorm.h` | Wu y He (2018), [arXiv:1803.08494](https://arxiv.org/abs/1803.08494) | — |
 | SiLU / Swish | `include/activations.h` | Elfwing, Uchibe y Doya (2017), [arXiv:1702.03118](https://arxiv.org/abs/1702.03118); Ramachandran, Zoph y Le (2017), [arXiv:1710.05941](https://arxiv.org/abs/1710.05941) | — |
 | Ampliar por vecino más próximo y convolucionar | `include/layers/resample2d.h`, `include/latent/autoencoder.h` | Odena, Dumoulin y Olah (2016). *[Deconvolution and Checkerboard Artifacts](https://distill.pub/2016/deconv-checkerboard/)*. Distill | Se evita la convolución transpuesta por el patrón de tablero |

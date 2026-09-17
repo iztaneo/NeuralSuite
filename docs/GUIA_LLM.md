@@ -55,7 +55,8 @@ entrena, añade `--val_path corpus/es/val.txt --eval_cada 250`.
 | `--val_path`, `--eval_cada` | —, 250 | Evaluar validación durante el entrenamiento |
 | `--out_file`, `--vocab_file` | `release/model_cpp.bin`, `release/vocab_cpp.txt` | Dónde guardar |
 
-El tokenizador trabaja **a nivel de carácter**, y el vocabulario se guarda junto
+El tokenizador trabaja **a nivel de byte** —el `CharTokenizer` usa `char`, que en
+C++ es un byte, así que una `ñ` ocupa dos tokens—, y el vocabulario se guarda junto
 al modelo: cada modelo tiene que usarse con su propio vocabulario.
 
 ---
