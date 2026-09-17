@@ -10,7 +10,8 @@ comprobable y reutilizable antes de añadir la siguiente arquitectura.**
 Este documento es el diario de ingeniería: qué se construyó, qué falló y qué se
 midió. Para **usar** el proyecto están las guías:
 [LLM](GUIA_LLM.md), [difusión](GUIA_DIFUSION.md),
-[autoencoder](GUIA_AUTOENCODER.md) y [cómo se verifica](VERIFICACION.md).
+[autoencoder](GUIA_AUTOENCODER.md), [cómo se verifica](VERIFICACION.md) y las
+[referencias bibliográficas](REFERENCIAS.md) de cada pieza.
 
 ## Las dos reglas
 

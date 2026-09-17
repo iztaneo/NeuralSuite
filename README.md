@@ -30,12 +30,28 @@ modelos pequeños y MNIST.
 
 ---
 
-## Guías de uso
+## Documentación
+
+El índice completo está en **[docs/](docs/README.md)**. Los principales:
+
+**Para entender el proyecto**
+
+- **[Mapa del código](docs/MAPA_DEL_CODIGO.md)**: qué hay en cada carpeta y en qué orden leerlo.
+- **[Arquitectura](docs/ARQUITECTURA.md)**: cómo encaja todo, con diagramas.
+- **[Glosario](docs/GLOSARIO.md)**: cada término explicado una vez.
+
+**Para usarlo**
 
 - **[Modelo de lenguaje](docs/GUIA_LLM.md)**: preparar el corpus, entrenar, evaluar y generar texto.
 - **[Difusión](docs/GUIA_DIFUSION.md)**: entrenar la U-Net sobre MNIST, reanudar checkpoints y generar imágenes.
-- **[Autoencoder (difusión latente)](docs/GUIA_AUTOENCODER.md)**: comprimir imágenes a un latente 8×8 y por qué difundir ahí cuesta 6 veces menos.
-- **[Cómo se verifica](docs/VERIFICACION.md)**: paridad con PyTorch, diferencias finitas, mutaciones, reproducibilidad y controles, con los fallos reales que encontró cada capa.
+- **[Autoencoder (difusión latente)](docs/GUIA_AUTOENCODER.md)**: comprimir a un latente 8×8 y por qué difundir ahí cuesta 6 veces menos.
+- **[Los modelos entrenados](docs/MODELOS.md)**: datos, comandos, resultados medidos y límites de cada uno.
+
+**Para estudiar**
+
+- **[Teoría e implementación](docs/TEORIA_E_IMPLEMENTACION.md)**: cada concepto con su matemática, su sitio en el código, cómo se verifica y de dónde sale.
+- **[Referencias bibliográficas](docs/REFERENCIAS.md)**: qué artículo implementa cada pieza y en qué nos apartamos de él.
+- **[Cómo se verifica](docs/VERIFICACION.md)**: paridad, diferencias finitas, mutaciones y controles, con los fallos reales que encontró cada capa.
 
 ---
 
@@ -192,8 +208,6 @@ que se quieran distribuir se adjuntan a un
   que las une.
 - **[DOCS_MATHEMATICS.md](DOCS_MATHEMATICS.md)**: derivación matemática de los
   Transformers.
-- **[DOCS_NEURAL_NETWORKS.md](DOCS_NEURAL_NETWORKS.md)**: MLP, CNN, LSTM,
-  pérdidas y optimizadores.
 - **[DOCS_PROGRAMMING_CPP.md](DOCS_PROGRAMMING_CPP.md)**: patrones de diseño C++17.
 - **[tools/parity/README.md](tools/parity/README.md)** e
   **[tools/image/README.md](tools/image/README.md)**: las herramientas de
